@@ -97,6 +97,11 @@ export interface UserRequirements {
   webSearch?: boolean; // Enable web search for richer context
   interactiveMode?: boolean; // Enable Interactive Mode for interactive-first generation
   taskEngineMode?: boolean; // Enable vocational task-engine generation path
+  /**
+   * The scene types the outline may create. Absent means every type; an
+   * outline that arrives with a type outside this list is dropped.
+   */
+  sceneTypes?: SceneType[];
 }
 
 // ==================== Stage 1 Output: Scene Outlines (Simplified) ====================
@@ -136,13 +141,19 @@ export interface WidgetOutline {
   challengeType?: string; // code - type of coding challenge
 }
 
+/** The scene types a course outline can be made of. */
+export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
+
+/** Every scene type, in outline order. The homepage filter lists exactly these. */
+export const ALL_SCENE_TYPES: readonly SceneType[] = ['slide', 'quiz', 'interactive', 'pbl'];
+
 /**
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */
 export interface SceneOutline {
   id: string;
-  type: 'slide' | 'quiz' | 'interactive' | 'pbl';
+  type: SceneType;
   title: string;
   description: string; // 1-2 sentences describing the purpose
   keyPoints: string[]; // 3-5 core key points

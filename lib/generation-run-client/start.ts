@@ -9,6 +9,7 @@ import type { ModelCapabilities } from '@/lib/model-settings/capabilities';
 import { useAgentRegistry, whenAgentRegistryLoaded } from '@/lib/orchestration/registry/store';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore } from '@/lib/store/user-profile';
+import type { SceneType } from '@/lib/types/generation';
 
 import { RunApiError, startGenerationRun, type StartRunInput } from './api';
 import type { RunSnapshot } from './types';
@@ -70,6 +71,8 @@ export async function startClassicRun(input: {
   materialIds: readonly string[];
   interactive: boolean;
   taskEngine: boolean;
+  /** The scene types the composer kept; omitted means every type. */
+  sceneTypes?: readonly SceneType[];
   capabilities: ModelCapabilities;
 }): Promise<RunSnapshot> {
   const agents = await selectedRunAgents();
@@ -91,6 +94,9 @@ export async function startClassicRun(input: {
     materialIds,
     interactive: input.interactive,
     taskEngine: input.taskEngine,
+    ...(input.sceneTypes && input.sceneTypes.length > 0
+      ? { sceneTypes: [...input.sceneTypes] }
+      : {}),
     agents,
     ...(learnerProfile ? { learnerProfile } : {}),
     ...(voice ? { voice } : {}),

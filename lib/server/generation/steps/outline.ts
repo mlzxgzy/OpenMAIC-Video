@@ -34,8 +34,10 @@ import type {
   UserRequirements,
   PdfImage,
   SceneOutline,
+  SceneType,
   ImageMapping,
 } from '@/lib/types/generation';
+import { ALL_SCENE_TYPES } from '@/lib/types/generation';
 import { resolveServerGenerationCapabilities } from '@/lib/server/generation-capabilities';
 import { sortDocumentImagesForVision } from '@/lib/document/bundle';
 import { resolveVocationalActive } from '@/lib/config/feature-flags';
@@ -280,6 +282,39 @@ function sanitizeNonTaskEngineOutline(outline: SceneOutline): SceneOutline {
   };
 }
 
+/** How a scene type is named in the outline prompt's own vocabulary. */
+const SCENE_TYPE_PROMPT_NAME: Record<SceneType, string> = {
+  slide: 'slide',
+  quiz: 'quiz',
+  interactive: 'interactive',
+  pbl: 'pbl',
+};
+
+/**
+ * The rule appended to whichever outline template is in use when the learner
+ * unchecked some scene types. The stream filter is what actually enforces it;
+ * this keeps the model from planning scenes that are about to be dropped.
+ */
+function sceneTypeConstraint(allowed: readonly SceneType[]): string {
+  const allowedNames = allowed.map((type) => `"${SCENE_TYPE_PROMPT_NAME[type]}"`).join(', ');
+  const excluded = ALL_SCENE_TYPES.filter((type) => !allowed.includes(type)).map(
+    (type) => `"${SCENE_TYPE_PROMPT_NAME[type]}"`,
+  );
+
+  return [
+    '## Scene type restriction (overrides any other scene-type guidance above)',
+    '',
+    `Create scenes of ONLY these types: ${allowedNames}.`,
+    excluded.length > 0
+      ? `Do not create any ${excluded.join(', ')} scene. If a section would need one,` +
+        ` write it as a "${SCENE_TYPE_PROMPT_NAME[allowed[0]]}" scene instead.`
+      : '',
+    `"type" must be one of ${allowedNames}.`,
+  ]
+    .filter((line) => line !== '')
+    .join('\n');
+}
+
 function ensureUniqueOutlineId(outline: SceneOutline, usedIds: Set<string>): SceneOutline {
   const candidate = typeof outline.id === 'string' && outline.id.trim() ? outline.id : undefined;
   if (candidate && !usedIds.has(candidate)) {
@@ -319,6 +354,8 @@ export interface PreparedOutline {
   requirement: string;
   taskEngineMode: boolean;
   prompts: { system: string; user: string };
+  /** The scene types the learner kept; undefined means every type. */
+  sceneTypes?: SceneType[];
   /** The images attached to the prompt, resolved to data URLs or concrete URLs. */
   visionImages?: Array<{ id: string; src: string; width?: number; height?: number }>;
 }
@@ -503,6 +540,19 @@ async function prepareOutline(
     throw new StepRefusal<OutlineRefusal>('prompt-unavailable', 'Prompt template not found');
   }
 
+  // The learner narrowed the scene types in the composer. Tell the model up
+  // front so it spends no tokens planning a type that is dropped anyway. The
+  // filter in streamOutlines still drops whatever slips through, so this only
+  // has to be persuasive, not airtight.
+  const sceneTypes = requirements.sceneTypes;
+  const promptsForTypes =
+    sceneTypes && sceneTypes.length < ALL_SCENE_TYPES.length
+      ? {
+          system: `${prompts.system}\n\n${sceneTypeConstraint(sceneTypes)}`,
+          user: prompts.user,
+        }
+      : prompts;
+
   ctx.log.info(
     `Generating outlines: "${requirements.requirement.substring(0, 50)}" [model=${modelString}]`,
   );
@@ -511,7 +561,8 @@ async function prepareOutline(
     model,
     requirement: requirements.requirement,
     taskEngineMode,
-    prompts,
+    prompts: promptsForTypes,
+    ...(sceneTypes ? { sceneTypes } : {}),
     ...(visionImages ? { visionImages } : {}),
   };
 }
@@ -526,10 +577,15 @@ async function streamOutlines(
   prepared: PreparedOutline,
   ctx: StepContext<OutlineEvent>,
 ): Promise<OutlineResult> {
-  const { model, prompts, visionImages, taskEngineMode, requirement } = prepared;
+  const { model, prompts, visionImages, taskEngineMode, requirement, sceneTypes } = prepared;
   const { model: languageModel, modelInfo, thinkingConfig } = model;
   const { log, signal } = ctx;
   const emit = (event: OutlineEvent) => ctx.emit?.(event);
+  // Undefined means every type; an unfiltered run keeps the array checks out
+  // of the hot loop entirely.
+  const allowedTypes: ReadonlySet<SceneType> | undefined = sceneTypes
+    ? new Set(sceneTypes)
+    : undefined;
 
   // Retryable-failure fallback: after the same-model retries are
   // exhausted, retry once on the stage's configured fallback model.
@@ -674,7 +730,12 @@ async function streamOutlines(
         scanFrom = nextScanFrom;
         for (const outline of newOutlines) {
           if (parsedOutlines.length >= MAX_OUTLINE_SCENES) break;
-          // Ensure ID and order
+          // The learner unchecked this scene type in the composer: it is
+          // never created, not merely hidden. Dropped before normalization so
+          // no widget config is built for a scene that will not exist.
+          if (allowedTypes && !allowedTypes.has(outline.type)) continue;
+          // Ensure ID and order. Order is positional, so it is assigned after
+          // the drop above to keep the surviving scenes at 1..n.
           const enrichedBase = {
             ...outline,
             order: parsedOutlines.length + 1,

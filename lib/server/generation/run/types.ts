@@ -11,7 +11,7 @@
 import type { AgentInfo } from '@openmaic/generation';
 
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import type { SceneOutline } from '@/lib/types/generation';
+import type { SceneOutline, SceneType } from '@/lib/types/generation';
 import type { GeneratedAgentConfig } from '@/lib/types/stage';
 
 /**
@@ -82,6 +82,11 @@ export interface GenerationRunInput {
   materialIds: string[];
   interactive: boolean;
   taskEngine: boolean;
+  /**
+   * The scene types the outline may create. Absent means every type; the
+   * outline step drops any scene that arrives with a type outside this list.
+   */
+  sceneTypes?: SceneType[];
   agents: GenerationRunAgents;
   learnerProfile?: { nickname?: string; bio?: string };
   /**

@@ -35,6 +35,7 @@ import { Button } from '@/components/ui/button';
 import { InputGroup, InputGroupInput, InputGroupButton } from '@/components/ui/input-group';
 import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { ALL_SCENE_TYPES, type SceneType } from '@/lib/types/generation';
 import { SettingsDialog } from '@/components/settings';
 import { GenerationToolbar } from '@/components/generation/generation-toolbar';
 import { AgentBar } from '@/components/agent/agent-bar';
@@ -107,6 +108,7 @@ import {
 } from '@/lib/config/feature-flags';
 import { useImportPptx } from '@/lib/import/use-import-pptx';
 import { InteractiveModeButton } from '@/components/generation/interactive-mode-button';
+import { SceneTypeFilter } from '@/components/generation/scene-type-filter';
 import { ProBadge } from '@/components/workbench/ProBadge';
 import { arrivedByProSwap, startProSwap } from '@/lib/workbench/pro-swap';
 import {
@@ -118,6 +120,7 @@ const log = createLogger('Home');
 
 const RECENT_OPEN_STORAGE_KEY = 'recentClassroomsOpen';
 const INTERACTIVE_MODE_STORAGE_KEY = 'interactiveModeEnabled';
+const SCENE_TYPES_STORAGE_KEY = 'sceneTypesEnabled';
 
 // PPTX import is still scaffolding: `useImportPptx` has no `onImported` consumer
 // yet, so the flow only logs the parsed slides. Hide the entry point behind a
@@ -131,13 +134,19 @@ interface FormState {
   requirement: string;
   interactiveMode: boolean;
   vocationalTestMode: boolean;
+  /** The scene types the outline may create. Every type by default. */
+  sceneTypes: SceneType[];
 }
 
 const initialFormState: FormState = {
   requirement: '',
   interactiveMode: false,
   vocationalTestMode: false,
+  sceneTypes: [...ALL_SCENE_TYPES],
 };
+
+/** What an interactive-first (or task-engine) outline can be made of. */
+const INTERACTIVE_SCENE_TYPES: readonly SceneType[] = ['slide', 'interactive'];
 
 function HomePage() {
   const { t } = useI18n();
@@ -186,6 +195,16 @@ function HomePage() {
     if (workbenchEntryEnabled) router.prefetch('/workspace');
   }, [router, workbenchEntryEnabled]);
   const [form, setForm] = useState<FormState>(initialFormState);
+
+  // Interactive-first and task-engine outlines are built from slides and
+  // widgets only — their prompts never ask for a quiz or a PBL scene — so the
+  // filter offers just those two there instead of letting the learner tick a
+  // type this mode would never produce.
+  const availableSceneTypes: readonly SceneType[] =
+    form.interactiveMode || form.vocationalTestMode
+      ? INTERACTIVE_SCENE_TYPES
+      : ALL_SCENE_TYPES;
+
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
     import('@/lib/types/settings').SettingsSection | undefined
@@ -220,6 +239,23 @@ function HomePage() {
       }
     } catch {
       /* localStorage unavailable */
+    }
+    try {
+      const savedSceneTypes = localStorage.getItem(SCENE_TYPES_STORAGE_KEY);
+      if (savedSceneTypes) {
+        const parsed = JSON.parse(savedSceneTypes);
+        // An older or hand-edited value may name a type that no longer
+        // exists; keep only what is still a scene type, and ignore an empty
+        // one (it would leave the outline with no scene).
+        const kept = ALL_SCENE_TYPES.filter((type) =>
+          Array.isArray(parsed) ? parsed.includes(type) : false,
+        );
+        if (kept.length > 0) {
+          setForm((prev) => ({ ...prev, sceneTypes: [...kept] }));
+        }
+      }
+    } catch {
+      /* localStorage unavailable or malformed */
     }
   }, []);
 
@@ -534,6 +570,8 @@ function HomePage() {
     try {
       if (field === 'interactiveMode')
         localStorage.setItem(INTERACTIVE_MODE_STORAGE_KEY, String(value));
+      if (field === 'sceneTypes')
+        localStorage.setItem(SCENE_TYPES_STORAGE_KEY, JSON.stringify(value));
     } catch {
       /* ignore */
     }
@@ -584,11 +622,16 @@ function HomePage() {
       if (materialIds.length > 0 && !(await courseMaterials.verify())) {
         throw new Error(t('toolbar.materialUnavailable'));
       }
+            // Never send a selection the current mode cannot satisfy: an outline of
+      // only unavailable types would come back empty and fail the step. A
+      // selection that kept nothing usable falls back to the whole mode.
+      const usable = availableSceneTypes.filter((type) => form.sceneTypes.includes(type));
       const run = await startClassicRun({
         requirement: form.requirement,
         materialIds,
         interactive: form.vocationalTestMode ? true : form.interactiveMode,
         taskEngine: form.vocationalTestMode,
+        sceneTypes: usable.length > 0 ? usable : availableSceneTypes,
         capabilities,
       });
       router.push(`/generation-preview?run=${encodeURIComponent(run.id)}`);
@@ -850,6 +893,16 @@ function HomePage() {
                   {t('toolbar.interactiveModeHint')}
                 </TooltipContent>
               </Tooltip>
+
+              {/* Scene types the outline may create. The interactive-first and
+                  task-engine modes only build slides and widgets, so quiz and
+                  PBL show as unavailable there rather than as a choice. */}
+              <SceneTypeFilter
+                value={form.sceneTypes}
+                onChange={(next) => updateForm('sceneTypes', next)}
+                availableTypes={availableSceneTypes}
+                disabled={preparingGenerate}
+              />
 
               {/* Voice input */}
               <SpeechButton

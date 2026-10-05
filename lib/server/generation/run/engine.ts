@@ -219,6 +219,7 @@ export function runRequirements(input: GenerationRunInput, webSearch: boolean): 
     ...(webSearch ? { webSearch: true } : {}),
     ...(input.interactive ? { interactiveMode: true } : {}),
     ...(input.taskEngine ? { taskEngineMode: true } : {}),
+    ...(input.sceneTypes ? { sceneTypes: input.sceneTypes } : {}),
   };
 }
 

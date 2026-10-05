@@ -7,7 +7,7 @@ import { capBodyStream } from '@/lib/server/capped-stream';
 import { normalizeSceneOutlines } from '@/lib/server/generation/outline-schema';
 import { MAX_CLASSROOM_MATERIALS } from '@/lib/server/classroom-materials';
 import { isMaterialId } from '@/lib/server/materials/material-id';
-import type { SceneOutline } from '@/lib/types/generation';
+import { ALL_SCENE_TYPES, type SceneType, type SceneOutline } from '@/lib/types/generation';
 
 import type { GenerationRunInput } from './types';
 
@@ -92,6 +92,27 @@ function agentIdList(value: unknown, name: string, minimum: number): Parsed<stri
   return { ok: true, value: [...new Set(value as string[])] };
 }
 
+/** The scene types a run may create; absent means all of them. */
+function sceneTypeList(value: unknown, name: string): Parsed<SceneType[] | undefined> {
+  if (value === undefined) return { ok: true, value: undefined };
+  const invalid: Parsed<SceneType[]> = {
+    ok: false,
+    message: `${name} must be an array of scene types (${ALL_SCENE_TYPES.join(', ')})`,
+  };
+  if (!Array.isArray(value)) return invalid;
+  // An empty selection would produce an outline with no scene to generate.
+  if (value.length === 0) return invalid;
+  const seen = new Set<SceneType>();
+  for (const entry of value) {
+    if (typeof entry !== 'string' || !ALL_SCENE_TYPES.includes(entry as SceneType)) {
+      return invalid;
+    }
+    seen.add(entry as SceneType);
+  }
+  // Keep the canonical order so equal selections compare equal.
+  return { ok: true, value: ALL_SCENE_TYPES.filter((type) => seen.has(type)) };
+}
+
 export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
   const body = record(raw);
   if (!body) return { ok: false, message: 'The body must be a JSON object' };
@@ -125,6 +146,8 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
   if (!interactive.ok) return interactive;
   const taskEngine = optionalBoolean(body.taskEngine, 'taskEngine');
   if (!taskEngine.ok) return taskEngine;
+  const sceneTypes = sceneTypeList(body.sceneTypes, 'sceneTypes');
+  if (!sceneTypes.ok) return sceneTypes;
 
   let agents: GenerationRunInput['agents'] = { mode: 'auto' };
   if (body.agents !== undefined) {
@@ -208,6 +231,7 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
       materialIds,
       interactive: interactive.value,
       taskEngine: taskEngine.value,
+      ...(sceneTypes.value ? { sceneTypes: sceneTypes.value } : {}),
       agents,
       ...(learnerProfile ? { learnerProfile } : {}),
       outlineReview,
