@@ -3,9 +3,11 @@
 CLAUDE.local.md
 .claude
 .superpowers
+.workbuddy
 
 # dependencies
 /node_modules
+/.pnpm-store
 /openclaw/node_modules
 /openclaw/package-lock.json
 /.pnp
