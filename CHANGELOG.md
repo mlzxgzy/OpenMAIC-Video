@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+> **二开提示**：本仓库是 [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) 的 fork。
+> 本文件只记录上游变更；本仓库自己的改动记在 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)。
+
 ## [Unreleased]
 
 ## [1.2.0-rc.1] - 2026-10-04

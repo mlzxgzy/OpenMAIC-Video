@@ -15,7 +15,8 @@
 | 当前基线 | `v1.2.0-rc.1`，commit `636fab0d`（"release: OpenMAIC 1.2.0-rc.1 (server-first)"） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**：视频导出 / 渲染服务 / 视频生成能力 |
-| 代码状态 | 工作区干净，**二开尚未开始**，代码仍是上游原样 |
+| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4） |
+| 变更记录 | 二开自己的改动写 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)；上游变更仍看 `CHANGELOG.md` |
 
 ### 1.1 与上游的关系（重要）
 
@@ -24,8 +25,14 @@
   git remote add upstream https://github.com/THU-MAIC/OpenMAIC.git
   git fetch upstream
   ```
-- 跟上游的差异**只允许集中在视频相关目录**，便于日后 rebase：
+- 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
+  - **已有例外**：首页「场景类型」筛选是课程生成功能（非视频链路），落在 L4
+    （`app/page.tsx`、`components/generation/`、`lib/server/generation/` 等）。
+    L4 本就是「改生成流水线、场景类型、UI」的既定层，宿主扩展钩子（§6）覆盖不到，
+    所以这是有意为之的偏离。同步上游时的冲突热点与后续动作记在
+    [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#与上游的差异)。
+  - 后续再有非视频方向的功能，照此先在 `CHANGELOG.fork.md` 记录偏离理由再动手。
 - **v1.2.0 是破坏性大版本**（"server-first"）。课程生成从浏览器驱动改为服务端常驻进程，模型配置统一到 `openmaic.yml`，**不再支持 Vercel 等 Serverless 部署**，必须 PostgreSQL + 常驻 Node。追上游时不要把 1.1.x 的部署写法照搬过来。
 
 ---
