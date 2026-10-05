@@ -130,3 +130,14 @@ git fetch upstream
 | 上游基线 | `v1.2.0-rc.1`，commit `636fab0d` |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |
+
+### 二开提交一览
+
+| commit | 说明 |
+| --- | --- |
+| `939c9027` | docs: 新增 AGENT.md 二开上下文文档 |
+| `98e2f06c` | docs: 新增 CHANGELOG.fork.md 记录二开变更 |
+| `0ce27191` | feat(generation): 首页可筛选大纲的场景类型 |
+
+用 `git log --oneline 636fab0d..HEAD` 可随时核对这份列表是否与历史同步。
+
