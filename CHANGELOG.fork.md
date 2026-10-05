@@ -209,6 +209,10 @@ git fetch upstream
 | `939c9027` | docs: 新增 AGENT.md 二开上下文文档 |
 | `98e2f06c` | docs: 新增 CHANGELOG.fork.md 记录二开变更 |
 | `0ce27191` | feat(generation): 首页可筛选大纲的场景类型 |
+| `6e893061` | docs: 在二开 changelog 补记已提交的 commit 列表 |
+| `3b73ab23` | feat(generation): 大纲审阅页可用 AI 对话修改大纲 |
 
 用 `git log --oneline 636fab0d..HEAD` 可随时核对这份列表是否与历史同步。
+唯一例外是维护本表的那个 docs 提交：它无法登记自身 hash，核对时 `git log`
+会比本表多出这最后一条。
 
