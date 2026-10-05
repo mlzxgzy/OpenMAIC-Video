@@ -45,6 +45,8 @@ interface OutlinesEditorProps {
   isStreaming?: boolean;
   /** Collapse the editor back to the preview surface (small streaming card / outline-ready). */
   onCollapse?: () => void;
+  /** Open the "ask AI to edit the outline" chat (the review page's). */
+  onAiEdit?: () => void;
 }
 
 const SCENE_TYPES: SceneType[] = ['slide', 'quiz', 'interactive', 'pbl'];
@@ -118,6 +120,7 @@ export function OutlinesEditor({
   isLoading = false,
   isStreaming = false,
   onCollapse,
+  onAiEdit,
 }: OutlinesEditorProps) {
   const { t } = useI18n();
   const sceneTypeLabel = useSceneTypeLabel();
@@ -268,23 +271,43 @@ export function OutlinesEditor({
             {headerSubtitle}
           </p>
         </div>
-        {onCollapse && (
-          <button
-            type="button"
-            onClick={onCollapse}
-            disabled={isLoading}
-            aria-label={t('generation.collapseEditor')}
-            className={cn(
-              'mt-1 inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
-              'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
-              'disabled:cursor-not-allowed disabled:opacity-50',
-            )}
-          >
-            <Minimize2 className="size-3.5" />
-            <span className="hidden sm:inline">{t('generation.collapseEditor')}</span>
-          </button>
-        )}
+        <div className="mt-1 flex shrink-0 items-center gap-1">
+          {onAiEdit && (
+            <button
+              type="button"
+              onClick={onAiEdit}
+              disabled={editingDisabled}
+              aria-label={t('generation.aiEditOutline')}
+              data-testid="outline-ai-open"
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+                'text-blue-600 transition-colors hover:bg-blue-500/10 dark:text-blue-300',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <Sparkles className="size-3.5" />
+              <span className="hidden sm:inline">{t('generation.aiEditOutline')}</span>
+            </button>
+          )}
+          {onCollapse && (
+            <button
+              type="button"
+              onClick={onCollapse}
+              disabled={isLoading}
+              aria-label={t('generation.collapseEditor')}
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+                'text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/30',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+            >
+              <Minimize2 className="size-3.5" />
+              <span className="hidden sm:inline">{t('generation.collapseEditor')}</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Scene list */}

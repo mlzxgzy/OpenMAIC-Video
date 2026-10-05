@@ -86,12 +86,29 @@ const outlineReviewKeys = [
   'generation.pblAddSkill',
   'generation.widgetProceduralSkill',
   'generation.removeSkill',
+  'generation.aiEditOutline',
+  'generation.aiEditTitle',
+  'generation.aiEditDescription',
+  'generation.aiEditIntro',
+  'generation.aiEditPlaceholder',
+  'generation.aiEditSend',
+  'generation.aiEditThinking',
+  'generation.aiEditUndo',
+  'generation.aiEditUndone',
+  'generation.aiEditApplied',
+  'generation.aiEditFailed',
+  'generation.aiEditChangeSummary',
 ] as const;
 
 const countInterpolatedKeys = [
   'generation.outlineEditorSummary',
   'generation.outlineEditorStreamingProgress',
   'generation.quizConfigSummary',
+] as const;
+
+/** The keys whose placeholders are not `{{count}}`: each must keep all of them. */
+const variableInterpolatedKeys = [
+  { key: 'generation.aiEditChangeSummary', variables: ['{{added}}', '{{removed}}', '{{changed}}'] },
 ] as const;
 
 function getKey(locale: Record<string, unknown>, path: string): unknown {
@@ -117,6 +134,15 @@ describe('outline review locale coverage', () => {
           getKey(localeData, key),
           `${localeCode} should preserve {{count}} in ${key}`,
         ).toContain('{{count}}');
+      }
+
+      for (const { key, variables } of variableInterpolatedKeys) {
+        for (const variable of variables) {
+          expect(
+            getKey(localeData, key),
+            `${localeCode} should preserve ${variable} in ${key}`,
+          ).toContain(variable);
+        }
       }
     }
   });

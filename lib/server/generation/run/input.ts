@@ -8,6 +8,7 @@ import { normalizeSceneOutlines } from '@/lib/server/generation/outline-schema';
 import { MAX_CLASSROOM_MATERIALS } from '@/lib/server/classroom-materials';
 import { isMaterialId } from '@/lib/server/materials/material-id';
 import { ALL_SCENE_TYPES, type SceneType, type SceneOutline } from '@/lib/types/generation';
+import type { OutlineRevisionTurn } from '@/lib/types/generation';
 
 import type { GenerationRunInput } from './types';
 
@@ -26,6 +27,12 @@ const PROVIDER_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_VOICE_ID_CHARS = 256;
 /** Command ids are the caller's idempotency keys. */
 const COMMAND_ID_PATTERN = /^[A-Za-z0-9_.:-]{1,128}$/;
+/** The longest instruction an AI outline revision may carry. */
+export const MAX_REVISE_INSTRUCTION_CHARS = 2_000;
+/** The most conversation turns a revision may send (older ones are dropped). */
+export const MAX_REVISE_HISTORY_TURNS = 8;
+/** The longest one turn of the revision conversation may be. */
+export const MAX_REVISE_HISTORY_CHARS = 4_000;
 
 export { MAX_OUTLINE_JSON_BYTES, MAX_OUTLINE_SCENES } from '@/lib/server/generation/outline-schema';
 
@@ -321,4 +328,71 @@ export function parseRetry(raw: unknown): Parsed<RetryCommand> {
     };
   }
   return { ok: true, value: { commandId: commandId.value, media: { elementId } } };
+}
+
+export interface ReviseOutlineBody {
+  instruction: string;
+  outlines: SceneOutline[];
+  history: OutlineRevisionTurn[];
+}
+
+/**
+ * The body of an outline revision: the learner's instruction, the outline as
+ * their editor shows it now (the source of truth for the next turn, their
+ * manual edits included), and the recent conversation. Nothing here is stored:
+ * the route only reads it, and the browser applies the answer.
+ */
+export function parseReviseOutline(raw: unknown): Parsed<ReviseOutlineBody> {
+  const body = record(raw);
+  if (!body) return { ok: false, message: 'The body must be a JSON object' };
+
+  const instruction = typeof body.instruction === 'string' ? body.instruction.trim() : '';
+  if (!instruction) return { ok: false, message: 'Missing required field: instruction' };
+  if (instruction.length > MAX_REVISE_INSTRUCTION_CHARS) {
+    return {
+      ok: false,
+      message: `instruction must be at most ${MAX_REVISE_INSTRUCTION_CHARS} characters`,
+    };
+  }
+
+  // Orders follow the list, as the editor numbers them after every edit.
+  const outlines = parseOutlines(
+    Array.isArray(body.outlines)
+      ? body.outlines.map((outline, index) => {
+          const item = record(outline);
+          return item ? { ...item, order: index + 1 } : outline;
+        })
+      : body.outlines,
+  );
+  if (!outlines.ok) return outlines;
+
+  const history: OutlineRevisionTurn[] = [];
+  if (body.history !== undefined) {
+    if (!Array.isArray(body.history) || body.history.length > MAX_REVISE_HISTORY_TURNS) {
+      return {
+        ok: false,
+        message: `history must be an array of at most ${MAX_REVISE_HISTORY_TURNS} turns`,
+      };
+    }
+    for (const turn of body.history) {
+      const item = record(turn);
+      const role = item?.role;
+      const content = typeof item?.content === 'string' ? item.content : '';
+      if ((role !== 'user' && role !== 'assistant') || !content.trim()) {
+        return {
+          ok: false,
+          message: 'history turns must be { role: "user" | "assistant", content }',
+        };
+      }
+      if (content.length > MAX_REVISE_HISTORY_CHARS) {
+        return {
+          ok: false,
+          message: `history turns must be at most ${MAX_REVISE_HISTORY_CHARS} characters`,
+        };
+      }
+      history.push({ role, content });
+    }
+  }
+
+  return { ok: true, value: { instruction, outlines: outlines.value, history } };
 }

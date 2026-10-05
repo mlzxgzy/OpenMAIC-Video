@@ -57,6 +57,7 @@ vi.mock('@/lib/generation-run-client/commands', () => ({
 
 import GenerationPreviewPage from '@/app/generation-preview/page';
 import { RunApiError } from '@/lib/generation-run-client/api';
+import { outlineDraftKey } from '@/lib/generation-run-client/outline-draft';
 import { applyRunEvent, viewFromSnapshot } from '@/lib/generation-run-client/reducer';
 import { event, outline, snapshot } from '../generation-run-client/fixtures';
 
@@ -77,17 +78,41 @@ beforeAll(async () => {
 
 let root: Root | null = null;
 let host: HTMLElement;
+
+/**
+ * This environment has no browser storage (the `localStorage` global is Node's,
+ * and stays undefined without `--localstorage-file`): the draft the preview
+ * keeps lives in the stub.
+ */
+function memoryStorage(): Storage {
+  const entries = new Map<string, string>();
+  return {
+    get length() {
+      return entries.size;
+    },
+    clear: () => entries.clear(),
+    getItem: (key: string) => entries.get(key) ?? null,
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    removeItem: (key: string) => void entries.delete(key),
+    setItem: (key: string, value: string) => void entries.set(key, value),
+  };
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   commands.confirmOutline.mockClear();
   commands.holdOutline.mockClear();
   sessionStorage.clear();
+  // The unconfirmed-outline draft is kept in localStorage: a test must not
+  // inherit the previous one's edit.
+  vi.stubGlobal('localStorage', memoryStorage());
 });
 afterEach(() => {
   if (root) act(() => root!.unmount());
   root = null;
   document.body.replaceChildren();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 function render(view: RunView) {
@@ -242,5 +267,34 @@ describe('the preview of a run that waits for its outline', () => {
     act(() => vi.advanceTimersByTime(10_000));
     expect(editor()).toBe(true);
     expect(commands.confirmOutline).not.toHaveBeenCalled();
+  });
+
+  it('keeps an unconfirmed edit when the review is left and opened again', () => {
+    const view = outlineReady(streaming('wait'), false);
+    render(view);
+    act(() =>
+      typeInto(host.querySelector('textarea') as HTMLTextAreaElement, 'Edited before leaving'),
+    );
+
+    // "Back to requirements" and the run's card again: a fresh page instance,
+    // which reads the run's own (unconfirmed) outline from the server.
+    act(() => root!.unmount());
+    root = null;
+    document.body.replaceChildren();
+    render(view);
+
+    expect(editor()).toBe(true);
+    expect((host.querySelector('textarea') as HTMLTextAreaElement).value).toBe(
+      'Edited before leaving',
+    );
+  });
+
+  it('drops the draft once the learner confirms the edit', async () => {
+    render(outlineReady(streaming('wait'), false));
+    act(() => typeInto(host.querySelector('textarea') as HTMLTextAreaElement, 'Confirmed edit'));
+    act(() => confirmButton()!.click());
+    await settle();
+    expect(commands.confirmOutline).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(outlineDraftKey('run-AAAAAAAAAAAAAAAA'))).toBeNull();
   });
 });

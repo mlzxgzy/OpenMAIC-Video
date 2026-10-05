@@ -8,10 +8,13 @@ import { StepRefusal } from '@/lib/server/generation/steps/context';
 import {
   MAX_OUTLINE_JSON_BYTES,
   MAX_OUTLINE_SCENES,
+  MAX_REVISE_HISTORY_TURNS,
+  MAX_REVISE_INSTRUCTION_CHARS,
   MAX_START_BODY_BYTES,
   parseCommandId,
   parseConfirmOutline,
   parseOutlines,
+  parseReviseOutline,
   parseRunInput,
   readJsonBody,
 } from '@/lib/server/generation/run/input';
@@ -327,6 +330,117 @@ describe('outline validation', () => {
         MAX_START_BODY_BYTES,
       ),
     ).toEqual({ ok: true, value: { a: 1 } });
+  });
+});
+
+describe('outline revision body', () => {
+  const outline = (overrides: Record<string, unknown> = {}) => ({
+    id: 'o1',
+    type: 'slide',
+    title: 'Intro',
+    description: 'Why',
+    keyPoints: ['a'],
+    order: 1,
+    ...overrides,
+  });
+
+  it('reads the instruction, the current outline and the conversation', () => {
+    const parsed = parseReviseOutline({
+      instruction: '  Make scene 2 a quiz  ',
+      outlines: [outline(), outline({ id: 'o2', order: 5, type: 'quiz' })],
+      history: [
+        { role: 'user', content: 'Shorten it' },
+        { role: 'assistant', content: 'Done.' },
+      ],
+    });
+    expect(parsed).toEqual({
+      ok: true,
+      value: {
+        instruction: 'Make scene 2 a quiz',
+        // Orders follow the list, as the editor numbers them after every edit.
+        outlines: [
+          {
+            id: 'o1',
+            type: 'slide',
+            title: 'Intro',
+            description: 'Why',
+            keyPoints: ['a'],
+            order: 1,
+          },
+          {
+            id: 'o2',
+            type: 'quiz',
+            title: 'Intro',
+            description: 'Why',
+            keyPoints: ['a'],
+            order: 2,
+          },
+        ],
+        history: [
+          { role: 'user', content: 'Shorten it' },
+          { role: 'assistant', content: 'Done.' },
+        ],
+      },
+    });
+  });
+
+  it('defaults the history to none', () => {
+    const parsed = parseReviseOutline({ instruction: 'Go', outlines: [outline()] });
+    expect(parsed.ok && parsed.value.history).toEqual([]);
+  });
+
+  it('refuses a missing, blank or over-long instruction', () => {
+    const missing = parseReviseOutline({ outlines: [outline()] });
+    expect(!missing.ok && missing.message).toMatch(/instruction/);
+    const blank = parseReviseOutline({ instruction: '   ', outlines: [outline()] });
+    expect(!blank.ok && blank.message).toMatch(/instruction/);
+    const long = parseReviseOutline({
+      instruction: 'x'.repeat(MAX_REVISE_INSTRUCTION_CHARS + 1),
+      outlines: [outline()],
+    });
+    expect(!long.ok && long.message).toMatch(/at most/);
+  });
+
+  it('refuses an outline the pipeline cannot confirm unchanged', () => {
+    const empty = parseReviseOutline({ instruction: 'Go', outlines: [] });
+    expect(!empty.ok && empty.message).toMatch(/1 to/);
+    const repeated = parseReviseOutline({
+      instruction: 'Go',
+      outlines: [outline(), outline()],
+    });
+    expect(!repeated.ok && repeated.message).toMatch(/repeat an id/);
+    const missing = parseReviseOutline({ instruction: 'Go' });
+    expect(!missing.ok && missing.message).toMatch(/outlines/);
+  });
+
+  it('bounds the conversation: turn count, shape and per-turn length', () => {
+    const tooMany = parseReviseOutline({
+      instruction: 'Go',
+      outlines: [outline()],
+      history: Array.from({ length: MAX_REVISE_HISTORY_TURNS + 1 }, () => ({
+        role: 'user',
+        content: 'x',
+      })),
+    });
+    expect(!tooMany.ok && tooMany.message).toMatch(/at most 8 turns/);
+    const badRole = parseReviseOutline({
+      instruction: 'Go',
+      outlines: [outline()],
+      history: [{ role: 'system', content: 'x' }],
+    });
+    expect(!badRole.ok && badRole.message).toMatch(/role/);
+    const blankTurn = parseReviseOutline({
+      instruction: 'Go',
+      outlines: [outline()],
+      history: [{ role: 'user', content: '  ' }],
+    });
+    expect(!blankTurn.ok && blankTurn.message).toMatch(/role/);
+    const longTurn = parseReviseOutline({
+      instruction: 'Go',
+      outlines: [outline()],
+      history: [{ role: 'user', content: 'x'.repeat(4_001) }],
+    });
+    expect(!longTurn.ok && longTurn.message).toMatch(/at most 4000/);
   });
 });
 

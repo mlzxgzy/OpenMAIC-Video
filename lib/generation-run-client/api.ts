@@ -4,6 +4,7 @@
  * owner-scoped by the request's identity; a failure throws a
  * {@link RunApiError} carrying the route's error code.
  */
+import type { OutlineRevisionTurn, SceneOutline } from '@/lib/types/generation';
 import { resolveWorkbenchMaterialMime } from '@/lib/workbench/material-upload-policy';
 
 import { announceRunsChanged } from './runs-changed';
@@ -61,11 +62,17 @@ async function failure(
   );
 }
 
-async function postJson<T>(url: string, body: unknown, fallbackKey: string): Promise<T> {
+async function postJson<T>(
+  url: string,
+  body: unknown,
+  fallbackKey: string,
+  signal?: AbortSignal,
+): Promise<T> {
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    ...(signal ? { signal } : {}),
   });
   if (!response.ok) throw await failure(response, fallbackKey);
   return (await response.json()) as T;
@@ -143,6 +150,31 @@ export function retryRun(
     `/api/generation-runs/${encodeURIComponent(runId)}/retry`,
     command,
     'generation.sceneGenerateFailed',
+  );
+}
+
+/** One AI outline revision, as `POST .../revise-outline` answers it. */
+export interface OutlineRevisionAnswer {
+  outlines: SceneOutline[];
+  message: string;
+}
+
+/**
+ * Ask the outline stage's model to revise the outline the run waits on. The
+ * answer is not stored: the caller applies it to its editor, and confirming
+ * the outline is what reaches the run. `signal` aborts the call (closing the
+ * dialog).
+ */
+export function reviseRunOutline(
+  runId: string,
+  body: { instruction: string; outlines: SceneOutline[]; history: OutlineRevisionTurn[] },
+  signal?: AbortSignal,
+): Promise<OutlineRevisionAnswer> {
+  return postJson(
+    `/api/generation-runs/${encodeURIComponent(runId)}/revise-outline`,
+    body,
+    'generation.aiEditFailed',
+    signal,
   );
 }
 

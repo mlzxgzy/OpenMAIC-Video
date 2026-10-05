@@ -148,6 +148,15 @@ export type SceneType = 'slide' | 'quiz' | 'interactive' | 'pbl';
 export const ALL_SCENE_TYPES: readonly SceneType[] = ['slide', 'quiz', 'interactive', 'pbl'];
 
 /**
+ * One turn of the outline revision conversation (the review page's "ask AI to
+ * edit the outline" chat), as the browser and the server share it.
+ */
+export interface OutlineRevisionTurn {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
  * Simplified scene outline
  * Gives AI more freedom, only requiring intent description and key points
  */

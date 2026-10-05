@@ -49,6 +49,30 @@
 
   改动落在 L4（`app/` `lib/` `components/`），详见下方「与上游的差异」。
 
+- **大纲审阅页的「AI 修改大纲」对话**：`/generation-preview` 进入大纲审阅态后，
+  编辑器标题栏新增「用 AI 修改」按钮，打开一个多轮对话框：用自然语言描述修改，
+  服务端用**大纲阶段的同一个模型槽位**（`course.outline`）返回一版完整新大纲，
+  直接套用到编辑器（`editedOutlines`），并提供「撤销本次修改」回到上一版；
+  确认流程不变，仍走 `confirm-outline` 整体替换（revision+1）。
+  - 新增路由 `POST /api/generation-runs/:id/revise-outline`：owner 鉴权 +
+    **同源 JSON 校验**（该调用消耗 owner 的模型额度），run 不在
+    `awaiting_outline_confirmation` 时返回 409 `RUN_STATE_CONFLICT`，
+    未配置大纲模型返回 400 `MISSING_MODEL`，模型输出不可用返回 502
+    `GENERATION_FAILED`（编辑器保持原样）。它是**只读调用**，不写 run 状态：
+    修改先活在浏览器草稿里（见 Fixed），确认时才落库。
+  - 新增 step `lib/server/generation/steps/outline-revision.ts`：新提示词模板
+    `lib/prompts/templates/outline-revision/`，模型输出先补 `id`/`order`
+    （`repairOutlineScenes`）再走既有 `normalizeSceneOutlines`，
+    媒体元素 id 经 `uniquifyMediaElementIds` 重铸，`sceneTypes` 过滤沿用
+    composer 的选择；坏输出抛 `OutlineRevisionError`。
+  - 新增客户端纯逻辑 `lib/generation-run-client/outline-revision.ts`
+    （历史截断、变更摘要）与组件
+    `components/generation/outline-ai-dialog.tsx`；入口按钮是
+    `OutlinesEditor` 的新可选 prop `onAiEdit`（该组件当前仅本页使用）。
+  - 12 个语包新增 `generation.aiEdit*` 共 12 个键。
+
+  改动落在 L4（`app/` `lib/` `components/`），详见下方「与上游的差异」。
+
 ### Changed
 
 - `lib/types/generation.ts:145` 把 `SceneOutline.type` 的内联联合类型
@@ -57,6 +81,26 @@
 - `UserRequirements` / `GenerationRunInput` 新增可选 `sceneTypes` 字段。
   缺省表示「全部类型」，与上游旧行为完全一致——上游调用方（含 headless API）
   不传该字段时走的还是原来的路径。
+
+### Fixed
+
+- **大纲审阅页里未确认的修改不再因离开页面而丢失**：此前 `editedOutlines` 只活在
+  React 状态里，而 run 自己的大纲在确认前不会变——点「返回修改需求」回首页、再从
+  run 卡片进来（或刷新页面）就又是 run 的原大纲，AI 改过的内容看起来像没生效。
+  现在未确认的大纲（AI 修改与手改走的是同一个 `editedOutlines`）在本机留一份草稿：
+  - 新增 `lib/generation-run-client/outline-draft.ts`：localStorage key
+    `generationRunOutlineDraft:<runId>`，内容 `{ revision, outlines }`。
+    **草稿绑定它基于的 outline revision**：run 重跑大纲（revision+1）或在别处被
+    确认后，旧草稿直接丢弃，绝不会盖住 run 的真实大纲；读入时校验结构
+    （localStorage 属于不可信输入）。
+  - `app/generation-preview/page.tsx`：审阅页读到 run 的大纲时按同一 revision
+    还原草稿；编辑（含 AI 套用）时写入；确认成功、或 run 不再是
+    `awaiting_outline_confirmation` 时清除。
+  - 边界说明：草稿是本机本浏览器的（换设备/清缓存不会同步），对话框的多轮上下文
+    不随草稿保存——重新进入后仍可基于当前大纲继续让 AI 改，但看不到之前的对话。
+  - 测试：`tests/generation-run-client/outline-draft.test.ts` 17 例；
+    `tests/generation/preview-outline-review.test.ts` 新增 2 例
+    （离开再进入保留、确认后清除）。
 
 ---
 
@@ -111,6 +155,33 @@ lib/i18n/locales/*.json                             （12 个语包）
    需把 `SceneType` 与 `ALL_SCENE_TYPES` 合并过去，避免两处定义漂移。
 3. 上游若新增第五种场景类型，本 fork 的 `ALL_SCENE_TYPES` 与
    `outline-template-scene-types.test.ts` 的断言都要跟着扩，否则测试会红。
+
+### 第二处非视频偏离：AI 修改大纲
+
+同样是 L4 的课程生成功能（不属于视频链路），实际改动落在：
+
+```
+app/generation-preview/page.tsx
+app/api/generation-runs/[id]/revise-outline/route.ts   （新增）
+components/generation/outline-ai-dialog.tsx            （新增）
+components/generation/outlines-editor.tsx              （新增可选 prop onAiEdit）
+lib/generation-run-client/{api,outline-revision}.ts
+lib/prompts/{index,types}.ts
+lib/prompts/templates/outline-revision/                （新增模板）
+lib/server/generation/run/input.ts
+lib/server/generation/steps/outline-revision.ts        （新增）
+lib/types/generation.ts                                （新增 OutlineRevisionTurn）
+lib/i18n/locales/*.json                                （12 个语包，各 12 个键）
+```
+
+**代价与后续动作**（同步上游 `1.2.x` 之后）：
+
+1. `lib/server/generation/run/input.ts`、`lib/generation-run-client/api.ts` 是上游
+   改动频繁的文件，冲突概率最高；本功能只做**追加**，未改既有导出的语义。
+2. `lib/prompts/types.ts` 的 `PromptId` 联合与 `lib/prompts/index.ts` 的
+   `PROMPT_IDS` 必须成对维护（`satisfies` 已保证值存在）。
+3. 上游若调整 `confirm-outline`（整体替换大纲）的契约，本功能「AI 结果只在浏览器
+   生效、确认时才落库」的前提会失效，需一并复核。
 
 ### 尚未配置 upstream 远端
 

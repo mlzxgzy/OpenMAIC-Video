@@ -15,6 +15,7 @@ import { Sparkles, AlertCircle, ArrowLeft, Bot, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { OutlinesEditor } from '@/components/generation/outlines-editor';
+import { OutlineAiDialog } from '@/components/generation/outline-ai-dialog';
 import { cn } from '@/lib/utils';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -27,6 +28,11 @@ import { toast } from 'sonner';
 import { runFailureText, type FailureText } from '@/lib/generation-run-client/failure-message';
 import { confirmOutline, holdOutline, retryPausedRun } from '@/lib/generation-run-client/commands';
 import { nextPreviewPhase, type PreviewPhase } from '@/lib/generation-run-client/outline-review';
+import {
+  clearOutlineDraft,
+  restoreOutlineDraft,
+  writeOutlineDraft,
+} from '@/lib/generation-run-client/outline-draft';
 import { previewStepIds, previewStepIndex } from '@/lib/generation-run-client/preview-steps';
 import { visibleOutlines } from '@/lib/generation-run-client/reducer';
 import { useGenerationRun } from '@/lib/generation-run-client/use-generation-run';
@@ -73,6 +79,8 @@ function GenerationPreviewContent() {
   const [editedOutlines, setEditedOutlines] = useState<SceneOutline[] | null>(null);
   const [isConfirmingOutlines, setIsConfirmingOutlines] = useState(false);
   const [commandError, setCommandError] = useState<string | null>(null);
+  // The "ask AI to edit the outline" chat (the review page's).
+  const [outlineAiOpen, setOutlineAiOpen] = useState(false);
   // This page's confirmation lost to one made elsewhere: its edits stay shown.
   const [confirmConflict, setConfirmConflict] = useState(false);
   // The seq of a step Retry: the run shows as retrying until a step starts after it.
@@ -91,6 +99,33 @@ function GenerationPreviewContent() {
   useEffect(() => {
     if (runId) outlineReviewIntentRef.current = readReviewIntent(runId);
   }, [runId]);
+
+  // The learner's unconfirmed edits are this browser's draft (the run's outline
+  // only changes when it is confirmed): a page that was left and opened again —
+  // the requirement page and back, a reload — puts them back in the editor
+  // instead of showing the run's own outline again.
+  const draftCheckedForRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!view?.outline || draftCheckedForRunRef.current === view.runId) return;
+    draftCheckedForRunRef.current = view.runId;
+    // A run that no longer waits for its outline cannot use a draft.
+    if (view.state !== 'awaiting_outline_confirmation') {
+      clearOutlineDraft(view.runId);
+      return;
+    }
+    const restored = restoreOutlineDraft(view.runId, view.outline.revision);
+    if (restored) setEditedOutlines(restored);
+  }, [view?.runId, view?.state, view?.outline]);
+
+  // A confirmed outline (here or elsewhere) or an ended run leaves the draft
+  // with nobody to apply it: drop it, so a later review cannot show it.
+  const draftClearedForRunRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!view?.outline || view.state === 'awaiting_outline_confirmation') return;
+    if (draftClearedForRunRef.current === view.runId) return;
+    draftClearedForRunRef.current = view.runId;
+    clearOutlineDraft(view.runId);
+  }, [view?.runId, view?.state, view?.outline]);
 
   const steps = useMemo(() => {
     if (!view) return [];
@@ -121,6 +156,8 @@ function GenerationPreviewContent() {
       await confirmOutline(view, edits ?? undefined);
       outlineReviewIntentRef.current = false;
       writeReviewIntent(view.runId, false);
+      // The edits are the run's outline now: the draft has served its purpose.
+      if (edits) clearOutlineDraft(view.runId);
       setPhase('progress');
       void refresh();
     } catch (error) {
@@ -253,6 +290,12 @@ function GenerationPreviewContent() {
     // The editor is read-only while the outline streams.
     if (isOutlineStreaming) return;
     setEditedOutlines(next);
+    // Kept in this browser until the confirmation reaches the run: leaving the
+    // review and coming back shows these edits, not the run's own outline. A
+    // run that already moved on has nothing to draft.
+    if (view?.outline && view.state === 'awaiting_outline_confirmation') {
+      writeOutlineDraft(view.runId, { revision: view.outline.revision, outlines: next });
+    }
   };
 
   const handleConfirmOutlines = () => {
@@ -325,6 +368,14 @@ function GenerationPreviewContent() {
     commandError ??
     (view.state === 'paused' && view.error ? failureSentence(runFailureText(view.error)) : null);
   const paused = view.state === 'paused';
+  // The AI outline chat needs the run still waiting for its outline, a ready
+  // (not streaming) one, and an outline model to resolve. Without any of those
+  // the answer could not be used or produced.
+  const canEditOutlineWithAi =
+    !isOutlineStreaming &&
+    !confirmConflict &&
+    !isConfirmingOutlines &&
+    (!capabilities.known || capabilities.resolved.has('course.outline'));
   const statusMessage = view.outlineRetrying
     ? t('generation.outlineRetrying')
     : retryQueued
@@ -409,9 +460,19 @@ function GenerationPreviewContent() {
               isLoading={isConfirmingOutlines}
               isStreaming={isOutlineStreaming}
               onCollapse={isOutlineStreaming ? handleCollapseEditor : undefined}
+              onAiEdit={canEditOutlineWithAi ? () => setOutlineAiOpen(true) : undefined}
             />
           </motion.div>
         </div>
+
+        <OutlineAiDialog
+          open={outlineAiOpen}
+          onOpenChange={setOutlineAiOpen}
+          runId={view.runId}
+          outlines={editorOutlines}
+          onApply={handleOutlinesChange}
+          disabled={!canEditOutlineWithAi}
+        />
       </div>
     );
   }
