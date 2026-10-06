@@ -3,7 +3,7 @@
 本文件只记录 **本仓库相对上游的差异**。上游 OpenMAIC 的变更请看 [`CHANGELOG.md`](./CHANGELOG.md)。
 
 - **上游项目**：[THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC)
-- **本仓库**：`git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork，无 `upstream` 远端）
+- **本仓库**：`git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork，`upstream` = `git@github.com:THU-MAIC/OpenMAIC.git`）
 - **二开方向**：视频化（视频导出 / 渲染服务 / 视频生成）
 - **格式**：沿用上游的 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 约定，但**不写 PR 链接**（二开改动没有上游 PR）
 
@@ -26,7 +26,39 @@
 
 ## [Unreleased]
 
-（暂无）
+### 同步上游 `ccdc88a5`（2026-10-06）
+
+`upstream/main` 新增 3 个提交，以 `git merge upstream/main` 合入，**无冲突**。
+基线由 `636fab0d`（`v1.2.0-rc.1`）推进到 `ccdc88a5`，本 fork 的 9 个二开提交
+及其 hash 全部保持不变（`v1.2.0-video.1` tag 不受影响）。
+
+| 上游提交 | 内容 |
+| --- | --- |
+| `a3c17b61` | feat(generation): 服务端生成运行的 host hooks（#1807） |
+| `7230053af` | test(boot): 防止 `register()` 真的拉起后台 worker（#1803） |
+| `ccdc88a5` | fix(pi): 带 400 拒绝已确认的畸形 reference snapshot（#1752） |
+
+**与二开改动的重叠面**：`lib/server/generation/run/engine.ts`、
+`lib/server/generation/steps/outline.ts` 两个文件双方都改了，但区域不同，
+Git 自动合并结果已逐处核对：
+
+| 文件 | 本 fork 改的部分 | 上游改的部分 |
+| --- | --- | --- |
+| `run/engine.ts` | `runRequirements()` 透传 `sceneTypes`（:230） | `executeGenerationRun` 拆分 + hook 事件上报 + host 失败分类 |
+| `steps/outline.ts` | 场景类型约束提示词 + 流式过滤（:299/:587/:737） | `isNonRetryableHostFailure` 守卫（:42/:761/:827） |
+
+两处语义相关但可叠加：上游的 host 失败守卫抛出的错误会经过我们场景类型
+过滤所在的循环（:737）——被丢弃的类型场景不进入 confirmed outline，所以它
+也不会因 host 失败而重试，二者叠加无副作用。
+
+**验证**：`tsc` 通过；`lint` 0 errors（18 warnings 全为上游既有）；上游新增的
+hooks 测试（`tests/server/generation-run-hooks*`、`outline-host-failure`、
+`schema-migration-checksums`）43 passed；二开相关套件
+（`tests/audio` `tests/chat` `tests/generation` `tests/generation-run-client`
+`tests/server/generation-run` `tests/server/generation-steps` `tests/config` `tests/i18n`）
+952 passed。
+
+**未做**：E2E（需另起 3002 端口整套环境）。
 
 ## [1.2.0-video.1] - 2026-10-06
 
@@ -368,14 +400,24 @@ lib/i18n/locales/*.json                           （12 个语包，各 25 个�
    （`setSpeechTextClearAudioById` / `setAudioIdById`）与同一条 TTS 链，
    不会产生两套语义。
 
-### 尚未配置 upstream 远端
+### 上游同步
 
-本仓库只有 `origin`。要同步上游需先自行添加：
+`upstream` 远端已配置（`2026-10-06`），首次同步见 `[Unreleased]`。
+日后同步：
 
 ```bash
-git remote add upstream https://github.com/THU-MAIC/OpenMAIC.git
 git fetch upstream
+git log --oneline main..upstream/main   # 上游新增
+git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
+git merge upstream/main
 ```
+
+**不要用 `rebase` 同步**：二开有 9 个提交、已发布 `v1.2.0-video.1`，
+rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+`merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
+
+同步后至少要跑：`tsc`、`lint`、`vitest`。若上游改过 `packages/@openmaic`，
+还需 `node scripts/check-package-version-bumps.mjs <新的基线 commit>`。
 
 ---
 
@@ -383,7 +425,7 @@ git fetch upstream
 
 | 项 | 值 |
 | --- | --- |
-| 上游基线 | `v1.2.0-rc.1`，commit `636fab0d` |
+| 上游基线 | `ccdc88a5`（同步自 `v1.2.0-rc.1` 之后的 3 个提交） |
 | 本 fork 版本线 | `1.2.0-video.N`（首个发布：`1.2.0-video.1`，见上方版本号说明） |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |
@@ -400,9 +442,10 @@ git fetch upstream
 | `879f99c6` | docs: 二开 changelog 补记 AI 修改大纲提交 |
 | `9b8d9b40` | build(docker): 添加 render-service 服务 |
 | `0add1c4b` | feat(classroom): 讲稿逐句编辑 + 独立重新生成语音面板 |
-| （本提交） | release: 二开首个独立版本 1.2.0-video.1 |
+| `（本提交）` | release: 二开首个独立版本 1.2.0-video.1 |
+| `（本提交）` | chore: 配置 upstream 远端并合并上游 `ccdc88a5` |
 
-用 `git log --oneline 636fab0d..HEAD` 可随时核对这份列表是否与历史同步。
+用 `git log --oneline ccdc88a5..HEAD` 可随时核对这份列表是否与历史同步。
 
 > **发布提交的 hash 无法自引用**：提交无法预知自身 hash，`--amend` 也会改写它。
 > 表里用 `（本提交）` 占位的那一条，核对时 `git log` 会比本表**多出这最后一条**，
