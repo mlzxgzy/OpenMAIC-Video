@@ -18,7 +18,7 @@ import {
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
 import { resolveTTSModelForVoice } from '@/lib/audio/constants';
-import { qwenInstructionControlFor } from '@/lib/audio/qwen-instruct-control-selection';
+import { qwenInstructionsForRequest } from '@/lib/audio/qwen-instruct-control-selection';
 import {
   isVoiceBindingUnavailable,
   markVoiceBindingNoticeShown,
@@ -170,9 +170,10 @@ export async function generateAndStoreTTS(
     })) ?? {};
   // Qwen's instruction control is a request parameter, so it rides with the
   // voice's own provider options. Gated on the model that will actually speak,
-  // so a model that cannot take the flag never sees it.
-  if (qwenInstructionControlFor(ttsModelId, ttsProviderId)) {
-    providerOptions.qwenInstructionControl = true;
+  // so a model that cannot take it never sees the text.
+  const qwenInstructions = qwenInstructionsForRequest(ttsModelId, ttsProviderId);
+  if (qwenInstructions) {
+    providerOptions.qwenInstructions = qwenInstructions;
   }
   let data: TTSApiResponse;
   try {

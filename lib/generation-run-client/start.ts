@@ -106,6 +106,11 @@ export async function startClassicRun(input: {
     ...(learnerProfile ? { learnerProfile } : {}),
     ...(voice ? { voice } : {}),
     ...(qwenInstructControl.applies ? { qwenInstructControl: qwenInstructControl.requested } : {}),
+    // The server cannot read the settings store, so a custom instruction rides
+    // with the run; a run sent without one falls back to the built-in default.
+    ...(qwenInstructControl.effective && qwenInstructControl.instructions
+      ? { qwenInstructText: qwenInstructControl.instructions }
+      : {}),
     // Uploaded for this run only: released when it completes or ends.
     ...(materialIds.length > 0 ? { releaseMaterials: true } : {}),
     // The learner who asked to always review outlines confirms each one; any

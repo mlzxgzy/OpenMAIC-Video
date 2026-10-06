@@ -46,6 +46,41 @@ export const DEFAULT_QWEN_INSTRUCTIONS =
   '语气亲切自然，像一位经验丰富的老师在对学生讲课；吐字清晰，语速适中，重点处略有强调。';
 
 /**
+ * The provider's own ceiling on `instructions`, in characters.
+ *
+ * The API documents 1,600 *tokens* and Chinese-or-English only. Tokens are not
+ * characters, so a character cap is the only bound this side can enforce
+ * without shipping a tokenizer and without guessing: a Chinese instruction of
+ * N characters is roughly N tokens, while English packs several characters into
+ * a token. The cap below is therefore generous enough that a Chinese user
+ * cannot hit the real limit before this one (the default instruction is well
+ * inside both), while still refusing a pasted essay outright rather than letting
+ * the provider reject the request.
+ */
+export const QWEN_INSTRUCT_MAX_CHARS = 1200;
+
+/** The trimmed instruction a request should carry, or null when there is none. */
+export function qwenInstructionsFor(custom: string | undefined | null): string | null {
+  const text = (custom ?? '').trim();
+  if (!text) return DEFAULT_QWEN_INSTRUCTIONS;
+  return text.slice(0, QWEN_INSTRUCT_MAX_CHARS);
+}
+
+/**
+ * The instruction this build would send, for a custom value and a model.
+ *
+ * A model that cannot take the parameter has no instruction, whatever the text
+ * says, so the help card cannot promise a delivery a request will not carry.
+ */
+export function qwenInstructionsForModel(
+  custom: string | undefined | null,
+  modelId?: string,
+): string | null {
+  if (!supportsQwenInstructionControl(modelId)) return null;
+  return qwenInstructionsFor(custom);
+}
+
+/**
  * The narration-writing guidance for a run that instructs its synthesis, or an
  * empty string. Appending it to the action prompts is what stops the script
  * from writing tone and pace into the words themselves: with the instruction
@@ -57,7 +92,7 @@ export function qwenInstructPromptSection(enabled: boolean): string {
   return [
     '### Delivery Instruction',
     '',
-    'The teacher\'s voice is synthesized with a natural-language delivery instruction',
+    "The teacher's voice is synthesized with a natural-language delivery instruction",
     'applied to every line — it sets tone, pace and emphasis. That instruction is already',
     'configured for this course, so you do NOT need to write one.',
     '',

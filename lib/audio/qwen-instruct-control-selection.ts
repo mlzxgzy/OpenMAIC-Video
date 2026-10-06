@@ -5,6 +5,10 @@
  * this resolves it against the slot's provider and model so the settings panel,
  * the narration request and the generation prompts all agree about what will
  * actually happen.
+ *
+ * What travels on a request is the *instruction text*, not a flag: the presence
+ * of the text is what turns the feature on, so "enabled" and "what to say"
+ * cannot drift apart the way a boolean beside a separate field would.
  */
 import {
   currentModelCapabilities,
@@ -12,7 +16,7 @@ import {
 } from '@/lib/model-settings/capabilities';
 import { useSettingsStore } from '@/lib/store/settings';
 import { slotTTSModel } from '@/lib/audio/tts-selection';
-import { supportsQwenInstructionControl } from '@/lib/audio/qwen-instruct-control';
+import { qwenInstructionsForModel } from '@/lib/audio/qwen-instruct-control';
 
 export interface QwenInstructPreference {
   /** The switch as the user left it, regardless of the model. */
@@ -23,31 +27,36 @@ export interface QwenInstructPreference {
   applies: boolean;
   /** The model that decides what applies; the slot's, or the provider's default. */
   modelId?: string;
+  /** The instruction a request would carry, or undefined when none would. */
+  instructions?: string;
 }
 
-/** The user's stored switch, without a slot. */
-export function qwenInstructControlRequested(): boolean {
-  return useSettingsStore.getState().qwenTtsInstructControl;
+/** The user's stored switch and text, without a slot. */
+function storedPreference(): { requested: boolean; text: string } {
+  const state = useSettingsStore.getState();
+  return { requested: state.qwenTtsInstructControl, text: state.qwenTtsInstructText };
 }
 
 /**
- * Whether a synthesis request for `modelId` must carry the delivery
- * instruction: the user asked for it AND that model accepts the parameter.
- * A non-Qwen provider never does, whatever the switch says.
+ * The instruction a synthesis request for `modelId` must carry, or undefined:
+ * the user asked for it, the provider is Qwen, and that model accepts the
+ * parameter. A non-Qwen provider never does, whatever the switch says.
  */
-export function qwenInstructionControlFor(
+export function qwenInstructionsForRequest(
   modelId: string | undefined,
   providerId?: string,
-): boolean {
-  if (providerId && providerId !== 'qwen-tts') return false;
-  return qwenInstructControlRequested() && supportsQwenInstructionControl(modelId);
+): string | undefined {
+  if (providerId && providerId !== 'qwen-tts') return undefined;
+  const { requested, text } = storedPreference();
+  if (!requested) return undefined;
+  return qwenInstructionsForModel(text, modelId) ?? undefined;
 }
 
 /** The stored switch resolved against what the `tts` slot speaks with. */
 export function resolveQwenInstructControl(
   capabilities: ModelCapabilities = currentModelCapabilities(),
 ): QwenInstructPreference {
-  const requested = qwenInstructControlRequested();
+  const { requested, text } = storedPreference();
   const target = capabilities.tts;
   if (target?.registryId !== 'qwen-tts') {
     return { requested, effective: false, applies: false };
@@ -55,10 +64,12 @@ export function resolveQwenInstructControl(
   // The slot's model, or the provider's default when it names none — the same
   // model the synthesis request will carry.
   const modelId = slotTTSModel(target);
+  const instructions = qwenInstructionsForModel(text, modelId);
   return {
     requested,
-    effective: requested && supportsQwenInstructionControl(modelId),
+    effective: requested && instructions !== null,
     applies: true,
+    ...(instructions ? { instructions } : {}),
     ...(modelId ? { modelId } : {}),
   };
 }

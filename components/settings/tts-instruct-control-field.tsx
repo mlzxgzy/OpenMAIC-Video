@@ -2,12 +2,15 @@
 
 import { Label } from '@/components/ui/label';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Textarea } from '@/components/ui/textarea';
 import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/hover-card';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { AlertTriangle, CircleHelp } from 'lucide-react';
 import {
   DEFAULT_QWEN_INSTRUCTIONS,
+  QWEN_INSTRUCT_MAX_CHARS,
+  qwenInstructionsForModel,
   supportsQwenInstructionControl,
 } from '@/lib/audio/qwen-instruct-control';
 import type { ModelCapabilities } from '@/lib/model-settings/capabilities';
@@ -16,14 +19,20 @@ import type { ModelCapabilities } from '@/lib/model-settings/capabilities';
  * The body of the question mark's hover card: what instruction control does,
  * which model it needs, and how to hear it on the test TTS below.
  *
- * The instruction shown is the one this build actually sends
- * ({@link DEFAULT_QWEN_INSTRUCTIONS}) rather than a paraphrase, so the card
- * cannot drift from the request; the test speaks with it only when the service's
- * model accepts the parameter, which the switch's own warning says out loud.
+ * The instruction shown is the one this build would actually send — the user's
+ * own text when they wrote one, the built-in default otherwise — rather than a
+ * paraphrase, so the card cannot drift from the request; the test speaks with it
+ * only when the service's model accepts the parameter, which the switch's own
+ * warning says out loud.
  *
  * Rendered on its own so the copy can be asserted without opening a portal.
  */
-export function QwenInstructHelpContent() {
+export function QwenInstructHelpContent({
+  instructions,
+}: {
+  /** The effective instruction, or undefined when the model cannot take one. */
+  instructions?: string;
+}) {
   const { t } = useI18n();
   return (
     <div className="space-y-2.5 text-xs leading-relaxed">
@@ -40,8 +49,15 @@ export function QwenInstructHelpContent() {
         {/* The exact string the request carries, so what the user reads here is
             what the test TTS will speak with. */}
         <p className="rounded-md border border-border/60 bg-muted/40 px-2 py-1.5 font-mono text-[11px] leading-relaxed">
-          {DEFAULT_QWEN_INSTRUCTIONS}
+          {instructions ?? t('settings.qwenInstructHelpNoInstruction')}
         </p>
+        {instructions && instructions !== DEFAULT_QWEN_INSTRUCTIONS && (
+          <p className="text-muted-foreground">
+            {t('settings.qwenInstructHelpDefaultFallback', {
+              default: DEFAULT_QWEN_INSTRUCTIONS,
+            })}
+          </p>
+        )}
       </div>
       <p className="text-muted-foreground">{t('settings.qwenInstructHelpTest')}</p>
       <p className="text-muted-foreground">{t('settings.qwenInstructHelpScript')}</p>
@@ -62,7 +78,7 @@ export function QwenInstructHelpContent() {
  * explanation is several paragraphs with an example and a link, which a
  * transient tooltip would cut off and which the user needs time to read.
  */
-function InstructControlHelp() {
+function InstructControlHelp({ instructions }: { instructions?: string }) {
   const { t } = useI18n();
   return (
     <HoverCard openDelay={200} closeDelay={80}>
@@ -76,20 +92,27 @@ function InstructControlHelp() {
         </button>
       </HoverCardTrigger>
       <HoverCardContent align="start" side="top" className="w-80">
-        <QwenInstructHelpContent />
+        <QwenInstructHelpContent instructions={instructions} />
       </HoverCardContent>
     </HoverCard>
   );
 }
 
 /**
- * The Qwen instruction-control switch, shown on the Qwen TTS panel.
+ * The Qwen instruction-control switch and the instruction itself, on the Qwen
+ * TTS panel.
  *
  * The feature is model-gated, and the panel is also opened for a service that is
  * not (yet) the workspace's narration. The switch therefore renders as a plain
  * preference — it is never disabled — and the model that will speak decides
  * whether it takes effect; when it will not, the hint says so instead of the
  * switch silently doing nothing.
+ *
+ * The text sits under the switch because it is what the switch sends: an empty
+ * box means the built-in default, so a course that never touches it speaks
+ * exactly as it did before. The box appears only while the switch is on — an
+ * instruction nobody sends is a stray note, and it would be edited in the
+ * belief that it took effect.
  */
 export function QwenInstructControlField({
   capabilities,
@@ -106,12 +129,17 @@ export function QwenInstructControlField({
   const { t } = useI18n();
   const enabled = useSettingsStore((state) => state.qwenTtsInstructControl);
   const setEnabled = useSettingsStore((state) => state.setQwenTtsInstructControl);
+  const text = useSettingsStore((state) => state.qwenTtsInstructText);
+  const setText = useSettingsStore((state) => state.setQwenTtsInstructText);
 
   // The model that decides whether the instruction reaches a voice: the one the
   // test speaks with, so the warning appears exactly when the test will not
   // honour the switch either.
   const modelId = testModelId ?? capabilities.tts?.modelId;
   const supported = supportsQwenInstructionControl(modelId);
+  // What a request would carry right now, which the help card quotes verbatim.
+  const effective = supported ? qwenInstructionsForModel(text, modelId) : null;
+  const overLimit = text.length > QWEN_INSTRUCT_MAX_CHARS;
 
   return (
     <div className="space-y-3">
@@ -128,7 +156,7 @@ export function QwenInstructControlField({
             <Label htmlFor="qwen-tts-instruct-control" className="cursor-pointer text-sm">
               {t('settings.qwenInstructControl')}
             </Label>
-            <InstructControlHelp />
+            <InstructControlHelp instructions={effective ?? undefined} />
           </div>
           <p className="text-xs text-muted-foreground">{t('settings.qwenInstructControlHint')}</p>
           {enabled && !supported && (
@@ -139,6 +167,28 @@ export function QwenInstructControlField({
           )}
         </div>
       </div>
+      {enabled && (
+        <div className="space-y-1.5 pl-7">
+          <Label htmlFor="qwen-tts-instruct-text" className="text-xs">
+            {t('settings.qwenInstructTextLabel')}
+          </Label>
+          <Textarea
+            id="qwen-tts-instruct-text"
+            aria-label={t('settings.qwenInstructTextLabel')}
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder={DEFAULT_QWEN_INSTRUCTIONS}
+            rows={3}
+            className="resize-y text-xs"
+          />
+          <p className="text-xs text-muted-foreground">{t('settings.qwenInstructTextHint')}</p>
+          {overLimit && (
+            <p className="text-xs text-amber-600 dark:text-amber-400">
+              {t('settings.qwenInstructTextTooLong', { max: QWEN_INSTRUCT_MAX_CHARS })}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }

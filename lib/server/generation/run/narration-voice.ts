@@ -28,6 +28,7 @@ import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { MediaConnection } from '@/lib/server/model-config/media';
 import {
   qwenInstructPromptSection,
+  qwenInstructionsForModel,
   supportsQwenInstructionControl,
 } from '@/lib/audio/qwen-instruct-control';
 
@@ -210,6 +211,21 @@ export function runQwenInstructControl(
 ): boolean {
   if (!target || target.providerId !== 'qwen-tts') return false;
   return requested === true && supportsQwenInstructionControl(target.modelId);
+}
+
+/**
+ * The instruction a run's narration requests carry, or undefined for no
+ * instruction. The run's own text is preferred over the built-in default, so a
+ * course that customises it does so for the whole run rather than for the
+ * browser's previews only.
+ */
+export function runQwenInstructions(
+  target: RunNarrationTarget | null,
+  requested: GenerationRunInput['qwenInstructControl'],
+  text: GenerationRunInput['qwenInstructText'],
+): string | undefined {
+  if (!runQwenInstructControl(target, requested)) return undefined;
+  return qwenInstructionsForModel(text, target?.modelId) ?? undefined;
 }
 
 /**

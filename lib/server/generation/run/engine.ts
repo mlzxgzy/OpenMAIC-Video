@@ -92,7 +92,7 @@ import {
   clipVoiceAfterMissingClone,
   narratorVoiceForGeneration,
   runNarrationPromptSection,
-  runQwenInstructControl,
+  runQwenInstructions,
   slotVoice,
 } from './narration-voice';
 import {
@@ -1007,7 +1007,11 @@ async function executeClaimedRun(
     const bound = teacher?.voiceConfig;
     const { speed } = slotVoice(target, input.voice);
     // What this run's instruction-control switch means for the model narrating.
-    const qwenInstruct = runQwenInstructControl(target, input.qwenInstructControl);
+    const qwenInstructions = runQwenInstructions(
+      target,
+      input.qwenInstructControl,
+      input.qwenInstructText,
+    );
     const stageId = agents().stage.id;
     const { languageDirective } = outline();
     const allocated: string[] = [];
@@ -1038,8 +1042,8 @@ async function executeClaimedRun(
       });
       // Qwen's instruction control rides with the voice's own provider options,
       // already gated on the model this run narrates with.
-      if (qwenInstruct && (providerOptions as Record<string, unknown> | undefined)) {
-        (providerOptions as Record<string, unknown>).qwenInstructionControl = true;
+      if (qwenInstructions && (providerOptions as Record<string, unknown> | undefined)) {
+        (providerOptions as Record<string, unknown>).qwenInstructions = qwenInstructions;
       }
       try {
         return await withRouteRetry(

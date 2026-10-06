@@ -82,6 +82,13 @@ export interface SettingsState {
    * flag alone.
    */
   qwenTtsInstructControl: boolean;
+  /**
+   * The delivery instruction the switch sends, replacing
+   * {@link DEFAULT_QWEN_INSTRUCTIONS} when non-empty. Empty means "use the
+   * default", so a course that never touches this field speaks exactly as it
+   * did before.
+   */
+  qwenTtsInstructText: string;
   /** The language speech input listens for (checked against the asr slot's provider). */
   asrLanguage: string;
 
@@ -132,6 +139,7 @@ export interface SettingsState {
   setTTSVoice: (voice: string, providerId: string) => void;
   setTTSSpeed: (speed: number) => void;
   setQwenTtsInstructControl: (enabled: boolean) => void;
+  setQwenTtsInstructText: (text: string) => void;
   setASRLanguage: (language: string) => void;
   setReviewOutlineEnabled: (enabled: boolean) => void;
 
@@ -163,6 +171,7 @@ const PERSISTED_FIELDS = [
   'ttsVoiceProviderId',
   'ttsSpeed',
   'qwenTtsInstructControl',
+  'qwenTtsInstructText',
   'asrLanguage',
   'reviewOutlineEnabled',
   'ttsMuted',
@@ -242,6 +251,7 @@ export const useSettingsStore = create<SettingsState>()(
       ttsVoiceProviderId: '',
       ttsSpeed: 1.0,
       qwenTtsInstructControl: false,
+      qwenTtsInstructText: '',
       asrLanguage: 'zh-CN',
       reviewOutlineEnabled: false,
 
@@ -268,6 +278,7 @@ export const useSettingsStore = create<SettingsState>()(
       setTTSVoice: (voice, providerId) => set({ ttsVoice: voice, ttsVoiceProviderId: providerId }),
       setTTSSpeed: (speed) => set({ ttsSpeed: speed }),
       setQwenTtsInstructControl: (enabled) => set({ qwenTtsInstructControl: enabled }),
+      setQwenTtsInstructText: (text) => set({ qwenTtsInstructText: text }),
       setASRLanguage: (language) => set({ asrLanguage: language }),
       setReviewOutlineEnabled: (enabled) => set({ reviewOutlineEnabled: enabled }),
 

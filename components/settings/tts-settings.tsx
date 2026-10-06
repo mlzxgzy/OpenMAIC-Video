@@ -19,7 +19,7 @@ import { useTTSPreview } from '@/lib/audio/use-tts-preview';
 import { getVoxCPMProviderOptions } from '@/lib/audio/voxcpm-voices';
 import { VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 import { defaultVoiceFor, slotVoxCPMBackend, ttsSelection } from '@/lib/audio/tts-selection';
-import { qwenInstructionControlFor } from '@/lib/audio/qwen-instruct-control-selection';
+import { qwenInstructionsForRequest } from '@/lib/audio/qwen-instruct-control-selection';
 import { modelCapabilities } from '@/lib/model-settings/capabilities';
 import { assignService } from '@/lib/model-settings/services';
 import { regionalEndpointTemplate } from '@/lib/config/official-endpoints';
@@ -212,11 +212,11 @@ export function TTSSettings({ view, apply, entry }: ServicePanelProps) {
       // The test speaks with the same delivery instruction narration would, so
       // the help beside the switch describes what this button actually does. A
       // voice that pins another model (a Qwen clone) resolves to that one
-      // server-side, and the provider drops the flag for a model that cannot
-      // take it.
-      const qwenInstruct = qwenInstructionControlFor(testModelId, providerId);
-      const options = qwenInstruct
-        ? { ...(providerOptions ?? {}), qwenInstructionControl: true }
+      // server-side, and the provider drops the instruction for a model that
+      // cannot take it.
+      const qwenInstructions = qwenInstructionsForRequest(testModelId, providerId);
+      const options = qwenInstructions
+        ? { ...(providerOptions ?? {}), qwenInstructions }
         : providerOptions;
       await startPreview({
         text: testText,

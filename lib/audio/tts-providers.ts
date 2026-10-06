@@ -103,10 +103,7 @@ import {
 } from './constants';
 import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
 import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
-import {
-  DEFAULT_QWEN_INSTRUCTIONS,
-  supportsQwenInstructionControl,
-} from './qwen-instruct-control';
+import { qwenInstructionsForModel } from './qwen-instruct-control';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import {
   VOXCPM_VLLM_MODEL_ID,
@@ -979,14 +976,17 @@ async function generateQwenTTS(
 
   const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
   const resolvedModel = modelId || 'qwen3-tts-flash';
-  // Instruction control: a natural-language delivery instruction for the line.
-  // Gated on the model, because DashScope rejects an unsupported parameter
-  // rather than ignoring it, and on the user's switch in the Qwen panel.
-  const instructions =
-    config.providerOptions?.qwenInstructionControl === true &&
-    supportsQwenInstructionControl(resolvedModel)
-      ? DEFAULT_QWEN_INSTRUCTIONS
-      : undefined;
+  // Instruction control: a natural-language delivery instruction for the line,
+  // carried on the request's own options. Gated on the model, because DashScope
+  // rejects an unsupported parameter rather than ignoring it — so a text
+  // reaching a model that cannot take it is dropped here, not sent.
+  const requestedInstructions =
+    typeof config.providerOptions?.qwenInstructions === 'string'
+      ? config.providerOptions.qwenInstructions.trim()
+      : '';
+  const instructions = requestedInstructions
+    ? qwenInstructionsForModel(requestedInstructions, resolvedModel)
+    : null;
   const response = await ttsFetch(
     config,
     `${baseUrl}/services/aigc/multimodal-generation/generation`,

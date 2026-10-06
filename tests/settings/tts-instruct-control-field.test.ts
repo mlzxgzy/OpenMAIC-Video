@@ -9,17 +9,21 @@ vi.mock('@/lib/hooks/use-i18n', () => ({
 // Rendered through `renderToStaticMarkup`, where a store hook resolves its
 // server snapshot — the store's initial state, which `setState` cannot reach.
 // Mock the hook so each case can state the switch it is about.
-const store = vi.hoisted(() => ({ qwenTtsInstructControl: false }));
+const store = vi.hoisted(() => ({ qwenTtsInstructControl: false, qwenTtsInstructText: '' }));
 vi.mock('@/lib/store/settings', () => ({
-  useSettingsStore: (selector: (state: { qwenTtsInstructControl: boolean }) => unknown) =>
-    selector(store),
+  useSettingsStore: (
+    selector: (state: { qwenTtsInstructControl: boolean; qwenTtsInstructText: string }) => unknown,
+  ) => selector(store),
 }));
 
 import {
   QwenInstructControlField,
   QwenInstructHelpContent,
 } from '@/components/settings/tts-instruct-control-field';
-import { DEFAULT_QWEN_INSTRUCTIONS } from '@/lib/audio/qwen-instruct-control';
+import {
+  DEFAULT_QWEN_INSTRUCTIONS,
+  QWEN_INSTRUCT_MAX_CHARS,
+} from '@/lib/audio/qwen-instruct-control';
 import type { EffectiveTarget, ModelCapabilities } from '@/lib/model-settings/capabilities';
 import type { SlotId } from '@/lib/config/model-slots';
 import enUS from '@/lib/i18n/locales/en-US.json';
@@ -60,6 +64,7 @@ const helpKeys = (locale: typeof enUS) =>
 describe('QwenInstructControlField', () => {
   beforeEach(() => {
     store.qwenTtsInstructControl = true;
+    store.qwenTtsInstructText = '';
   });
 
   it('offers a help trigger next to the switch label', () => {
@@ -105,17 +110,85 @@ describe('QwenInstructControlField', () => {
   });
 });
 
+describe('the instruction text box', () => {
+  beforeEach(() => {
+    store.qwenTtsInstructControl = true;
+    store.qwenTtsInstructText = '';
+  });
+
+  it('sits under the switch while the switch is on', () => {
+    const html = renderField({ testModelId: 'qwen3-tts-instruct-flash' });
+
+    expect(html).toContain('settings.qwenInstructTextLabel');
+    expect(html).toMatch(/<textarea[^>]*id="qwen-tts-instruct-text"/);
+    // Empty means the built-in default, so the placeholder states it.
+    expect(html).toContain(`placeholder="${DEFAULT_QWEN_INSTRUCTIONS}"`);
+  });
+
+  it('holds what the user wrote', () => {
+    store.qwenTtsInstructText = '语速放慢。';
+    const html = renderField({ testModelId: 'qwen3-tts-instruct-flash' });
+
+    expect(html).toContain('语速放慢。');
+  });
+
+  it('is absent while the switch is off', () => {
+    // An instruction nobody sends is a stray note, and it would be edited in
+    // the belief that it took effect.
+    store.qwenTtsInstructControl = false;
+    const html = renderField({ testModelId: 'qwen3-tts-instruct-flash' });
+
+    expect(html).not.toContain('qwen-tts-instruct-text');
+  });
+
+  it('warns when the text is past what the provider accepts', () => {
+    store.qwenTtsInstructText = 'x'.repeat(QWEN_INSTRUCT_MAX_CHARS + 1);
+    const html = renderField({ testModelId: 'qwen3-tts-instruct-flash' });
+
+    expect(html).toContain('settings.qwenInstructTextTooLong');
+  });
+
+  it('does not warn about length at the cap itself', () => {
+    store.qwenTtsInstructText = 'x'.repeat(QWEN_INSTRUCT_MAX_CHARS);
+    const html = renderField({ testModelId: 'qwen3-tts-instruct-flash' });
+
+    expect(html).not.toContain('settings.qwenInstructTextTooLong');
+  });
+});
+
 describe('QwenInstructHelpContent', () => {
   it('shows the instruction the request actually sends', () => {
     // A paraphrase here would teach the user to expect a delivery the request
     // does not produce; the constant is the only true answer.
-    expect(renderToStaticMarkup(createElement(QwenInstructHelpContent))).toContain(
-      DEFAULT_QWEN_INSTRUCTIONS,
+    expect(
+      renderToStaticMarkup(
+        createElement(QwenInstructHelpContent, { instructions: DEFAULT_QWEN_INSTRUCTIONS }),
+      ),
+    ).toContain(DEFAULT_QWEN_INSTRUCTIONS);
+  });
+
+  it('shows a custom instruction instead of the default', () => {
+    const html = renderToStaticMarkup(
+      createElement(QwenInstructHelpContent, { instructions: '语速放慢，句末上扬。' }),
     );
+
+    expect(html).toContain('语速放慢，句末上扬。');
+    // And says what the default would have been, so the box is not a dead end.
+    expect(html).toContain('settings.qwenInstructHelpDefaultFallback');
+  });
+
+  it('says no instruction is sent when the model cannot take one', () => {
+    // The card must not promise a delivery a request will not carry.
+    const html = renderToStaticMarkup(createElement(QwenInstructHelpContent));
+
+    expect(html).toContain('settings.qwenInstructHelpNoInstruction');
+    expect(html).not.toContain(DEFAULT_QWEN_INSTRUCTIONS);
   });
 
   it('points at the test TTS and the official docs', () => {
-    const html = renderToStaticMarkup(createElement(QwenInstructHelpContent));
+    const html = renderToStaticMarkup(
+      createElement(QwenInstructHelpContent, { instructions: DEFAULT_QWEN_INSTRUCTIONS }),
+    );
 
     expect(html).toContain('settings.qwenInstructHelpTest');
     expect(html).toContain('https://help.aliyun.com/zh/model-studio/non-realtime-tts-user-guide');

@@ -112,6 +112,13 @@ export interface GenerationRunInput {
    */
   qwenInstructControl?: boolean;
   /**
+   * The delivery instruction to send instead of the built-in default, when the
+   * run's instruction control is on. The server cannot read the user's
+   * settings, so the text travels with the run. Absent or empty means the
+   * default.
+   */
+  qwenInstructText?: string;
+  /**
    * The materials were uploaded for this run only (the composer's): they are
    * released when the run completes or ends. Callers that reuse material ids
    * across runs leave it out.

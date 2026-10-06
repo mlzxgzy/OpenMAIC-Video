@@ -7,6 +7,7 @@ import { capBodyStream } from '@/lib/server/capped-stream';
 import { normalizeSceneOutlines } from '@/lib/server/generation/outline-schema';
 import { MAX_CLASSROOM_MATERIALS } from '@/lib/server/classroom-materials';
 import { isMaterialId } from '@/lib/server/materials/material-id';
+import { QWEN_INSTRUCT_MAX_CHARS } from '@/lib/audio/qwen-instruct-control';
 import { ALL_SCENE_TYPES, type SceneType, type SceneOutline } from '@/lib/types/generation';
 import type { OutlineRevisionTurn } from '@/lib/types/generation';
 
@@ -238,6 +239,17 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
     qwenInstructControl = parsed.value;
   }
 
+  // The instruction text travels with the run rather than being read from
+  // settings, which the server cannot see. Bounded by the same cap the browser
+  // applies, so a start body cannot carry a prompt-sized payload into every
+  // narration request of the run.
+  const qwenInstructText = optionalText(
+    body.qwenInstructText,
+    'qwenInstructText',
+    QWEN_INSTRUCT_MAX_CHARS,
+  );
+  if (!qwenInstructText.ok) return qwenInstructText;
+
   return {
     ok: true,
     value: {
@@ -251,6 +263,7 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
       outlineReview,
       ...(voice ? { voice } : {}),
       ...(qwenInstructControl !== undefined ? { qwenInstructControl } : {}),
+      ...(qwenInstructText.value !== undefined ? { qwenInstructText: qwenInstructText.value } : {}),
       ...(releaseMaterials.value && materialIds.length > 0 ? { releaseMaterials: true } : {}),
     },
   };

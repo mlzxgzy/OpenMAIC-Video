@@ -66,24 +66,47 @@ describe('Qwen instruction control on the synthesis request', () => {
 
   it('sends instructions on an Instruct model when the switch is on', async () => {
     mockSynthesis();
-    const body = await synthesize('qwen3-tts-instruct-flash', { qwenInstructionControl: true });
+    const body = await synthesize('qwen3-tts-instruct-flash', {
+      qwenInstructions: DEFAULT_QWEN_INSTRUCTIONS,
+    });
     expect(body.input.instructions).toBe(DEFAULT_QWEN_INSTRUCTIONS);
     expect(body.input.optimize_instructions).toBe(true);
     expect(body.model).toBe('qwen3-tts-instruct-flash');
   });
 
-  it('omits the parameters when the switch is off', async () => {
+  it("sends the user's own instruction, unaltered, when they wrote one", async () => {
     mockSynthesis();
-    const body = await synthesize('qwen3-tts-instruct-flash', { qwenInstructionControl: false });
+    const custom = '语速放慢，句末上扬，像在引导学生自己发现答案。';
+    const body = await synthesize('qwen3-tts-instruct-flash', { qwenInstructions: custom });
+    expect(body.input.instructions).toBe(custom);
+  });
+
+  it('trims a padded instruction rather than sending the whitespace', async () => {
+    mockSynthesis();
+    const body = await synthesize('qwen3-tts-instruct-flash', {
+      qwenInstructions: '\n  语速放慢。  \n',
+    });
+    expect(body.input.instructions).toBe('语速放慢。');
+  });
+
+  it('omits the parameters when no instruction is present', async () => {
+    mockSynthesis();
+    const body = await synthesize('qwen3-tts-instruct-flash');
     expect(body.input).not.toHaveProperty('instructions');
     expect(body.input).not.toHaveProperty('optimize_instructions');
+  });
+
+  it('omits the parameters for a whitespace-only instruction', async () => {
+    mockSynthesis();
+    const body = await synthesize('qwen3-tts-instruct-flash', { qwenInstructions: '   ' });
+    expect(body.input).not.toHaveProperty('instructions');
   });
 
   it('omits the parameters when the model cannot accept them', async () => {
     // DashScope rejects an unsupported parameter rather than ignoring it, so a
     // model outside the Instruct series must never see one.
     mockSynthesis();
-    const body = await synthesize('qwen3-tts-flash', { qwenInstructionControl: true });
+    const body = await synthesize('qwen3-tts-flash', { qwenInstructions: '语速放慢。' });
     expect(body.input).not.toHaveProperty('instructions');
     expect(body.model).toBe('qwen3-tts-flash');
   });
