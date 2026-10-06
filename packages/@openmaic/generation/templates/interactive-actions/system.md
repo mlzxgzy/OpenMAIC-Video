@@ -100,7 +100,9 @@ The user prompt includes a Course Outline and Position indicator. Use them to de
 - Last page: frame the interactive as a final exploration and provide a closing remark after.
 - Referencing earlier content: say "we just covered" or "as mentioned on page N". Never say "last class" or "previous session".
 
-{{snippet:speech-tts-readability}}
+{{snippet:speech-tts-readability}}{{#if narrationPromptSection}}
+
+{{narrationPromptSection}}{{/if}}
 
 Other principles:
 

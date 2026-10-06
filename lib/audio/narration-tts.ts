@@ -18,6 +18,7 @@ import {
   type ResolvedVoice,
 } from '@/lib/audio/voice-resolver';
 import { resolveTTSModelForVoice } from '@/lib/audio/constants';
+import { qwenInstructionControlFor } from '@/lib/audio/qwen-instruct-control-selection';
 import {
   isVoiceBindingUnavailable,
   markVoiceBindingNoticeShown,
@@ -160,12 +161,19 @@ export async function generateAndStoreTTS(
 
   // Narration is the teacher's voice — resolve it from the teacher agent profile
   // through the single resolver (registers + references by id for stable timbre).
-  const providerOptions = await resolveAgentVoiceOptions(teacher, {
-    providerId: ttsProviderId,
-    providerConfig: { ...ttsProviderConfig, modelId: ttsModelId },
-    voiceId: ttsVoice,
-    language,
-  });
+  const providerOptions: Record<string, unknown> =
+    (await resolveAgentVoiceOptions(teacher, {
+      providerId: ttsProviderId,
+      providerConfig: { ...ttsProviderConfig, modelId: ttsModelId },
+      voiceId: ttsVoice,
+      language,
+    })) ?? {};
+  // Qwen's instruction control is a request parameter, so it rides with the
+  // voice's own provider options. Gated on the model that will actually speak,
+  // so a model that cannot take the flag never sees it.
+  if (qwenInstructionControlFor(ttsModelId, ttsProviderId)) {
+    providerOptions.qwenInstructionControl = true;
+  }
   let data: TTSApiResponse;
   try {
     data = await withGenerationRetry(

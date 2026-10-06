@@ -124,6 +124,13 @@ export interface SceneActionsOptions {
   agents?: AgentInfo[];
   userProfile?: string;
   languageDirective?: string;
+  /**
+   * Extra narration-writing guidance appended to the speech section of the
+   * action prompts (a provider's expressive-speech markup rules, say). Empty or
+   * absent leaves the prompt exactly as it was, so a provider without such a
+   * feature generates from a byte-identical prompt.
+   */
+  narrationPromptSection?: string;
   logger?: GenerationLogger;
 }
 
@@ -1720,6 +1727,7 @@ export async function generateSceneActions(
   options: SceneActionsOptions = {},
 ): Promise<Action[]> {
   const { ctx, agents, userProfile, languageDirective } = options;
+  const narrationPromptSection = options.narrationPromptSection || '';
   const log = options.logger ?? noopGenerationLogger;
   const agentsText = formatAgentsForPrompt(agents);
 
@@ -1744,6 +1752,7 @@ export async function generateSceneActions(
       agents: agentsText,
       userProfile: userProfile || '',
       languageDirective: languageDirective || '',
+      narrationPromptSection,
     });
 
     if (!prompts) {
@@ -1773,6 +1782,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      narrationPromptSection,
     });
 
     if (!prompts) {
@@ -1810,6 +1820,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      narrationPromptSection,
     });
 
     if (!prompts) {
@@ -1845,6 +1856,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       languageDirective: languageDirective || '',
+      narrationPromptSection,
     });
 
     if (!prompts) {

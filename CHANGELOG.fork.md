@@ -26,6 +26,44 @@
 
 ## [Unreleased]
 
+### Added
+
+- **千问 TTS 指令控制开关**：在「设置 → 语音合成 → Qwen TTS」面板新增一个
+  开关，勾选后生成讲稿时按需带上千问的交付指令，合成请求附带 `instructions` +
+  `optimize_instructions`，由模型控制每句台词的语调、语速与强调
+  （`lib/audio/qwen-instruct-control.ts`、`lib/audio/tts-providers.ts`）。
+  由于指令已经承载了语气与节奏，讲稿提示词会追加一段说明，要求**只写台词本身**、
+  不要把「（微笑）」「*笑*」这类舞台提示写进文本（否则会被念出来）。该说明通过新增
+  的可选变量 `narrationPromptSection` 注入 `slide-actions` / `quiz-actions` /
+  `interactive-actions` / `pbl-actions` 四套提示词的语音段落。
+
+  **该特性只覆盖 Instruct 系列模型，不含常用的 `qwen3-tts-flash`**：按官方文档
+  `instructions` 仅 `qwen3-tts-instruct-flash` 系列接受。因此开关**不禁用**，
+  而是与当前 TTS 模型对照：模型不支持时面板给出提示并指向「课程模型配置」，
+  服务端则把该开关按模型降级为关闭——不会给不支持的模型发参数（DashScope 会
+  拒绝而非忽略）。未知模型按「不支持」处理。
+
+  **未实现情感与富语言标签**：该特性属于 Qwen-Audio-TTS 系列（`qwen-audio-3.x`），
+  而**千问 TTS 的模型目录里没有任何该系列模型**（`TTS_PROVIDERS['qwen-tts'].models`
+  只有 `qwen3-tts-flash`、`qwen3-tts-instruct-flash`、`qwen-tts`、VC 克隆），
+  用户无法在「课程模型配置」中选到，槽位校验也只认目录内的模型——开关永远无法
+  生效。与其提供一个形同虚设的选项，不如不提供；若日后目录中加入该系列模型，
+  再据此实现（`lib/audio/qwen-instruct-control.ts` 顶部注释记录了这一点）。
+
+  **提示词在关闭时逐字节不变**：`{{#if narrationPromptSection}}` 块整体位于
+  条件内（含首尾换行），并由 `test/narration-section-parity.test.ts` 断言四个
+  模板在关闭时与基线渲染结果完全一致，避免给不使用该功能的用户带来任何 prompt 漂移。
+
+  **验证**：`tsc` 通过；`eslint` 0 errors；`check:i18n-keys` 通过（12 语言）；
+  包内 `@openmaic/generation` 215 passed（含新增 12 个提示词等价用例）；
+  `tests/server/generation-run/qwen-instruct-control.test.ts`、
+  `tests/audio/qwen-instruct-control.test.ts`、
+  `tests/audio/qwen-instruct-request.test.ts` 全通过。
+  `tests/audio/tts-invalid-response.test.ts`（2 例）、
+  `tests/server/generation-run/sse.test.ts`（1 例）、
+  `tests/model-settings/adopt-newer-view.test.ts`（3 例）为**改动前既有失败**，
+  已用 `git stash` 对照确认。
+
 ### Fixed
 
 - **Instruct 系列 TTS 报「音频 URL 主机不被允许」**：`qwen3-tts-instruct-flash`

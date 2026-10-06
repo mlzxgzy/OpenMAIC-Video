@@ -30,7 +30,9 @@ Generate speech content for this PBL scene that:
 
 **CRITICAL — Single voice, teacher only.** Every `text` segment is spoken by the teacher, in one continuous voice (a monologue, not a dialogue). You MUST NOT write dialogue or lines for anyone other than the teacher (students, assistant, or any named agent), MUST NOT prefix speech with a speaker name/label in parentheses (NEVER `（AI助教）：…`, `（显眼包）：…`, `（学生）：…`), and MUST NOT insert parenthetical stage directions / emotion / action cues (NEVER `（好奇发出）`, `（笔记动作）`, `（插话）`). Any `Classroom Agents` listed do not speak in your `text`. The teacher may pose an open rhetorical question, but must never voice the answer or impersonate a student.
 
-{{snippet:speech-tts-readability}}
+{{snippet:speech-tts-readability}}{{#if narrationPromptSection}}
+
+{{narrationPromptSection}}{{/if}}
 
 ## Output Format
 

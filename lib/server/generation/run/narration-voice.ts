@@ -26,6 +26,10 @@ import {
 } from '@/lib/audio/voice-resolver';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import type { MediaConnection } from '@/lib/server/model-config/media';
+import {
+  qwenInstructPromptSection,
+  supportsQwenInstructionControl,
+} from '@/lib/audio/qwen-instruct-control';
 
 import type { GenerationRunInput } from './types';
 
@@ -191,4 +195,31 @@ export function clipProviderConfig(target: RunNarrationTarget, voice: ResolvedVo
       voice.modelId ?? config?.modelId,
     ),
   };
+}
+
+/**
+ * What a run's instruction-control switch means for the voice it actually
+ * narrates with. Both the provider and the model decide: a non-Qwen slot never
+ * takes it, and it is gated on the model that accepts the parameter, so a user
+ * who switched it on with a model that cannot honour it gets the previous
+ * behaviour rather than a provider error.
+ */
+export function runQwenInstructControl(
+  target: RunNarrationTarget | null,
+  requested: GenerationRunInput['qwenInstructControl'],
+): boolean {
+  if (!target || target.providerId !== 'qwen-tts') return false;
+  return requested === true && supportsQwenInstructionControl(target.modelId);
+}
+
+/**
+ * The narration-prompt guidance for a run's instruction control, or an empty
+ * string — which is what keeps the action prompts byte-identical for every
+ * provider and model without the feature.
+ */
+export function runNarrationPromptSection(
+  target: RunNarrationTarget | null,
+  requested: GenerationRunInput['qwenInstructControl'],
+): string {
+  return qwenInstructPromptSection(runQwenInstructControl(target, requested));
 }

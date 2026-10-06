@@ -231,6 +231,13 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
     };
   }
 
+  let qwenInstructControl: GenerationRunInput['qwenInstructControl'];
+  if (body.qwenInstructControl !== undefined) {
+    const parsed = optionalBoolean(body.qwenInstructControl, 'qwenInstructControl');
+    if (!parsed.ok) return parsed;
+    qwenInstructControl = parsed.value;
+  }
+
   return {
     ok: true,
     value: {
@@ -243,6 +250,7 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
       ...(learnerProfile ? { learnerProfile } : {}),
       outlineReview,
       ...(voice ? { voice } : {}),
+      ...(qwenInstructControl !== undefined ? { qwenInstructControl } : {}),
       ...(releaseMaterials.value && materialIds.length > 0 ? { releaseMaterials: true } : {}),
     },
   };

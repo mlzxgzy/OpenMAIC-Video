@@ -24,6 +24,7 @@ import { assignService } from '@/lib/model-settings/services';
 import { regionalEndpointTemplate } from '@/lib/config/official-endpoints';
 import { QwenVoiceCloneManager, VoxCPMVoiceManager } from './tts-voice-managers';
 import { TTSSpeedField } from './tts-speed-field';
+import { QwenInstructControlField } from './tts-instruct-control-field';
 import {
   ApiKeyField,
   EndpointServerOnlyHint,
@@ -291,6 +292,10 @@ export function TTSSettings({ view, apply, entry }: ServicePanelProps) {
             cloneVoiceLocked={cloneSpeedDisabled}
             onSpeedChange={setTTSSpeed}
           />
+
+          {/* Qwen's instruction control shapes how every line is spoken, so it
+              belongs beside the voice and speed it applies to. */}
+          {providerId === 'qwen-tts' && <QwenInstructControlField capabilities={capabilities} />}
 
           {keyless && !use.inUse && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">

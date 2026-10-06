@@ -5,6 +5,7 @@
  * the learner's choices only (agents, learner profile, narrator voice).
  */
 import { ttsSelection } from '@/lib/audio/tts-selection';
+import { resolveQwenInstructControl } from '@/lib/audio/qwen-instruct-control-selection';
 import type { ModelCapabilities } from '@/lib/model-settings/capabilities';
 import { useAgentRegistry, whenAgentRegistryLoaded } from '@/lib/orchestration/registry/store';
 import { useSettingsStore } from '@/lib/store/settings';
@@ -88,6 +89,10 @@ export async function startClassicRun(input: {
       : undefined;
   const voice = selectedRunVoice(input.capabilities);
   const settings = useSettingsStore.getState();
+  // Qwen's instruction control shapes the narration this run generates, so the
+  // switch travels with the run. The server resolves it against the model that
+  // will actually narrate.
+  const qwenInstructControl = resolveQwenInstructControl(input.capabilities);
 
   return startGenerationRun({
     requirement: input.requirement,
@@ -100,6 +105,7 @@ export async function startClassicRun(input: {
     agents,
     ...(learnerProfile ? { learnerProfile } : {}),
     ...(voice ? { voice } : {}),
+    ...(qwenInstructControl.applies ? { qwenInstructControl: qwenInstructControl.requested } : {}),
     // Uploaded for this run only: released when it completes or ends.
     ...(materialIds.length > 0 ? { releaseMaterials: true } : {}),
     // The learner who asked to always review outlines confirms each one; any

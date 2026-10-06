@@ -104,6 +104,14 @@ export interface GenerationRunInput {
    */
   voice?: { providerId: string; voiceId: string; speed?: number };
   /**
+   * Whether this run's narration carries Qwen's natural-language delivery
+   * instruction. The server applies it to the synthesis requests and to the
+   * scripts it generates, but only while the `tts` slot speaks through a model
+   * that supports the feature — see `lib/audio/qwen-instruct-control`. Absent
+   * means off.
+   */
+  qwenInstructControl?: boolean;
+  /**
    * The materials were uploaded for this run only (the composer's): they are
    * released when the run completes or ends. Callers that reuse material ids
    * across runs leave it out.

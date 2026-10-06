@@ -42,6 +42,13 @@ export interface SceneActionsInput {
   previousSpeeches?: string[];
   userProfile?: string;
   languageDirective?: string;
+  /**
+   * Extra guidance appended to the narration-writing prompt. Qwen's instruction
+   * control passes its "write only the words" notes here; the caller leaves it
+   * empty for a provider without the feature, which keeps the prompt
+   * byte-identical to before.
+   */
+  narrationPromptSection?: string;
   /** The scene-actions stage's model. */
   model: StepLanguageModel;
 }
@@ -145,6 +152,9 @@ export async function generateSceneActions(
     agents,
     userProfile,
     languageDirective,
+    ...(input.narrationPromptSection
+      ? { narrationPromptSection: input.narrationPromptSection }
+      : {}),
   });
 
   log.info(`Generated ${actions.length} actions for: "${outline.title}"`);

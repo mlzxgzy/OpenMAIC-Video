@@ -152,7 +152,9 @@ Structure:
 - **Body**: Explain points one by one, with spotlight
 - **Summary**: Brief recap of this page's content
 
-{{snippet:speech-tts-readability}}
+{{snippet:speech-tts-readability}}{{#if narrationPromptSection}}
+
+{{narrationPromptSection}}{{/if}}
 
 ### 2. Focus Strategy
 

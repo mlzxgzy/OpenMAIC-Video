@@ -74,6 +74,14 @@ export interface SettingsState {
   ttsVoice: string;
   ttsVoiceProviderId: string;
   ttsSpeed: number;
+  /**
+   * Write Qwen's natural-language delivery instruction on every narration
+   * request. It only means something while the `tts` slot speaks through Qwen
+   * *and* through an Instruct-series model (`lib/audio/qwen-instruct-control`);
+   * the request builder and the generation prompts read the model, not this
+   * flag alone.
+   */
+  qwenTtsInstructControl: boolean;
   /** The language speech input listens for (checked against the asr slot's provider). */
   asrLanguage: string;
 
@@ -123,6 +131,7 @@ export interface SettingsState {
   /** Pick the narration voice of a speech provider (its registry id). */
   setTTSVoice: (voice: string, providerId: string) => void;
   setTTSSpeed: (speed: number) => void;
+  setQwenTtsInstructControl: (enabled: boolean) => void;
   setASRLanguage: (language: string) => void;
   setReviewOutlineEnabled: (enabled: boolean) => void;
 
@@ -153,6 +162,7 @@ const PERSISTED_FIELDS = [
   'ttsVoice',
   'ttsVoiceProviderId',
   'ttsSpeed',
+  'qwenTtsInstructControl',
   'asrLanguage',
   'reviewOutlineEnabled',
   'ttsMuted',
@@ -231,6 +241,7 @@ export const useSettingsStore = create<SettingsState>()(
       ttsVoice: 'default',
       ttsVoiceProviderId: '',
       ttsSpeed: 1.0,
+      qwenTtsInstructControl: false,
       asrLanguage: 'zh-CN',
       reviewOutlineEnabled: false,
 
@@ -256,6 +267,7 @@ export const useSettingsStore = create<SettingsState>()(
 
       setTTSVoice: (voice, providerId) => set({ ttsVoice: voice, ttsVoiceProviderId: providerId }),
       setTTSSpeed: (speed) => set({ ttsSpeed: speed }),
+      setQwenTtsInstructControl: (enabled) => set({ qwenTtsInstructControl: enabled }),
       setASRLanguage: (language) => set({ asrLanguage: language }),
       setReviewOutlineEnabled: (enabled) => set({ reviewOutlineEnabled: enabled }),
 

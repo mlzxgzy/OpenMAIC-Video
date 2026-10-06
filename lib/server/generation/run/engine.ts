@@ -91,6 +91,8 @@ import {
   clipVoice,
   clipVoiceAfterMissingClone,
   narratorVoiceForGeneration,
+  runNarrationPromptSection,
+  runQwenInstructControl,
   slotVoice,
 } from './narration-voice';
 import {
@@ -713,6 +715,14 @@ async function executeClaimedRun(
         const { outlines, languageDirective } = outline();
         const content = output<SceneContentResult>(sceneStepId(index, 'content'))!;
         const userProfile = learnerProfileText(input);
+        // Qwen's instruction control changes how the script must be written, so
+        // the guidance is resolved from the model that will narrate it — and is
+        // empty for every provider without the feature, leaving the prompts
+        // byte-identical to before.
+        const narrationPromptSection = runNarrationPromptSection(
+          await services.narrationTarget(owner),
+          input.qwenInstructControl,
+        );
         const result = await withRouteRetry(
           () =>
             withDeadline(stepId, STEP_DEADLINES_MS.sceneActions, signal, async (callSignal) => {
@@ -728,6 +738,7 @@ async function executeClaimedRun(
                   previousSpeeches: previousSpeechesFor(index),
                   ...(userProfile ? { userProfile } : {}),
                   languageDirective,
+                  ...(narrationPromptSection ? { narrationPromptSection } : {}),
                 },
                 { log, signal: callSignal },
               );
@@ -995,6 +1006,8 @@ async function executeClaimedRun(
     ]);
     const bound = teacher?.voiceConfig;
     const { speed } = slotVoice(target, input.voice);
+    // What this run's instruction-control switch means for the model narrating.
+    const qwenInstruct = runQwenInstructControl(target, input.qwenInstructControl);
     const stageId = agents().stage.id;
     const { languageDirective } = outline();
     const allocated: string[] = [];
@@ -1023,6 +1036,11 @@ async function executeClaimedRun(
         voiceId: voice.voiceId,
         language: languageDirective,
       });
+      // Qwen's instruction control rides with the voice's own provider options,
+      // already gated on the model this run narrates with.
+      if (qwenInstruct && (providerOptions as Record<string, unknown> | undefined)) {
+        (providerOptions as Record<string, unknown>).qwenInstructionControl = true;
+      }
       try {
         return await withRouteRetry(
           () =>

@@ -103,6 +103,10 @@ import {
 } from './constants';
 import { downloadAudio, QwenVoiceCloneError, synthesizeQwenVoiceClone } from './qwen-voice-clone';
 import { evictQwenVoiceRegistrationMemo } from './qwen-voice-clone-registration';
+import {
+  DEFAULT_QWEN_INSTRUCTIONS,
+  supportsQwenInstructionControl,
+} from './qwen-instruct-control';
 import { splitConcatenatedJsonObjects } from './json-stream';
 import {
   VOXCPM_VLLM_MODEL_ID,
@@ -974,6 +978,15 @@ async function generateQwenTTS(
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
 
   const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
+  const resolvedModel = modelId || 'qwen3-tts-flash';
+  // Instruction control: a natural-language delivery instruction for the line.
+  // Gated on the model, because DashScope rejects an unsupported parameter
+  // rather than ignoring it, and on the user's switch in the Qwen panel.
+  const instructions =
+    config.providerOptions?.qwenInstructionControl === true &&
+    supportsQwenInstructionControl(resolvedModel)
+      ? DEFAULT_QWEN_INSTRUCTIONS
+      : undefined;
   const response = await ttsFetch(
     config,
     `${baseUrl}/services/aigc/multimodal-generation/generation`,
@@ -984,11 +997,12 @@ async function generateQwenTTS(
         'Content-Type': 'application/json; charset=utf-8',
       },
       body: JSON.stringify({
-        model: modelId || 'qwen3-tts-flash',
+        model: resolvedModel,
         input: {
           text,
           voice: config.voice,
           language_type: 'Chinese', // Default to Chinese, can be made configurable
+          ...(instructions ? { instructions, optimize_instructions: true } : {}),
         },
         parameters: {
           rate, // Speech rate from -500 to 500
