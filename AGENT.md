@@ -13,10 +13,10 @@
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
 | 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交） |
-| 本 fork 版本 | `1.2.0-video.N` 版本线（首个发布 `1.2.0-video.1`，tag `v1.2.0-video.1`） |
+| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`，tag `v1.2.0-video.2`） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**：视频导出 / 渲染服务 / 视频生成能力 |
-| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4） |
+| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4） |
 | 变更记录 | 二开自己的改动写 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)；上游变更仍看 `CHANGELOG.md` |
 
 ### 1.1 与上游的关系（重要）
@@ -26,8 +26,8 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 9 个提交并发布了 `v1.2.0-video.1`，
-    rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+  - **用 merge，不要用 rebase**：二开已有 18 个提交并发布了 `v1.2.0-video.1`、
+    `v1.2.0-video.2`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
   - **已有例外**：首页「场景类型」筛选是课程生成功能（非视频链路），落在 L4

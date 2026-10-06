@@ -26,6 +26,16 @@
 
 ## [Unreleased]
 
+（暂无）
+
+## [1.2.0-video.2] - 2026-10-06
+
+基线是上游 `ccdc88a5`（`v1.2.0-video.1` 发布后以 merge 合入的 3 个提交，
+见本节「同步上游」）。本节收录自 `v1.2.0-video.1` 以来的 4 个二开提交：
+3 个 TTS 指令控制（新增）、1 个音频修复、1 个构建告警修复，并含一次上游同步。
+
+**版本号说明**：沿用 `1.2.0-video.N` 版本线，本次递增到 `1.2.0-video.2`。
+
 ### Added
 
 - **指令控制内容可自定义**：开关下方新增一个文本框，写什么就发什么
@@ -134,6 +144,43 @@
   覆盖 `dashscope-a717` 真实地址，4 例反向守住边界）；`tests/audio` 全量
   364 passed；`tsc`、`eslint` 通过。
 
+- **构建被 Edge Runtime 告警刷屏**：`pnpm build` 时每个 Node 内建模块刷一条
+  `A Node.js module is loaded ... which is not supported in the Edge Runtime`，
+  一次构建 33 条，把真正的告警淹没（改动前共 43 条）。
+
+  **根因不是代码里的 `import`，而是 Next 会把 `instrumentation.ts` 编译两份**：
+  Node 份（本应用实际运行的那份）与 Edge 份（`edge-instrumentation.js`）。Next
+  本来会在「instrumentation 是唯一 Edge entry」时丢弃后者，但
+  `middleware.ts` 是 Edge 代码，于是 entry 保留，`register()` 通过动态
+  `import()` 触达的整棵依赖树被打包第二次。关键是
+  `NEXT_RUNTIME` 守卫（`instrumentation.ts:16`）只挡**执行**、不挡**打包**——
+  那些 specifier 是静态字符串字面量，打包器照样静态跟踪。
+
+  **修法只压诊断输出**：在 `next.config.ts` 用 Turbopack 原生的
+  `turbopack.ignoreIssue` 匹配这一类告警。`ignoreIssue` 只影响诊断，模块解析、
+  打包产物与 Edge chunk 内容完全不变，因此不影响运行时行为——真正是 Edge 的
+  路由上出现 Node 内建模块仍会让构建失败（规则限定在
+  `{instrumentation.ts,lib/**,packages/**}` 且按告警文本匹配）。
+
+  **改动后**：Edge 告警 33 → 0，构建总告警 43 → 10。构建 exit 0，
+  `✓ Compiled successfully`。剩余 10 条与 Edge 无关，未处理：9 条
+  `Dynamic filesystem access causes tracing of the whole project`
+  （`lib/document/extractors/local-media.ts:202` 的可执行文件查找）+ 1 条
+  `middleware` 文件约定弃用提示。
+
+  **验证**：`pnpm build` exit 0、`✓ Compiled successfully in 18.4s`；
+  `grep -c "not supported in the Edge Runtime"` 为 0。
+
+  **走过的弯路**：第一版用 `webpack()` hook 实现，因为 Next 16 默认走 Turbopack
+  而根本不生效，反而触发 `This build is using Turbopack, with a webpack config
+  and no turbopack config` 把构建搞崩，已删除。第二版 `path` 写成
+  `instrumentation\.ts$` 一条没压掉——这些告警的 `path` 是真正出问题的源文件，
+  `Edge Instrumentation` 只是 import-trace 的段标题。
+
+  **未根治**：重复打包本身仍在，本次只消除了它的日志噪音。若要根治需重构
+  `instrumentation.ts` 的结构（让 Node-only 启动逻辑静态不可达于 Edge 侧），
+  有回归风险，建议单独进行。
+
 ### 同步上游 `ccdc88a5`（2026-10-06）
 
 `upstream/main` 新增 3 个提交，以 `git merge upstream/main` 合入，**无冲突**。
@@ -167,6 +214,32 @@ hooks 测试（`tests/server/generation-run-hooks*`、`outline-host-failure`、
 952 passed。
 
 **未做**：E2E（需另起 3002 端口整套环境）。
+
+### `1.2.0-video.2` 的验证状态
+
+**通过**：`tsc --noEmit`（exit 0）、`eslint`（**0 error**，18 个既有 warning，
+与上一版同数）、`prettier --check`（本次改动文件）、`pnpm check:i18n-keys`
+（12 语包）、`pnpm check:node-engine`、
+`node scripts/check-package-version-bumps.mjs v1.2.0-video.1`、
+`@openmaic/generation` 包内 `vitest` **215 passed**（30 个文件）、
+`tests/audio` + `tests/settings` + `tests/server/generation-run/qwen-instruct-control`
+**506 passed**（61 个文件，2 例失败见下）、`pnpm build` exit 0。
+
+**关于 `@openmaic/generation` 的版本号**：本版**确实改动**了该可发布包
+（`src/scene-generator.ts` 与 4 个 `templates/*/system.md`）——这是 `1.2.0-video.1`
+所没有的情况。因此 `check-package-version-bumps.mjs` 的 diff 模式在 CI 上会以
+`publishable package inputs changed but version did not increase` 失败，
+本次随发布把版本从 `0.3.15` 提到 **`0.3.16`**。
+
+> 该检查读的是 **git `HEAD` 里的** `package.json`，不是工作区文件——只改文件、
+> 不提交，检查仍然报失败。提版本号必须与改动一起进入提交。
+
+**未通过 / 已知失败**：`tests/audio/tts-invalid-response.test.ts` 2 例
+（`status` 500）。已 `git stash` 对照确认：**在不含本次任何改动的干净 HEAD 上
+同样失败 2 例**，属改动前既有问题，非本次引入。
+
+**未做**：E2E（`pnpm test:e2e`，需另起 3002 端口整套环境）；未发 `npm` 包
+（`publish-packages.yml` 未触发）。
 
 ## [1.2.0-video.1] - 2026-10-06
 
@@ -353,6 +426,9 @@ hooks 测试（`tests/server/generation-run-hooks*`、`outline-host-failure`、
 
 ## 本版本的验证状态
 
+（`1.2.0-video.1` 发版当时的记录，留档备查；**本次 `1.2.0-video.2` 的验证见下方
+「`1.2.0-video.2` 的验证状态」**。）
+
 **通过**：`tsc --noEmit`、`eslint`（0 error，18 个既有 warning）、`prettier --check`、
 `pnpm check:i18n-keys`（12 语包）、`pnpm check:node-engine`、
 `node scripts/check-package-version-bumps.mjs 636fab0d`。
@@ -520,8 +596,8 @@ git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
 git merge upstream/main
 ```
 
-**不要用 `rebase` 同步**：二开有 9 个提交、已发布 `v1.2.0-video.1`，
-rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+**不要用 `rebase` 同步**：二开有 18 个提交、已发布 `v1.2.0-video.1`、
+`v1.2.0-video.2`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 `merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
 
 同步后至少要跑：`tsc`、`lint`、`vitest`。若上游改过 `packages/@openmaic`，
