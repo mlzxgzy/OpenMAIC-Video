@@ -53,6 +53,43 @@ const nextConfig: NextConfig = {
   experimental: {
     proxyClientMaxBodySize: '200mb',
   },
+  turbopack: {
+    ignoreIssue: [
+      {
+        // Next compiles `instrumentation.ts` twice: once for Node (the only
+        // runtime this app serves on -- every route under app/ declares
+        // `runtime = 'nodejs'`) and once for the Edge runtime, as
+        // `edge-instrumentation.js`. Next drops that second entry when
+        // instrumentation is the only Edge entry, but `middleware.ts` is Edge
+        // code, so the entry survives and the whole graph `register()` reaches
+        // through its dynamic `import()`s gets bundled again for a runtime that
+        // never runs it: `register()` returns immediately unless
+        // `process.env.NEXT_RUNTIME === 'nodejs'` (instrumentation.ts:16).
+        //
+        // The bundler still walks those imports, and reports one diagnostic per
+        // Node builtin it finds -- node:crypto, node:fs, node:path and so on.
+        // None of them can execute: what they serve sits behind the runtime
+        // guard above. This only drops the diagnostics; resolution, bundling
+        // and the emitted Edge chunk are unchanged, so nothing about how the
+        // server behaves moves.
+        //
+        // Scoped to the Node-only server code these warnings can only come
+        // from, and matched on the diagnostic text, so a Node builtin reaching
+        // a route that really is Edge keeps failing the build. The Edge runtime
+        // polyfills these anyway, which is why the bundle builds at all.
+        //
+        // Both fields are given the same pattern because Turbopack splits a
+        // diagnostic into a title and a description and the split point for
+        // this code style is not documented; a rule only has to match one.
+        path: '{instrumentation.ts,lib/**,packages/**}',
+        title: /Node\.js (module is loaded|API is used).*Edge Runtime/,
+      },
+      {
+        path: '{instrumentation.ts,lib/**,packages/**}',
+        description: /Node\.js (module is loaded|API is used).*Edge Runtime/,
+      },
+    ],
+  },
   async headers() {
     const extraAncestors = process.env.ALLOWED_FRAME_ANCESTORS?.trim();
     const frameAncestors = extraAncestors ? `'self' ${extraAncestors}` : "'self'";
