@@ -14,7 +14,9 @@ import {
   type ReactNode,
 } from 'react';
 import { useStageStore } from '@/lib/store';
-import { PENDING_SCENE_ID } from '@/lib/store/stage';
+import { PENDING_SCENE_ID, flushStageSave } from '@/lib/store/stage';
+import { setSpeechTextClearAudioById } from '@/components/edit/ActionsBar/actions-edit';
+import { discardSpeechAudio } from '@/lib/audio/regenerate-speech-tts';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -114,6 +116,13 @@ interface PlaybackChromeRootProps {
   readonly hideHeaderGlobalControls?: boolean;
   readonly hideHeaderCourseActions?: boolean;
   readonly onInteractivePickerChange?: (state: PlaybackInteractivePickerState | null) => void;
+  /**
+   * Whether the notes tab may rewrite narration lines. Resolved by the host
+   * (`stage.tsx`) from the same owner / read-only / course-generating facts
+   * that gate the Pro switch, rather than re-derived here: a visitor can read
+   * every line, and only the owner of a settled course may rewrite one.
+   */
+  readonly canEditScript?: boolean;
 }
 
 /**
@@ -136,6 +145,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       hideHeaderGlobalControls,
       hideHeaderCourseActions,
       onInteractivePickerChange,
+      canEditScript = false,
     },
     ref,
   ) {
@@ -1522,6 +1532,45 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       [currentScene, currentSceneId, updateCurrentPlaybackActionIndex],
     );
 
+    /**
+     * Persist a narration line the user rewrote in the notes tab.
+     *
+     * Two writes, in this order, and the order is the whole point: the text
+     * change drops the line's stamped audio FIRST (`setSpeechTextClearAudioById`
+     * clears `audioId` and raises `audioInvalidated`), and only then is the
+     * cached blob deleted. Doing it the other way round would leave a window
+     * where the document still names an asset whose bytes are already gone —
+     * the exact dangling reference `audioInvalidated` exists to prevent.
+     *
+     * Applied to the LATEST actions from the store rather than this render's
+     * snapshot, so a concurrent playback-driven or agent-driven update is not
+     * reverted by the commit (the same rule the Pro-mode timeline follows).
+     */
+    const handleCommitScriptText = useCallback(
+      (sceneId: string, actionId: string, text: string) => {
+        const store = useStageStore.getState();
+        const scene = store.scenes.find((candidate) => candidate.id === sceneId);
+        if (!scene) return;
+        const previousAudioId = (scene.actions ?? []).find((action) => action.id === actionId) as
+          | { audioId?: string }
+          | undefined;
+        store.updateScene(sceneId, {
+          actions: setSpeechTextClearAudioById(scene.actions ?? [], actionId, text),
+        });
+        // Re-check the audio state only AFTER the blob is gone, so the status
+        // row can't race the async delete and briefly still read "voiced".
+        void discardSpeechAudio(scene.order, {
+          id: actionId,
+          ...(previousAudioId?.audioId ? { audioId: previousAudioId.audioId } : {}),
+        }).catch(() => undefined);
+        // Debounced persistence would otherwise let a reload land between the
+        // text write and the audio drop; the edit is the user's work, so it is
+        // durable when the panel closes.
+        void flushStageSave().catch(() => undefined);
+      },
+      [],
+    );
+
     // whiteboard toggle
     const handleWhiteboardToggle = () => {
       setWhiteboardOpenManually(!whiteboardOpen);
@@ -1992,6 +2041,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             onJumpToAction={(sceneId, actionIndex) => {
               void handleJumpToAction(sceneId, actionIndex);
             }}
+            canEditScript={canEditScript}
+            onCommitScriptText={handleCommitScriptText}
             onLiveSpeech={(text, agentId) => {
               // Capture epoch at call time — discard if scene has changed since
               const epoch = sceneEpochRef.current;

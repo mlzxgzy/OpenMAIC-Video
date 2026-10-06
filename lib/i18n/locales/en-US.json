@@ -186,7 +186,12 @@
       "pageLabel": "Page {{n}}",
       "currentPage": "Current",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "Cancel",
+      "save": "Save",
+      "editHint": "Mod+Enter to save · Esc to cancel",
+      "editPlaceholder": "Type this line of narration…",
+      "editLine": "Edit this line"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Element references — pick elements to send with your next message",
       "globalTools": "Global tools"
+    },
+    "narration": {
+      "title": "Narration voice",
+      "description": "Re-voice the teacher’s lines. Each line is synthesized with the same voice and pace shown below.",
+      "voice": "Voice",
+      "speed": "Pace",
+      "voiceConsistentHint": "Regenerating reuses the voice, tone and pace of this course’s original narration — only the wording you edited changes.",
+      "scopePage": "This page",
+      "scopeCourse": "Whole course",
+      "stats": "{{voiced}}/{{total}} voiced · {{unvoiced}} unvoiced",
+      "statusVoiced": "Voiced",
+      "statusUnvoiced": "Not voiced",
+      "statusGenerating": "Generating",
+      "regenerateOne": "Regenerate this line",
+      "regenerateAll": "Regenerate all",
+      "done": "Regenerated {{count}} line(s)",
+      "partial": "Regenerated {{done}}, failed {{failed}}",
+      "lineDone": "Narration regenerated",
+      "lineFailed": "Could not regenerate narration",
+      "emptyHint": "This page has no narration lines yet.",
+      "emptyLine": "(empty line — nothing to speak)",
+      "revoiceWarning": "Regenerating replaces the existing audio for the selected lines."
     }
   },
   "classroomComplete": {

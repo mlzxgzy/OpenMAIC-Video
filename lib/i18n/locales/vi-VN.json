@@ -186,7 +186,12 @@
       "pageLabel": "Trang {{n}}",
       "currentPage": "Hiện tại",
       "jumpToLine": "Nhảy tới dòng này",
-      "jumpUnavailable": "Dòng này không nhảy tới được"
+      "jumpUnavailable": "Dòng này không nhảy tới được",
+      "cancel": "Hủy",
+      "save": "Lưu",
+      "editHint": "Mod+Enter để lưu · Esc để hủy",
+      "editPlaceholder": "Nhập câu lời giảng này…",
+      "editLine": "Sửa câu này"
     },
     "badge": {
       "qa": "HỎI ĐÁP",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Tham chiếu phần tử — chọn phần tử để gửi kèm tin nhắn tiếp theo",
       "globalTools": "Công cụ chung"
+    },
+    "narration": {
+      "title": "Giọng đọc lời giảng",
+      "description": "Tạo lại giọng đọc cho lời giảng của giáo viên. Mỗi câu được tổng hợp với cùng giọng và cùng tốc độ.",
+      "voice": "Giọng",
+      "speed": "Tốc độ",
+      "voiceConsistentHint": "Tạo lại vẫn dùng đúng giọng, sắc thái và tốc độ của bản thu ban đầu — chỉ phần lời bạn sửa là thay đổi.",
+      "scopePage": "Trang này",
+      "scopeCourse": "Toàn khóa",
+      "stats": "Đã đọc {{voiced}}/{{total}} · chưa đọc {{unvoiced}}",
+      "statusVoiced": "Đã đọc",
+      "statusUnvoiced": "Chưa đọc",
+      "statusGenerating": "Đang tạo",
+      "regenerateOne": "Tạo lại câu này",
+      "regenerateAll": "Tạo lại tất cả",
+      "done": "Đã tạo lại {{count}} câu",
+      "partial": "Thành công {{done}}, thất bại {{failed}}",
+      "lineDone": "Đã tạo lại lời đọc",
+      "lineFailed": "Không thể tạo lại lời đọc",
+      "emptyHint": "Trang này chưa có lời giảng.",
+      "emptyLine": "(Dòng trống — không có nội dung để đọc)",
+      "revoiceWarning": "Tạo lại sẽ thay thế âm thanh hiện có của các dòng đã chọn."
     }
   },
   "classroomComplete": {

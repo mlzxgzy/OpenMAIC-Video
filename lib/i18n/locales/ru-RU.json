@@ -186,7 +186,12 @@
       "pageLabel": "Страница {{n}}",
       "currentPage": "Текущая",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "Отмена",
+      "save": "Сохранить",
+      "editHint": "Mod+Enter — сохранить · Esc — отменить",
+      "editPlaceholder": "Введите эту строку закадрового текста…",
+      "editLine": "Изменить эту фразу"
     },
     "badge": {
       "qa": "Вопросы",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Ссылки на элементы — выберите элементы для следующего сообщения",
       "globalTools": "Общие инструменты"
+    },
+    "narration": {
+      "title": "Голос закадрового текста",
+      "description": "Переозвучите реплики преподавателя. Каждая фраза синтезируется тем же голосом с той же скоростью.",
+      "voice": "Голос",
+      "speed": "Темп",
+      "voiceConsistentHint": "При переозвучке сохраняются голос, интонация и темп исходной записи — меняется только отредактированный вами текст.",
+      "scopePage": "Эта страница",
+      "scopeCourse": "Весь курс",
+      "stats": "Озвучено {{voiced}}/{{total}} · без голоса {{unvoiced}}",
+      "statusVoiced": "Озвучено",
+      "statusUnvoiced": "Без голоса",
+      "statusGenerating": "Создание",
+      "regenerateOne": "Переозвучить эту фразу",
+      "regenerateAll": "Переозвучить всё",
+      "done": "Переозвучено фраз: {{count}}",
+      "partial": "Успешно: {{done}}, с ошибкой: {{failed}}",
+      "lineDone": "Озвучка обновлена",
+      "lineFailed": "Не удалось переозвучить",
+      "emptyHint": "На этой странице пока нет закадрового текста.",
+      "emptyLine": "(Пустая строка — произносить нечего)",
+      "revoiceWarning": "Переозвучка заменяет существующее аудио выбранных строк."
     }
   },
   "classroomComplete": {

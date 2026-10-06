@@ -56,6 +56,10 @@ interface ChatAreaProps {
   currentActionIndex?: number | null;
   canJumpToAction?: (sceneId: string, actionIndex: number) => boolean;
   onJumpToAction?: (sceneId: string, actionIndex: number) => void;
+  /** Whether the notes tab may rewrite narration lines (owner + not read-only). */
+  canEditScript?: boolean;
+  /** Persist an edited narration line; the host also drops its stale audio. */
+  onCommitScriptText?: (sceneId: string, actionId: string, text: string) => void;
 }
 
 export interface ChatAreaRef {
@@ -108,6 +112,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       currentActionIndex,
       canJumpToAction,
       onJumpToAction,
+      canEditScript,
+      onCommitScriptText,
     },
     ref,
   ) => {
@@ -329,6 +335,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
                 currentActionIndex={currentActionIndex}
                 canJumpToAction={canJumpToAction}
                 onJumpToAction={onJumpToAction}
+                canEditScript={canEditScript}
+                onCommitScriptText={onCommitScriptText}
               />
             </TabsContent>
 

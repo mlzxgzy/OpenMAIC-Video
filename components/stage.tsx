@@ -363,6 +363,11 @@ export function Stage({
             canEnterProMode={workbenchPlayback || isEditable}
             onEnterProMode={chromeToggleHandler}
             proModeActive={hosted && workbenchPlayback}
+            // Rewriting narration is an edit of the course, so it answers to
+            // the same facts as the Pro switch — owner, not read-only, and not
+            // mid-generation (whose writes the server would refuse). A visitor
+            // still reads every line; they just cannot rewrite one.
+            canEditScript={canEditOwnedStage && !courseGenerating}
             headerBackControl={
               classroomBackControl === 'workbench-return' ? <WorkbenchReturnControl /> : undefined
             }

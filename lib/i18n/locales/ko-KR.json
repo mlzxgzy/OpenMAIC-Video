@@ -186,7 +186,12 @@
       "pageLabel": "{{n}}페이지",
       "currentPage": "현재",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "취소",
+      "save": "저장",
+      "editHint": "Mod+Enter로 저장 · Esc로 취소",
+      "editPlaceholder": "이 내레이션을 입력하세요…",
+      "editLine": "이 문장 편집"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "요소 참조 — 다음 메시지와 함께 보낼 요소 선택",
       "globalTools": "전역 도구"
+    },
+    "narration": {
+      "title": "내레이션 음성",
+      "description": "교사의 내레이션을 다시 생성합니다. 아래에 표시된 동일한 음성과 속도로 합성됩니다.",
+      "voice": "음성",
+      "speed": "속도",
+      "voiceConsistentHint": "다시 생성해도 이 코스의 원래 내레이션과 같은 음성·어조·속도가 사용됩니다. 달라지는 것은 수정한 문구뿐입니다.",
+      "scopePage": "이 페이지",
+      "scopeCourse": "전체 코스",
+      "stats": "음성 {{voiced}}/{{total}} · 없음 {{unvoiced}}",
+      "statusVoiced": "음성 있음",
+      "statusUnvoiced": "음성 없음",
+      "statusGenerating": "생성 중",
+      "regenerateOne": "이 문장 다시 생성",
+      "regenerateAll": "모두 다시 생성",
+      "done": "{{count}}개 문장을 다시 생성했습니다",
+      "partial": "성공 {{done}}개, 실패 {{failed}}개",
+      "lineDone": "내레이션을 다시 생성했습니다",
+      "lineFailed": "내레이션을 다시 생성하지 못했습니다",
+      "emptyHint": "이 페이지에는 아직 내레이션이 없습니다.",
+      "emptyLine": "(빈 행 — 읽을 내용이 없습니다)",
+      "revoiceWarning": "다시 생성하면 선택한 줄의 기존 음성이 교체됩니다."
     }
   },
   "classroomComplete": {

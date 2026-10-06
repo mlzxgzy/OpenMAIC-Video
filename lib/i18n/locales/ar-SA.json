@@ -186,7 +186,12 @@
       "pageLabel": "الصفحة {{n}}",
       "currentPage": "الحالية",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "إلغاء",
+      "save": "حفظ",
+      "editHint": "Mod+Enter للحفظ · Esc للإلغاء",
+      "editPlaceholder": "اكتب سطر السرد هذا…",
+      "editLine": "تحرير هذه الجملة"
     },
     "badge": {
       "qa": "أسئلة",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "مراجع العناصر — اختر عناصر لإرسالها مع رسالتك التالية",
       "globalTools": "أدوات عامة"
+    },
+    "narration": {
+      "title": "صوت السرد",
+      "description": "أعد توليد صوت المعلم. تُخلَّق كل جملة بالصوت والإيقاع نفسيهما الموضَّحين أدناه.",
+      "voice": "الصوت",
+      "speed": "الإيقاع",
+      "voiceConsistentHint": "إعادة التوليد تستخدم صوت ونبرة وسرعة السرد الأصلي — فقط النص الذي عدّلته يتغيّر.",
+      "scopePage": "هذه الصفحة",
+      "scopeCourse": "الدورة كاملة",
+      "stats": "{{voiced}}/{{total}} مُسجَّلة · {{unvoiced}} بلا صوت",
+      "statusVoiced": "مُسجَّلة",
+      "statusUnvoiced": "بلا صوت",
+      "statusGenerating": "جارٍ التوليد",
+      "regenerateOne": "أعد توليد هذه الجملة",
+      "regenerateAll": "أعد توليد الكل",
+      "done": "أُعيد توليد {{count}} جملة",
+      "partial": "نجح {{done}}، فشل {{failed}}",
+      "lineDone": "أُعيد توليد السرد",
+      "lineFailed": "تعذّر إعادة توليد السرد",
+      "emptyHint": "لا يوجد سرد في هذه الصفحة بعد.",
+      "emptyLine": "(سطر فارغ — لا شيء يُنطق)",
+      "revoiceWarning": "إعادة التوليد تستبدل الصوت الحالي للأسطر المحددة."
     }
   },
   "classroomComplete": {

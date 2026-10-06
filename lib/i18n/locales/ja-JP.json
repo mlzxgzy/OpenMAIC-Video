@@ -186,7 +186,12 @@
       "pageLabel": "ページ {{n}}",
       "currentPage": "現在",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "キャンセル",
+      "save": "保存",
+      "editHint": "Mod+Enter で保存 · Esc でキャンセル",
+      "editPlaceholder": "このナレーションを入力…",
+      "editLine": "この一文を編集"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "要素参照 — 次のメッセージと一緒に送る要素を選ぶ",
       "globalTools": "全体ツール"
+    },
+    "narration": {
+      "title": "ナレーション音声",
+      "description": "先生のナレーションを再生成します。下の同じ音色と速度で合成されます。",
+      "voice": "音色",
+      "speed": "速度",
+      "voiceConsistentHint": "再生成ではこのコースの元のナレーションと同じ音色・調子・速度が使われます。変更されるのは編集した文言だけです。",
+      "scopePage": "このページ",
+      "scopeCourse": "コース全体",
+      "stats": "音声あり {{voiced}}/{{total}} · なし {{unvoiced}}",
+      "statusVoiced": "音声あり",
+      "statusUnvoiced": "音声なし",
+      "statusGenerating": "生成中",
+      "regenerateOne": "この一文を再生成",
+      "regenerateAll": "すべて再生成",
+      "done": "{{count}} 文を再生成しました",
+      "partial": "成功 {{done}} 文、失敗 {{failed}} 文",
+      "lineDone": "ナレーションを再生成しました",
+      "lineFailed": "ナレーションを再生成できませんでした",
+      "emptyHint": "このページにはまだナレーションがありません。",
+      "emptyLine": "（空行 — 読み上げる内容がありません）",
+      "revoiceWarning": "再生成すると、選択した行の音声が置き換えられます。"
     }
   },
   "classroomComplete": {

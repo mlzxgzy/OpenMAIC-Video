@@ -186,7 +186,12 @@
       "pageLabel": "第 {{n}} 頁",
       "currentPage": "目前頁面",
       "jumpToLine": "Jump to this line",
-      "jumpUnavailable": "Jump unavailable for this line"
+      "jumpUnavailable": "Jump unavailable for this line",
+      "cancel": "取消",
+      "save": "儲存",
+      "editHint": "Ctrl/⌘+Enter 儲存 · Esc 取消",
+      "editPlaceholder": "輸入這一句講解…",
+      "editLine": "編輯這一句"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "元素引用 —— 選取元素隨下一則訊息發給 Agent",
       "globalTools": "全域工具"
+    },
+    "narration": {
+      "title": "講解配音",
+      "description": "為老師的講解重新配音。每一句都會用下面顯示的同一音色與語速合成。",
+      "voice": "音色",
+      "speed": "語速",
+      "voiceConsistentHint": "重新生成會沿用本課程最初配音的音色、語氣與語速，只有你改過的文案會變。",
+      "scopePage": "本頁",
+      "scopeCourse": "整門課程",
+      "stats": "已配音 {{voiced}}/{{total}} · 未配音 {{unvoiced}}",
+      "statusVoiced": "已配音",
+      "statusUnvoiced": "未配音",
+      "statusGenerating": "生成中",
+      "regenerateOne": "重新生成這一句",
+      "regenerateAll": "全部重新生成",
+      "done": "已重新生成 {{count}} 句",
+      "partial": "成功 {{done}} 句，失敗 {{failed}} 句",
+      "lineDone": "配音已重新生成",
+      "lineFailed": "配音生成失敗",
+      "emptyHint": "本頁還沒有講解內容。",
+      "emptyLine": "（空句，沒有可朗讀的內容）",
+      "revoiceWarning": "重新生成會取代所選句子現有的配音。"
     }
   },
   "whiteboard": {

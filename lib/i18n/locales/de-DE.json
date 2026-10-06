@@ -186,7 +186,12 @@
       "pageLabel": "Seite {{n}}",
       "currentPage": "Aktuell",
       "jumpToLine": "Zu dieser Zeile springen",
-      "jumpUnavailable": "Für diese Zeile ist kein Sprung verfügbar"
+      "jumpUnavailable": "Für diese Zeile ist kein Sprung verfügbar",
+      "cancel": "Abbrechen",
+      "save": "Speichern",
+      "editHint": "Mod+Enter speichern · Esc abbrechen",
+      "editPlaceholder": "Diesen Erzähltext eingeben…",
+      "editLine": "Diesen Satz bearbeiten"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Elementverweise – Elemente für die nächste Nachricht auswählen",
       "globalTools": "Globale Werkzeuge"
+    },
+    "narration": {
+      "title": "Sprechstimme",
+      "description": "Erzählerstimme der Kursleiterin neu aufnehmen. Jeder Satz wird mit derselben Stimme und Geschwindigkeit synthetisiert.",
+      "voice": "Stimme",
+      "speed": "Geschwindigkeit",
+      "voiceConsistentHint": "Die Neuberechnung verwendet Stimme, Tonfall und Tempo der ursprünglichen Aufnahme — nur der von dir bearbeitete Text ändert sich.",
+      "scopePage": "Diese Seite",
+      "scopeCourse": "Ganzer Kurs",
+      "stats": "{{voiced}}/{{total}} vertont · {{unvoiced}} ohne Ton",
+      "statusVoiced": "Vertont",
+      "statusUnvoiced": "Ohne Ton",
+      "statusGenerating": "Wird erzeugt",
+      "regenerateOne": "Diesen Satz neu aufnehmen",
+      "regenerateAll": "Alle neu aufnehmen",
+      "done": "{{count}} Satz/Sätze neu aufgenommen",
+      "partial": "{{done}} erfolgreich, {{failed}} fehlgeschlagen",
+      "lineDone": "Sprechaufnahme erneuert",
+      "lineFailed": "Sprechaufnahme konnte nicht erneuert werden",
+      "emptyHint": "Diese Seite hat noch keine Erzähltexte.",
+      "emptyLine": "(Leere Zeile — nichts zu sprechen)",
+      "revoiceWarning": "Die Neuberechnung ersetzt die vorhandene Aufnahme der gewählten Zeilen."
     }
   },
   "classroomComplete": {

@@ -13,6 +13,7 @@ import {
   Package,
   Settings,
   Sun,
+  Volume2,
 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -26,6 +27,7 @@ import { isVideoExportEnabled } from '@/lib/config/feature-flags';
 import { useVideoRenderStore } from '@/lib/store/video-render';
 import { CircularProgress } from '@/components/ui/circular-progress';
 import { VideoExportDialog } from './video-export-dialog';
+import { NarrationVoicePanel } from './narration-voice-panel';
 import { LanguageSwitcher } from '../language-switcher';
 import { SettingsDialog } from '../settings';
 import {
@@ -82,6 +84,7 @@ export function HeaderControls({
   const { theme, setTheme } = useTheme();
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [videoDialogOpen, setVideoDialogOpen] = useState(false);
+  const [narrationPanelOpen, setNarrationPanelOpen] = useState(false);
 
   // Export plumbing — uses the stage / media task stores to check
   // readiness, then hands off to the export hooks. Available in both
@@ -207,6 +210,20 @@ export function HeaderControls({
           aria-label={t('settings.title')}
         >
           <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
+        </button>
+
+        {/* Narration voice — the independent place to re-voice this course.
+            The trigger itself is unconditional (it is free to open and read
+            the voice/pace); the panel withholds its own regeneration controls
+            from anyone who may not spend the operator's provider budget, and
+            renders nothing at all when the workspace has no managed TTS. */}
+        <button
+          onClick={() => setNarrationPanelOpen(true)}
+          className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
+          aria-label={t('edit.narration.title')}
+          title={t('edit.narration.title')}
+        >
+          <Volume2 className="w-4 h-4" />
         </button>
       </div>
 
@@ -391,6 +408,7 @@ export function HeaderControls({
       </DropdownMenu>
 
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />
+      <NarrationVoicePanel open={narrationPanelOpen} onOpenChange={setNarrationPanelOpen} />
       {videoExportEnabled && (
         <VideoExportDialog open={videoDialogOpen} onOpenChange={setVideoDialogOpen} />
       )}

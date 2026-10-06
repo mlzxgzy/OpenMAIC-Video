@@ -186,7 +186,12 @@
       "pageLabel": "Page {{n}}",
       "currentPage": "Page actuelle",
       "jumpToLine": "Aller à cette ligne",
-      "jumpUnavailable": "Navigation indisponible pour cette ligne"
+      "jumpUnavailable": "Navigation indisponible pour cette ligne",
+      "cancel": "Annuler",
+      "save": "Enregistrer",
+      "editHint": "Mod+Entrée pour enregistrer · Échap pour annuler",
+      "editPlaceholder": "Saisissez cette ligne de narration…",
+      "editLine": "Modifier cette phrase"
     },
     "badge": {
       "qa": "Q/R",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Références d’éléments — choisissez les éléments à joindre au prochain message",
       "globalTools": "Outils globaux"
+    },
+    "narration": {
+      "title": "Voix du narration",
+      "description": "Régénérez la voix du professeur. Chaque phrase est synthétisée avec la même voix et le même débit.",
+      "voice": "Voix",
+      "speed": "Débit",
+      "voiceConsistentHint": "La régénération réutilise la voix, le ton et le débit de la narration d’origine — seul le texte que vous avez modifié change.",
+      "scopePage": "Cette page",
+      "scopeCourse": "Tout le cours",
+      "stats": "{{voiced}}/{{total}} voixées · {{unvoiced}} sans voix",
+      "statusVoiced": "Voixée",
+      "statusUnvoiced": "Sans voix",
+      "statusGenerating": "Génération",
+      "regenerateOne": "Régénérer cette phrase",
+      "regenerateAll": "Tout régénérer",
+      "done": "{{count}} phrase(s) régénérée(s)",
+      "partial": "{{done}} réussies, {{failed}} échecs",
+      "lineDone": "Narration régénérée",
+      "lineFailed": "Impossible de régénérer la narration",
+      "emptyHint": "Cette page n’a pas encore de narration.",
+      "emptyLine": "(Ligne vide — rien à dire)",
+      "revoiceWarning": "La régénération remplace l’audio existant des lignes sélectionnées."
     }
   },
   "classroomComplete": {

@@ -73,6 +73,69 @@
 
   改动落在 L4（`app/` `lib/` `components/`），详见下方「与上游的差异」。
 
+- **课堂讲稿可逐句编辑 + 独立的「重新生成语音」面板**：老师在课堂里改一句话的
+  措辞，不再需要先进 Pro 模式找到那条 clip。
+
+  **① 笔记面板里逐句可编辑**：右侧**笔记**标签页的每一句讲解，悬停出现铅笔图标，
+  点击进入 textarea 编辑。`Mod/⌘+Enter` 保存、失焦即存、`Esc` 放弃。
+  - 组件：新增 `EditableSpeechLine`（`components/chat/lecture-notes-view.tsx:80`），
+    叠加在原有的「点击跳转到该句」按钮之上——访客仍得到**完全一致的只读界面**。
+  - 权限复用 Pro 开关的同一组事实：`components/stage.tsx:370`
+    的 `canEditScript={canEditOwnedStage && !courseGenerating}`，经
+    `PlaybackChromeRoot` → `ChatArea` → `LectureNotesView` 透传。
+    `canEditScript` 与 `onCommitScriptText` **必须同时**具备才显示编辑入口
+    （只给前者会让按钮只能丢弃用户输入）。
+  - 保存走 `PlaybackChromeRoot.tsx:1549` 的 `handleCommitScriptText`，复用 Pro 模式
+    已验证的 `setSpeechTextClearAudioById`（`components/edit/ActionsBar/actions-edit.ts:115`）
+    + `discardSpeechAudio`（`lib/audio/regenerate-speech-tts.ts:87`）。
+    **两次写入的顺序是全部要点**：先改文案（同时清掉 `audioId` 并置
+    `audioInvalidated`），**再**删音频字节。反过来会留下「文档仍指名某个资产、
+    而它的字节已经没了」的悬空引用——这正是 `audioInvalidated` 字段要防的事。
+  - 提交按 **action id** 定位（不是下标）：重新生成与删音频都是按 id 寻址的，
+    按下标提交会让并发重排把新文案写到别的句子上。
+  - 两条易漏的边界，均有测试钉住：① **无变化不算编辑**——提交与原文相同的文本会
+    白白清掉该句音频并逼用户重新付费；② 编辑中途到来的外部改写（agent 重新生成）
+    不会被旧草稿在提交时覆盖（沿用 Pro 模式 `SpeechClip` 的 `dirtyRef` 规则，
+    `components/edit/ActionsBar/ActionsBar.tsx:574`）。
+  - 保存后主动 `flushStageSave()`：去抖落盘会让刷新恰好落在「文案已改、音频未清」
+    的窗口里。
+
+  **② 独立的重新生成语音面板**：课堂头部（语言/主题/设置那一排）新增 🔊 按钮，
+  打开 `components/stage/narration-voice-panel.tsx`——显示当前音色与语速、
+  「已配音/未配音」统计，可按**本页**或**整门课程**批量重新生成，也可单句重新生成。
+  - **音色 / 语气 / 语速与之前一致**不是靠约定保证的，是结构性保证：
+    重新生成调用的就是 Pro 模式时间轴调的**同一个** `regenerateSpeechAudio`
+    （`lib/audio/regenerate-speech-tts.ts:104`）→ `generateAndStoreTTS`
+    （`lib/audio/narration-tts.ts:82`），音色/语气/语速不可能分叉。
+  - 面板上显示的音色与语速来自新增 `lib/audio/narration-voice-summary.ts`，
+    它是**将要发出的那个请求的读数**，而不是对某个设置的复述：逐行镜像
+    `generateAndStoreTTS` 第 98–155 行的解析链（讲师绑定音色优先 → 回落全局
+    `ttsVoice`；语速取全局 `ttsSpeed`）。**若该函数开头改动，本文件必须同步改**，
+    否则就会变成「显示一种音色、合成另一种」。
+  - 这里有个刻意处理的坑：`generateAndStoreTTS` 发现音色不可用时会调用
+    `markVoiceBindingUnavailable` **修改模块级回退状态**，影响之后所有 clip。
+    展示函数复用同样的判断，但**不做任何标记、不弹 toast**——否则用户只是打开
+    面板看一眼，就会让后续真正的合成换一个音色。已有专门测试锁住这一点。
+  - 批量重新生成是**串行**而非并行：这些请求计的是运营方的 TTS 额度，一次涌进
+    四十条只会换来一批限流拒绝，而用户重试要再付一次钱。单句失败也不会中断整批
+    （与 Pro 模式 "Voice all" 同规则）。
+  - 「是否已有配音」用 `audioExistsBulk` 真实探测存储，**不轮询定时器**；字节先落、
+    引用后盖，落库后主动 flush，保证刷新回来不会显示成未配音。探测失败时保留上
+    一次读数，而不是谎报「全部未配音」诱导用户重复付费。
+  - 面板自身不做鉴权：触发按钮无条件可见（打开看看音色是免费的），但当
+    `tts` 槽位没有受管 TTS（如 browser-native 语音）或本浏览器无生成权限时，
+    面板直接返回 `null` 什么都不渲染——控件与 `regenerateSpeechAudio` 的拒绝
+    回答同一个问题。
+  - 12 个语包新增 `edit.narration.*` 共 20 个键、`chat.lectureNotes.edit*` 等 5 个键。
+
+  改动落在 L4（`lib/` `components/`），详见下方「与上游的差异」。
+
+  **测试**：`tests/chat/lecture-notes-editing.test.ts` 7 例、
+  `tests/audio/narration-voice-summary.test.ts` 6 例。已做变异测试确认能抓 bug
+  （按错误 id 提交、无变化也提交、对访客显示编辑按钮，三个变异分别被对应测试捕获）。
+  `tsc` / `lint` / `prettier` / `check:i18n-keys` 全通过。**未做 E2E**（需另起
+  3002 端口整套环境）。
+
 ### Changed
 
 - `lib/types/generation.ts:145` 把 `SceneOutline.type` 的内联联合类型
@@ -183,6 +246,39 @@ lib/i18n/locales/*.json                                （12 个语包，各 12 
 3. 上游若调整 `confirm-outline`（整体替换大纲）的契约，本功能「AI 结果只在浏览器
    生效、确认时才落库」的前提会失效，需一并复核。
 
+### 第三处非视频偏离：讲稿逐句编辑 + 重新生成语音面板
+
+同样是 L4 的课堂 UI 功能（不属于视频链路），实际改动落在：
+
+```
+components/chat/lecture-notes-view.tsx            （新增 EditableSpeechLine）
+components/chat/chat-area.tsx                     （透传 canEditScript / onCommitScriptText）
+components/edit/PlaybackChromeRoot.tsx            （新增 handleCommitScriptText）
+components/stage/narration-voice-panel.tsx        （新增）
+components/stage/header-controls.tsx              （头部 🔊 入口）
+components/stage.tsx                             （canEditScript 取值）
+lib/audio/narration-voice-summary.ts             （新增）
+lib/audio/use-narration-lines.ts                 （新增）
+lib/i18n/locales/*.json                           （12 个语包，各 25 个键）
+```
+
+**代价与后续动作**（同步上游 `1.2.x` 之后）：
+
+1. `components/edit/PlaybackChromeRoot.tsx` 与 `components/chat/lecture-notes-view.tsx`
+   是上游改动频繁的文件，冲突概率最高。本功能对两处都是**追加**（新增 prop 与
+   新增组件），未改既有导出的语义。
+2. **`narration-voice-summary.ts` 必须与 `lib/audio/narration-tts.ts` 的
+   `generateAndStoreTTS` 手工保持同步**——这是一处**上游不会帮你维护的重复**。
+   上游若改动语音解析链（新增回落分支、换绑定优先级），本文件不会自动跟随，
+   症状是「面板显示一种音色、实际合成另一种」。同步上游后**必须逐行复核
+   `generateAndStoreTTS` 开头到解析出 `ttsProviderId` 为止这一段**。
+   这是本 fork 里唯一一处「有意的镜像式重复」，用测试与注释双保险，
+   但注释挡不住上游改代码。
+3. 上游若把 Pro 模式的 `SpeechClip` 抽成通用组件，本功能的 `EditableSpeechLine`
+   可以直接合并过去；在此之前两者共用同一批纯函数
+   （`setSpeechTextClearAudioById` / `setAudioIdById`）与同一条 TTS 链，
+   不会产生两套语义。
+
 ### 尚未配置 upstream 远端
 
 本仓库只有 `origin`。要同步上游需先自行添加：
@@ -211,8 +307,13 @@ git fetch upstream
 | `0ce27191` | feat(generation): 首页可筛选大纲的场景类型 |
 | `6e893061` | docs: 在二开 changelog 补记已提交的 commit 列表 |
 | `3b73ab23` | feat(generation): 大纲审阅页可用 AI 对话修改大纲 |
+| `879f99c6` | docs: 二开 changelog 补记 AI 修改大纲提交 |
+| `9b8d9b40` | build(docker): 添加 render-service 服务 |
+| （本提交） | feat(classroom): 讲稿逐句编辑 + 独立重新生成语音面板 |
 
 用 `git log --oneline 636fab0d..HEAD` 可随时核对这份列表是否与历史同步。
-唯一例外是维护本表的那个 docs 提交：它无法登记自身 hash，核对时 `git log`
-会比本表多出这最后一条。
+表里用 `（本提交）` 占位的那一条无法登记自身 hash：核对时 `git log` 会比本表
+多出这**最后一条**，这是预期结果，不是表失同步。下一条提交若只是补记它的 hash，
+请用 `--amend` 并入本提交，不要新开一个 docs 提交——否则「比本表多一条」会变成
+「多两条」，本表的核对约定就不成立了。
 

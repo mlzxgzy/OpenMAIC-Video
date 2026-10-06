@@ -186,7 +186,12 @@
       "pageLabel": "Página {{n}}",
       "currentPage": "Actual",
       "jumpToLine": "Ir a esta línea",
-      "jumpUnavailable": "No se puede saltar a esta línea"
+      "jumpUnavailable": "No se puede saltar a esta línea",
+      "cancel": "Cancelar",
+      "save": "Guardar",
+      "editHint": "Mod+Enter para guardar · Esc para cancelar",
+      "editPlaceholder": "Escribe esta línea de narración…",
+      "editLine": "Editar esta frase"
     },
     "badge": {
       "qa": "Q&A",
@@ -670,6 +675,28 @@
     "dock": {
       "elementRefHint": "Referencias de elementos: elige elementos para enviar con tu próximo mensaje",
       "globalTools": "Herramientas globales"
+    },
+    "narration": {
+      "title": "Voz de la narración",
+      "description": "Regenera la voz del profesor. Cada frase se sintetiza con la misma voz y velocidad.",
+      "voice": "Voz",
+      "speed": "Velocidad",
+      "voiceConsistentHint": "La regeneración reutiliza la voz, el tono y el ritmo de la narración original; solo cambia el texto que editaste.",
+      "scopePage": "Esta página",
+      "scopeCourse": "Todo el curso",
+      "stats": "{{voiced}}/{{total}} con voz · {{unvoiced}} sin voz",
+      "statusVoiced": "Con voz",
+      "statusUnvoiced": "Sin voz",
+      "statusGenerating": "Generando",
+      "regenerateOne": "Regenerar esta frase",
+      "regenerateAll": "Regenerar todo",
+      "done": "{{count}} frase(s) regenerada(s)",
+      "partial": "{{done}} correctas, {{failed}} fallidas",
+      "lineDone": "Narración regenerada",
+      "lineFailed": "No se pudo regenerar la narración",
+      "emptyHint": "Esta página aún no tiene narración.",
+      "emptyLine": "(Línea vacía: nada que decir)",
+      "revoiceWarning": "Regenerar reemplaza el audio existente de las líneas seleccionadas."
     }
   },
   "classroomComplete": {
