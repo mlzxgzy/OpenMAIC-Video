@@ -26,7 +26,36 @@
 
 ## [Unreleased]
 
+（暂无）
+
+## [1.2.0-video.1] - 2026-10-06
+
+本 fork 的首个独立版本。基线是上游 `v1.2.0-rc.1`（`636fab0d`），
+本节收录相对该基线的全部二开改动。
+
+**版本号说明**：`1.2.0-video.N` 是本 fork 的视频化版本线，**不复用上游的版本号空间**。
+它按 semver 排在 `1.2.0-rc.1` 之后（`semver.gt('1.2.0-video.1', '1.2.0-rc.1') === true`），
+但仍是**预发布**：上游若发布正式版 `1.2.0`，本 fork 的版本号不会与之冲突。
+后续同步上游时以 `1.2.0-video.2` 递增，不要跳到 `1.2.1`。
+
 ### Added
+
+- **开发环境可一键起渲染服务**（`9b8d9b40`）：`docker-compose.db.yml` 的 compose
+  项目名从 `openmaic-dev-db` 改为 `openmaic-dev`，并新增 `render-service` 服务
+  （构建自 `./render-service`，映射到 `127.0.0.1:9000`），配套
+  `pnpm render:up` / `pnpm render:down` 脚本。
+  - 改项目名是因为**渲染服务必须和开发库同属一个 compose project**：`db:up` 与
+    `render:up` 才能共享同一套网络与卷命名，且用 `docker compose stop` 停其中一个
+    不会影响另一个（`docker-compose.db.yml:14`）。
+  - 服务需要 `cap_add: NET_ADMIN` 才能让 entrypoint 装上 egress lockdown 的
+    iptables 规则。**缺这个 cap 服务仍会启动，但只打一条警告、并不真正阻断
+    Chromium 出网**——这是安全降级，不是无害警告。
+  - 默认拓扑下应用直接暴露、**不设 `TRUST_PROXY_HEADERS`**，所有调用方塌缩为同一
+    身份，按身份的限流会退化成「整站只能同时跑一个渲染」，故默认
+    `RENDER_MAX_JOBS_PER_USER=0`（关闭），只靠 `RENDER_MAX_CONCURRENCY` 与全局
+    `RENDER_MAX_QUEUE` 兜底。要开启必须先在可信代理后部署。
+  - `render-service/` 本身与 `lib/video-export/`、`lib/video-export-app/` **都是上游
+    自带的**（`git ls-tree 636fab0d` 确认），本 fork 未改动其源码。
 
 - **首页「场景类型」多选筛选**：composer 工具栏新增 `场景类型 n/4` 按钮，
   可勾选大纲要创建的场景类型——幻灯片 / 测验 / 互动 / 项目式学习。默认四项全选，
@@ -165,6 +194,66 @@
     `tests/generation/preview-outline-review.test.ts` 新增 2 例
     （离开再进入保留、确认后清除）。
 
+- **`tests/config/docker-compose.test.ts` 与 compose 改动脱节**（本版本修复）：
+  `9b8d9b40` 把 compose project 从 `openmaic-dev-db` 改成 `openmaic-dev` 并新增
+  `render-service` 服务，但**没有同步这个硬编码了旧值的测试**。该测试 3 例失败
+  （项目名、services 列表、`db:up` 脚本串），在基线上是通过的——
+  `git worktree add /tmp/omv-base 636fab0d` 复跑可确认。
+  - 之所以此前一直没被发现：`pnpm test` 全量在本机有 400 个失败（环境问题，见
+    下方「验证状态」），并行跑时该 spec 恰好落在失败的 16 条抖动集合里，
+    一直表现为「已知噪声」。**是基线对比把它从噪声里捞出来的**——
+    只有把同环境的基线失败集合与 HEAD 失败集合做差集，才能区分
+    「本来就坏的」与「本次改坏的」。
+  - 修复方式：更新断言到新契约，并**补上它的反面**——新增一例断言
+    `render:up` / `render:down` 也只操作 `render-service`，与 `db:up` / `db:down`
+    只操作 `postgres` 成对。两个脚本都**显式点名服务**，因此谁也起/停不了对方；
+    这一点原来没有测试覆盖。
+
+---
+
+## 本版本的验证状态
+
+**通过**：`tsc --noEmit`、`eslint`（0 error，18 个既有 warning）、`prettier --check`、
+`pnpm check:i18n-keys`（12 语包）、`pnpm check:node-engine`、
+`node scripts/check-package-version-bumps.mjs 636fab0d`。
+本 fork 相对基线**未改动 `packages/@openmaic/` 下任何文件**（`git diff --name-only
+636fab0d..HEAD -- packages/@openmaic` 为空），因此不发版 `npm` 包、不产生
+`@openmaic/*` 版本的消耗，也未触发 `publish-packages.yml`。
+
+### `pnpm test` 全量的读法
+
+**本机全量测试有大量失败，且基线同样失败——所以「全量红」本身不构成信息。**
+成因是环境：本机 `openmaic.yml` 配的 provider 缺 API key
+（`providers.deepseek.apiKey: environment variable DEEPSEEK_API_KEY is not set`），
+以及大批 5s 超时。
+
+因此本次发版的做法是**同环境基线对比**——`git worktree add /tmp/omv-base 636fab0d`
+检出干净基线，两边各跑一次 `--reporter=json`，比对失败**集合的差集**：
+
+| | 测试数 | 失败数 |
+| --- | --- | --- |
+| 基线 `636fab0d` | 10358 | 400 |
+| 本 fork（修复前） | 10434 | 400（差集含 16 条**两边不同**的抖动项） |
+| 本 fork（修复后） | 10435 | 326 |
+
+关键在于**不能只看总数**：两次全量的失败数完全相同（400 = 400），但差集里有
+16 条各自只在一边失败。总数相等会让人误判为「无变化」而放过去。
+
+- **本 fork 真实引入的失败：1 条，已修复**——`tests/config/docker-compose.test.ts`
+  3 例（见上方 Fixed）。它在基线上通过、在 HEAD 上失败。
+- 剩下的「只在 HEAD 失败」1 条是 `mineru-cloud` 的
+  `rejects a small lying entry`，**两边单跑 3 次都是 26/26 通过**，属并行负载下的抖动。
+- 单跑复核：除 `docker-compose.test.ts` 外，先前差集里的 7 个 spec
+  （`skill-edit-tools` / `host-asset-hooks` / `host-library-provider` /
+  `owner-claims` / `owner-materials` / `agents-route` /
+  `legacy-import-binding-route`）在 HEAD 上**单跑全绿**。
+  `element-reference-route-l2` 单跑在**基线与 HEAD 上失败情况完全相同**（各 9 例），
+  同样是环境问题。
+
+**未做**：E2E（`pnpm test:e2e`，需另起 3002 端口整套环境）。
+
+
+
 ---
 
 ## 记录格式说明
@@ -295,6 +384,7 @@ git fetch upstream
 | 项 | 值 |
 | --- | --- |
 | 上游基线 | `v1.2.0-rc.1`，commit `636fab0d` |
+| 本 fork 版本线 | `1.2.0-video.N`（首个发布：`1.2.0-video.1`，见上方版本号说明） |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |
 
@@ -309,11 +399,14 @@ git fetch upstream
 | `3b73ab23` | feat(generation): 大纲审阅页可用 AI 对话修改大纲 |
 | `879f99c6` | docs: 二开 changelog 补记 AI 修改大纲提交 |
 | `9b8d9b40` | build(docker): 添加 render-service 服务 |
-| （本提交） | feat(classroom): 讲稿逐句编辑 + 独立重新生成语音面板 |
+| `0add1c4b` | feat(classroom): 讲稿逐句编辑 + 独立重新生成语音面板 |
+| （本提交） | release: 二开首个独立版本 1.2.0-video.1 |
 
 用 `git log --oneline 636fab0d..HEAD` 可随时核对这份列表是否与历史同步。
-表里用 `（本提交）` 占位的那一条无法登记自身 hash：核对时 `git log` 会比本表
-多出这**最后一条**，这是预期结果，不是表失同步。下一条提交若只是补记它的 hash，
-请用 `--amend` 并入本提交，不要新开一个 docs 提交——否则「比本表多一条」会变成
-「多两条」，本表的核对约定就不成立了。
+
+> **发布提交的 hash 无法自引用**：提交无法预知自身 hash，`--amend` 也会改写它。
+> 表里用 `（本提交）` 占位的那一条，核对时 `git log` 会比本表**多出这最后一条**，
+> 这是预期结果，不是表失同步。下一个提交若只是要补记它的 hash，请用 `--amend`
+> 并入**它自己**而不是新开一个 docs 提交——但那样 hash 会再次改变，所以对
+> **发布提交**而言这个占位是终点，下一个提交直接开始记自己的 hash 即可。
 

@@ -162,11 +162,14 @@ describe('docker-compose.db.yml (`pnpm db:up`)', () => {
   it('is a separate Compose project, so it never restarts or stops a running stack database', () => {
     // Without its own project name it would share the checkout's default
     // project (and so the stack's postgres container) with `docker compose up`.
-    expect(devDb.name).toBe('openmaic-dev-db');
+    expect(devDb.name).toBe('openmaic-dev');
   });
 
   it('runs the postgres service definition of docker-compose.yml, on its own data volume', () => {
-    expect(Object.keys(devDb.services)).toEqual(['postgres']);
+    // `render-service` was added to this file so the dev render service shares
+    // the project's network and volume naming with the dev database. Only the
+    // postgres definition itself is still an `extends` of the stack's.
+    expect(Object.keys(devDb.services)).toEqual(['postgres', 'render-service']);
     expect(devDb.services.postgres.extends).toEqual({
       file: 'docker-compose.yml',
       service: 'postgres',
@@ -181,12 +184,26 @@ describe('docker-compose.db.yml (`pnpm db:up`)', () => {
   it('is what the db:up and db:down scripts run, and nothing else', () => {
     // The project is pinned on the command line: `-p` beats COMPOSE_PROJECT_NAME
     // from the shell or a .env file, which would otherwise override the file's
-    // `name:` and point these scripts at the stack's own database.
+    // `name:` and point these scripts at the stack's own database. db:up and
+    // db:down therefore name a service explicitly and never bring up (or stop)
+    // render-service, which shares this project.
     expect(packageJson.scripts['db:up']).toBe(
-      'docker compose -p openmaic-dev-db -f docker-compose.db.yml up -d --wait postgres',
+      'docker compose -p openmaic-dev -f docker-compose.db.yml up -d --wait postgres',
     );
     expect(packageJson.scripts['db:down']).toBe(
-      'docker compose -p openmaic-dev-db -f docker-compose.db.yml stop postgres',
+      'docker compose -p openmaic-dev -f docker-compose.db.yml stop postgres',
+    );
+  });
+
+  it('starts and stops render-service by name, leaving the dev database up', () => {
+    // The inverse pairing: render-service is the one service db:* must not
+    // touch, and db:up must not be the command that starts it. Both scripts
+    // name a service so neither can act on the other.
+    expect(packageJson.scripts['render:up']).toBe(
+      'docker compose -p openmaic-dev -f docker-compose.db.yml up -d --wait render-service',
+    );
+    expect(packageJson.scripts['render:down']).toBe(
+      'docker compose -p openmaic-dev -f docker-compose.db.yml stop render-service',
     );
   });
 

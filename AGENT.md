@@ -12,7 +12,8 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | `v1.2.0-rc.1`，commit `636fab0d`（"release: OpenMAIC 1.2.0-rc.1 (server-first)"） |
+| 当前基线 | 上游 `v1.2.0-rc.1`，commit `636fab0d`（"release: OpenMAIC 1.2.0-rc.1 (server-first)"） |
+| 本 fork 版本 | `1.2.0-video.N` 版本线（首个发布 `1.2.0-video.1`，tag `v1.2.0-video.1`） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**：视频导出 / 渲染服务 / 视频生成能力 |
 | 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4） |
@@ -33,7 +34,13 @@
     所以这是有意为之的偏离。同步上游时的冲突热点与后续动作记在
     [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#与上游的差异)。
   - 后续再有非视频方向的功能，照此先在 `CHANGELOG.fork.md` 记录偏离理由再动手。
+  - **注意：视频链路的源码是上游的**。上列目录在基线 `636fab0d` 就已存在
+    （`git ls-tree 636fab0d -- lib/video-export lib/video-export-app render-service`
+    全部有输出），本 fork **未改动其中任何一个文件**。视频方向二开实际只动了
+    `docker-compose.db.yml`（新增 render-service 服务与 `render:up/down` 脚本，`9b8d9b40`）。
+    读 §4 那些代码时别默认是本仓库写的。
 - **v1.2.0 是破坏性大版本**（"server-first"）。课程生成从浏览器驱动改为服务端常驻进程，模型配置统一到 `openmaic.yml`，**不再支持 Vercel 等 Serverless 部署**，必须 PostgreSQL + 常驻 Node。追上游时不要把 1.1.x 的部署写法照搬过来。
+- **版本号空间是分开的**：本 fork 用 `1.2.0-video.N`，**不复用上游的版本号**。它按 semver 排在 `1.2.0-rc.1` 之后，但仍是预发布，上游发正式版 `1.2.0` 也不会与它冲突。二开发版只在根 `package.json` 改这一个字段（`@openmaic/*` 六个包的版本由 `check-package-version-bumps.mjs` 单独管，本 fork 未改动 `packages/@openmaic/`）。
 
 ---
 
@@ -43,7 +50,8 @@
 
 ```bash
 pnpm install          # postinstall 会自动 build:packages
-pnpm db:up            # Docker 起开发用 PG（127.0.0.1:5432，独立 compose project openmaic-dev-db）
+pnpm db:up            # Docker 起开发用 PG（127.0.0.1:5432，compose project openmaic-dev）
+pnpm render:up        # 同一 project 内起渲染服务（127.0.0.1:9000）；pnpm render:down 停它
 cp .env.example .env.local          # 至少填 OPENAI_API_KEY + DATABASE_URL
 cp openmaic.example.yml openmaic.yml  # 服务端模型配置（1.2.0 新增）
 pnpm dev              # http://localhost:3000
