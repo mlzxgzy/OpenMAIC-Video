@@ -28,6 +28,27 @@
 
 ### Added
 
+- **指令控制的问号帮助**：在「启用指令控制」右侧加了一个问号，鼠标悬停弹出
+  说明卡片（`components/settings/tts-instruct-control-field.tsx`），讲清楚三件事：
+  指令控制是什么、当前**实际发送**的那条指令原文、以及怎么用下方的「测试 TTS」
+  对比试听。卡片里的指令直接取自 `DEFAULT_QWEN_INSTRUCTIONS` 常量而非另写一份
+  文案，因此不会与真实请求产生偏差；末尾附官方文档链接。
+
+  **测试 TTS 现在真的会带上指令**：此前该按钮的 `providerOptions` 只在 VoxCPM
+  分支构造，千问面板无论开关是否勾选都不传标记，于是「取消勾选再测一次听出差别」
+  这句指导是假的。现已按面板解析出的测试模型补上
+  （`components/settings/tts-settings.tsx`），并把「决定用哪个模型判定」收敛到一处
+  `testModelId`，使开关旁的黄色警告与测试按钮的行为不会互相矛盾（此前警告看的是
+  讲稿槽位模型，对一个尚未启用的服务而言并非该测试真正会用的模型）。
+
+  **验证**：`tests/audio/qwen-instruct-test-preview.test.ts`（6 例）覆盖该标记在
+  Instruct 模型、非 Instruct 模型、VC 克隆模型、非千问 provider、开关关闭与无
+  模型六种情况下的取值；`tests/settings/tts-instruct-control-field.test.ts`
+  （8 例）覆盖帮助入口存在、警告只在开关打开且模型不支持时出现、以及中文文案未被
+  英文占位。`tests/audio` + `tests/settings` 共 470 passed，`tsc`、`eslint`、
+  `check:i18n-keys` 均通过。12 语言文案已补齐（英文 / 简中 / 繁中 / 韩文为实际
+  翻译，其余语言沿用英文，与该文件既有条目一致）。
+
 - **千问 TTS 指令控制开关**：在「设置 → 语音合成 → Qwen TTS」面板新增一个
   开关，勾选后生成讲稿时按需带上千问的交付指令，合成请求附带 `instructions` +
   `optimize_instructions`，由模型控制每句台词的语调、语速与强调

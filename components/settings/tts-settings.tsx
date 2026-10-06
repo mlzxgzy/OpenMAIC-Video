@@ -19,6 +19,7 @@ import { useTTSPreview } from '@/lib/audio/use-tts-preview';
 import { getVoxCPMProviderOptions } from '@/lib/audio/voxcpm-voices';
 import { VOXCPM_TTS_PROVIDER_ID } from '@/lib/audio/voxcpm';
 import { defaultVoiceFor, slotVoxCPMBackend, ttsSelection } from '@/lib/audio/tts-selection';
+import { qwenInstructionControlFor } from '@/lib/audio/qwen-instruct-control-selection';
 import { modelCapabilities } from '@/lib/model-settings/capabilities';
 import { assignService } from '@/lib/model-settings/services';
 import { regionalEndpointTemplate } from '@/lib/config/official-endpoints';
@@ -154,6 +155,16 @@ export function TTSSettings({ view, apply, entry }: ServicePanelProps) {
   );
   const effectiveVoice =
     use.inUse && selection ? selection.voice : defaultVoiceFor(providerId, use.modelId);
+  // The model the test button speaks with, and so the model that decides
+  // whether the instruction switch reaches this request: the slot's while this
+  // service narrates, else the model this service was saved with, each falling
+  // back to the provider's default the way the server's request resolves it.
+  // Resolved once so the switch's hint and the test cannot disagree about it.
+  const testModelId = use.inUse
+    ? (selection?.modelId ?? use.modelId)
+    : use.modelId
+      ? use.modelId
+      : (TTS_PROVIDERS[providerId as BuiltInTTSProviderId]?.defaultModelId ?? undefined);
   const cloneSpeedDisabled = providerId === 'qwen-tts' && isQwenCloneVoice(effectiveVoice);
   const configured = entry.state === 'deployment' || entry.state === 'workspace' || isBrowser;
   // A service that needs no key (the browser's own speech) can be made the
@@ -198,12 +209,21 @@ export function TTSSettings({ view, apply, entry }: ServicePanelProps) {
             backend: slotVoxCPMBackend(capabilities.tts),
           })
         : undefined;
+      // The test speaks with the same delivery instruction narration would, so
+      // the help beside the switch describes what this button actually does. A
+      // voice that pins another model (a Qwen clone) resolves to that one
+      // server-side, and the provider drops the flag for a model that cannot
+      // take it.
+      const qwenInstruct = qwenInstructionControlFor(testModelId, providerId);
+      const options = qwenInstruct
+        ? { ...(providerOptions ?? {}), qwenInstructionControl: true }
+        : providerOptions;
       await startPreview({
         text: testText,
         providerId,
         voice: effectiveVoice,
         speed: ttsSpeed,
-        providerOptions,
+        providerOptions: options,
         // The service as the server saved it, not necessarily the one in use.
         ...(isBrowser
           ? {}
@@ -295,7 +315,9 @@ export function TTSSettings({ view, apply, entry }: ServicePanelProps) {
 
           {/* Qwen's instruction control shapes how every line is spoken, so it
               belongs beside the voice and speed it applies to. */}
-          {providerId === 'qwen-tts' && <QwenInstructControlField capabilities={capabilities} />}
+          {providerId === 'qwen-tts' && (
+            <QwenInstructControlField capabilities={capabilities} testModelId={testModelId} />
+          )}
 
           {keyless && !use.inUse && (
             <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-border/60 bg-muted/30 px-3 py-2 text-sm">
