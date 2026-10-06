@@ -382,7 +382,12 @@ export async function downloadAudio(
     throw new QwenVoiceCloneError('QWEN_VC_AUDIO_URL_INVALID', 502);
   }
   // This strict result-host allowlist has been verified against live vendor responses.
-  const trustedHost = /^dashscope-result-[a-z0-9-]+\.oss-[a-z]{2}-[a-z0-9-]+\.aliyuncs\.com$/u.test(
+  // The bucket prefix is not fixed: voice cloning returns `dashscope-result-*`
+  // objects, while the `-instruct` TTS family returns `dashscope-a*` objects, so
+  // the match is on the DashScope-branded prefix rather than one literal family.
+  // It stays narrow — a `dashscope-` prefix followed by an OSS regional endpoint —
+  // so it cannot be satisfied by an arbitrary `*.aliyuncs.com` host.
+  const trustedHost = /^dashscope-[a-z0-9-]+\.oss-[a-z]{2}-[a-z0-9-]+\.aliyuncs\.com$/u.test(
     url.hostname,
   );
   let trustedCustomEndpoint = false;

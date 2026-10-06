@@ -26,6 +26,28 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Instruct 系列 TTS 报「音频 URL 主机不被允许」**：`qwen3-tts-instruct-flash`
+  合成成功后，DashScope 返回的音频 URL 主机是
+  `dashscope-a717.oss-cn-beijing.aliyuncs.com`，而音频下载的白名单
+  （`lib/audio/qwen-voice-clone.ts`）写死了声音复刻用的
+  `dashscope-result-*` 桶前缀，于是这个**合法**的返回地址被判为不可信，
+  报 `The generated Qwen audio URL host "..." is not allowed.`
+  （`qwen3-tts-flash` 此前能用只是碰巧，它与声音复刻共用同一批桶。）
+
+  白名单改为匹配 `dashscope-` 品牌前缀 + 阿里云 OSS 区域端点
+  （`^dashscope-[a-z0-9-]+\.oss-[a-z]{2}-[a-z0-9-]+\.aliyuncs\.com$`），
+  覆盖两个系列共用的桶名差异。**未放宽到任意 `*.aliyuncs.com`**：
+  非 OSS 主机、伪造后缀（`...aliyuncs.com.evil.test`）、`notdashscope-` 前缀
+  与非 80/443 端口均仍被拒绝，SSRF 防护与签名 URL 行为不变。
+  该白名单是声音复刻引入时按实测响应写死的，而桶前缀并非厂商对外契约的一部分，
+  因此按品牌前缀匹配而非继续枚举具体桶名——否则厂商换个桶就会再坏一次。
+
+  **验证**：`tests/audio/qwen-voice-clone.test.ts` 43 passed（新增 5 例：1 例正向
+  覆盖 `dashscope-a717` 真实地址，4 例反向守住边界）；`tests/audio` 全量
+  364 passed；`tsc`、`eslint` 通过。
+
 ### 同步上游 `ccdc88a5`（2026-10-06）
 
 `upstream/main` 新增 3 个提交，以 `git merge upstream/main` 合入，**无冲突**。

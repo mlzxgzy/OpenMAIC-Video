@@ -176,6 +176,36 @@ describe('Qwen voice cloning', () => {
     expect(fetchSpy).toHaveBeenCalledOnce();
   });
 
+  it('allows the audio bucket family the Instruct TTS models return', async () => {
+    // qwen3-tts-instruct-flash serves results from `dashscope-a<id>` objects, not
+    // the `dashscope-result-*` bucket that voice cloning uses. Same SSRF guard,
+    // same signature-bearing signed URL — only the bucket prefix differs.
+    const fetchSpy = fetchMock.mockResolvedValue(
+      new Response(new Uint8Array([1]), { status: 200 }),
+    );
+    await downloadAudio('https://dashscope-a717.oss-cn-beijing.aliyuncs.com/result.wav?Expires=1');
+    expect(fetchSpy).toHaveBeenCalledOnce();
+    expect(String(fetchSpy.mock.calls[0][0])).toBe(
+      'https://dashscope-a717.oss-cn-beijing.aliyuncs.com/result.wav?Expires=1',
+    );
+  });
+
+  it.each([
+    // A DashScope-branded prefix is not enough on its own: the host must still
+    // be an Aliyun OSS regional endpoint, so neither a non-OSS host nor a
+    // lookalike suffix can ride in on the widened prefix.
+    'https://dashscope-a717.oss-cn-beijing.aliyuncs.com.evil.test/result.wav',
+    'https://dashscope-a717.evil.test/result.wav',
+    'https://notdashscope-a717.oss-cn-beijing.aliyuncs.com/result.wav',
+    'https://dashscope-a717.oss-cn-beijing.aliyuncs.com:8443/result.wav',
+  ])('still refuses a non-result or spoofed host: %s', async (url) => {
+    const fetchSpy = fetchMock;
+    await expect(downloadAudio(url)).rejects.toMatchObject({
+      code: 'QWEN_VC_AUDIO_URL_INVALID',
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('rejects an oversized declared download before reading it', async () => {
     fetchMock.mockResolvedValue(
       new Response(new Uint8Array([1]), {
