@@ -146,6 +146,60 @@ export interface CurriculumGenerationJobRecord {
   updatedAt: string;
 }
 
+/** A durable batch of assembled courses that drains through the generation-run limit. */
+export const CURRICULUM_BATCH_STATUSES = [
+  'queued',
+  'running',
+  'paused',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+export type CurriculumBatchStatus = (typeof CURRICULUM_BATCH_STATUSES)[number];
+
+/** One course inside a batch. Mirrors the run states plus `starting` and `cancelled`. */
+export const CURRICULUM_BATCH_ITEM_STATUSES = [
+  'queued',
+  'starting',
+  'running',
+  'awaiting_outline',
+  'paused',
+  'completed',
+  'failed',
+  'ended',
+  'cancelled',
+] as const;
+export type CurriculumBatchItemStatus = (typeof CURRICULUM_BATCH_ITEM_STATUSES)[number];
+
+export interface CurriculumBatchRecord {
+  id: string;
+  name: string;
+  status: CurriculumBatchStatus;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurriculumBatchItemRecord {
+  id: string;
+  batchId: string;
+  position: number;
+  courseId: string | null;
+  title: string;
+  status: CurriculumBatchItemStatus;
+  attempts: number;
+  maxAttempts: number;
+  generationJobId: string | null;
+  runId: string | null;
+  stageId: string | null;
+  error: CurriculumGenerationJobError | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CurriculumSnapshot {
   series: CurriculumSeriesRecord[];
   courses: CurriculumCourseRecord[];
@@ -154,4 +208,6 @@ export interface CurriculumSnapshot {
   courseKnowledgePoints: CourseKnowledgePointRecord[];
   knowledgePointRelations: KnowledgePointRelationRecord[];
   generationJobs: CurriculumGenerationJobRecord[];
+  batches: CurriculumBatchRecord[];
+  batchItems: CurriculumBatchItemRecord[];
 }

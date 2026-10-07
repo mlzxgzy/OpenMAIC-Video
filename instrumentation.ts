@@ -96,6 +96,9 @@ export async function register(): Promise<void> {
   let generationRunner:
     | import('@/lib/server/generation/run/runner').GenerationRunnerHandle
     | undefined;
+  let curriculumBatchRunner:
+    | import('@/lib/server/curriculum/batch-runner').CurriculumBatchRunnerHandle
+    | undefined;
   let materialExtractor:
     | import('@/lib/server/materials/extractor-wake').OwnerMaterialExtractorHandle
     | undefined;
@@ -108,6 +111,15 @@ export async function register(): Promise<void> {
     generationRunner = startGenerationRunner();
   } catch (error) {
     console.error('[instrumentation] Generation runner startup failed', error);
+  }
+  try {
+    // The curriculum queue is a thinner scanner over the same generation-run
+    // store: it starts queued assembled courses until the owner's limit is
+    // full, then yields until a run event wakes it.
+    const { startCurriculumBatchRunner } = await import('@/lib/server/curriculum/batch-runner');
+    curriculumBatchRunner = startCurriculumBatchRunner();
+  } catch (error) {
+    console.error('[instrumentation] Curriculum batch runner startup failed', error);
   }
   try {
     // Uploaded materials are extracted in the background from their upload
@@ -160,6 +172,11 @@ export async function register(): Promise<void> {
         await runner?.stop();
       } catch (error) {
         console.error('[instrumentation] Agent runner drain failed', error);
+      }
+      try {
+        await curriculumBatchRunner?.stop();
+      } catch (error) {
+        console.error('[instrumentation] Curriculum batch runner drain failed', error);
       }
       try {
         await generationRunner?.stop();

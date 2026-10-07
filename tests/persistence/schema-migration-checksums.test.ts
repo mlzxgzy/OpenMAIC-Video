@@ -214,6 +214,13 @@ const SHIPPED: readonly (readonly [
     true,
     'fae3dedae82a4c2c90746cb929348b4943f1e2847e873ac45f1cb77bac307ed2',
   ],
+  [
+    'curriculum',
+    5,
+    'batches',
+    true,
+    'fc5a5c1419f9f5e05df3ed1d1486adde14b438c839e00f7a0d21856a7c6ab88e',
+  ],
 ];
 
 /**

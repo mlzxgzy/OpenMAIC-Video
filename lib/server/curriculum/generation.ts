@@ -26,8 +26,10 @@ import type { ParsedGenerationJobInput } from './validation';
 
 export interface StartCurriculumGenerationJobInput {
   ownerId: string;
-  principal: OwnerPrincipal;
-  request: Request;
+  /** Present for a user-request start; absent for a background queue drain. */
+  principal?: OwnerPrincipal;
+  /** Present for a user-request start; absent for a background queue drain. */
+  request?: Request;
   assembly: CourseAssemblyPlan;
   parsed: ParsedGenerationJobInput;
   lessonOrder: number;
@@ -133,11 +135,17 @@ export async function startCurriculumGenerationJob(
 
   let run: Awaited<ReturnType<typeof startGenerationRun>>;
   try {
-    run = await startGenerationRun(ownerId, runInput, {
-      principal,
-      request,
-      origin: 'generation-runs',
-    });
+    run = await startGenerationRun(
+      ownerId,
+      runInput,
+      principal && request
+        ? {
+            principal,
+            request,
+            origin: 'generation-runs',
+          }
+        : undefined,
+    );
   } catch (error) {
     // Starting failed before a run existed: remove the just-created job, and
     // the draft course when this request created it, so a retry is clean.

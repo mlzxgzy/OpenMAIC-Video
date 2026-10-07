@@ -151,6 +151,27 @@
   `/api/curriculum` 已返回 `generationJobs` 字段；`/curriculum` 页面 SSR 200。
 
 
+- **批量生成队列（多课程排队 + 限流 + 重试）**：新增 `curriculum_batch` 与
+  `curriculum_batch_item` 表（v5 migration）、`POST /api/curriculum/batches`
+  入队接口、`PATCH /api/curriculum/batches/[id]` 暂停/继续/取消/重试接口，
+  以及 `/curriculum` 页面的“批量生成队列”面板。入队时按当前课程台账和知识点
+  绑定在服务端组装并快照完整 `course-package`，之后知识点库编辑不会改变已排队
+  任务。每个 owner 的队列通过 `FOR UPDATE SKIP LOCKED` 逐项认领，复用
+  generation run 的 owner 并发上限；容量不足时把 item 放回 `queued`，运行
+  `onRunEvent` 会同步 item 状态和 `stage_id`，并在完成/暂停后唤醒下一项。
+  启动失败（课程已删除、组装无效等）不创建 run，直接标记 item `failed`，
+  由重试动作重新入队。`instrumentation.ts` 启动独立的 batch-runner 定时器。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；curriculum 与迁移 tests
+  16 例通过；`POST /api/curriculum/batches` 对空 items / 不存在的 course
+  分别返回 400 / 404；`PATCH` 对非法 action 返回 400；本地 PostgreSQL 已应用
+  v5 migration，`/api/curriculum` 返回 `batches` / `batchItems`，`/curriculum`
+  页面 SSR 200。队列认领 SQL 和 drain 路径已用一个缺失课程 item 实测：
+  item 从未启动 generation run 直接进入 `failed`。真实模型生成的批量成功路径
+  留给验收时点击队列触发，避免在验证阶段消耗模型额度。
+
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 

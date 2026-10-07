@@ -198,6 +198,66 @@ CREATE UNIQUE INDEX IF NOT EXISTS curriculum_generation_job_owner_run_idx
   WHERE run_id IS NOT NULL;
 `;
 
+/**
+ * Durable batch generation queue. The batch row is the operator-facing unit
+ * (pause/resume/cancel, progress); each item owns one assembled course and is
+ * claimed sequentially under the generation-run per-owner limit. `request`
+ * carries the server-built assembly plan and parsed run options, so a queued
+ * item does not depend on later edits to the knowledge library.
+ */
+const CURRICULUM_BATCHES_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_batch (
+  id           TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL,
+  name         TEXT NOT NULL,
+  status       TEXT NOT NULL DEFAULT 'queued',
+  started_at   TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_batch_status_known CHECK
+    (status IN ('queued','running','paused','completed','failed','cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_batch_owner_status_idx
+  ON curriculum_batch (owner_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS curriculum_batch_item (
+  id                TEXT PRIMARY KEY,
+  owner_id          TEXT NOT NULL,
+  batch_id          TEXT NOT NULL REFERENCES curriculum_batch(id) ON DELETE CASCADE,
+  position          INTEGER NOT NULL,
+  course_id         TEXT REFERENCES curriculum_course(id) ON DELETE SET NULL,
+  title             TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT 'queued',
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  max_attempts      INTEGER NOT NULL DEFAULT 1,
+  request           JSONB NOT NULL DEFAULT '{}'::jsonb,
+  generation_job_id TEXT REFERENCES curriculum_generation_job(id) ON DELETE SET NULL,
+  run_id            TEXT,
+  stage_id          TEXT,
+  error             JSONB,
+  started_at        TIMESTAMPTZ,
+  completed_at      TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (batch_id, position),
+  CONSTRAINT curriculum_batch_item_status_known CHECK
+    (status IN ('queued','starting','running','awaiting_outline','paused',
+                'completed','failed','ended','cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_batch_item_owner_status_idx
+  ON curriculum_batch_item (owner_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS curriculum_batch_item_batch_idx
+  ON curriculum_batch_item (batch_id, position);
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_batch_item_owner_run_idx
+  ON curriculum_batch_item (owner_id, run_id)
+  WHERE run_id IS NOT NULL;
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -218,6 +278,12 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 4,
       name: 'generation_jobs',
       up: CURRICULUM_GENERATION_JOBS_SCHEMA,
+      transaction: true,
+    },
+    {
+      version: 5,
+      name: 'batches',
+      up: CURRICULUM_BATCHES_SCHEMA,
       transaction: true,
     },
   ],

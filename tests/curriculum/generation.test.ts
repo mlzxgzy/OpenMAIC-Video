@@ -1,8 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import type { GenerationRunHookEvent } from '@/lib/server/generation-run-hooks';
-import { curriculumGenerationUpdateForRunEvent } from '@/lib/server/curriculum/generation-hooks';
-import { parseGenerationJobInput } from '@/lib/server/curriculum/validation';
+import {
+  curriculumBatchUpdateForRunEvent,
+  curriculumGenerationUpdateForRunEvent,
+} from '@/lib/server/curriculum/generation-hooks';
+import {
+  parseCurriculumBatchInput,
+  parseGenerationJobInput,
+} from '@/lib/server/curriculum/validation';
 
 function event(type: GenerationRunHookEvent['type']): GenerationRunHookEvent {
   const base = {
@@ -91,6 +97,33 @@ describe('parseGenerationJobInput', () => {
   });
 });
 
+describe('parseCurriculumBatchInput', () => {
+  it('accepts existing courses and explicit assembly items', () => {
+    const parsed = parseCurriculumBatchInput({
+      name: 'CTF 批量生成',
+      items: [
+        { courseId: 'course-1', outlineReview: 'auto', maxAttempts: 3 },
+        {
+          assembly: {
+            title: 'CTF 入门',
+            knowledgePoints: [{ knowledgePointId: 'kp-1' }],
+          },
+        },
+      ],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.name).toBe('CTF 批量生成');
+    expect(parsed.value.items[0]?.kind).toBe('course');
+    expect(parsed.value.items[1]?.kind).toBe('assembly');
+  });
+
+  it('refuses an empty item list and an item without course or assembly', () => {
+    expect(parseCurriculumBatchInput({ items: [] }).ok).toBe(false);
+    expect(parseCurriculumBatchInput({ items: [{}] }).ok).toBe(false);
+  });
+});
+
 describe('curriculumGenerationUpdateForRunEvent', () => {
   it('maps committed run events onto job state and stage ids', () => {
     expect(curriculumGenerationUpdateForRunEvent(event('started'))).toEqual({ status: 'running' });
@@ -110,5 +143,27 @@ describe('curriculumGenerationUpdateForRunEvent', () => {
       stageId: 'stage-1',
     });
     expect(curriculumGenerationUpdateForRunEvent(event('ended'))).toEqual({ status: 'ended' });
+  });
+});
+
+describe('curriculumBatchUpdateForRunEvent', () => {
+  it('maps committed run events onto batch item state and stage ids', () => {
+    expect(curriculumBatchUpdateForRunEvent(event('started'))).toEqual({ status: 'running' });
+    expect(curriculumBatchUpdateForRunEvent(event('outline-ready'))).toEqual({
+      status: 'awaiting_outline',
+    });
+    expect(curriculumBatchUpdateForRunEvent(event('scene-appended'))).toEqual({
+      status: 'running',
+      stageId: 'stage-1',
+    });
+    expect(curriculumBatchUpdateForRunEvent(event('paused'))).toEqual({
+      status: 'paused',
+      error: { code: 'MODEL_FAILED', step: 'narration' },
+    });
+    expect(curriculumBatchUpdateForRunEvent(event('completed'))).toEqual({
+      status: 'completed',
+      stageId: 'stage-1',
+    });
+    expect(curriculumBatchUpdateForRunEvent(event('ended'))).toEqual({ status: 'ended' });
   });
 });

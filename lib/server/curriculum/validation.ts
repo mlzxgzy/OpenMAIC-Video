@@ -516,3 +516,131 @@ export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenera
 
   return { ok: true, value };
 }
+
+export interface ParsedCurriculumBatchRunOptions {
+  outlineReview: CurriculumGenerationOutlineReview;
+  interactive: boolean;
+  taskEngine: boolean;
+  voice?: ParsedGenerationJobVoice;
+}
+
+function parseCurriculumBatchRunOptions(
+  record: Record<string, unknown>,
+): ParseResult<ParsedCurriculumBatchRunOptions> {
+  const value: ParsedCurriculumBatchRunOptions = {
+    outlineReview: 'auto',
+    interactive: false,
+    taskEngine: false,
+  };
+  if ('outlineReview' in record && record.outlineReview !== undefined) {
+    if (
+      !CURRICULUM_GENERATION_OUTLINE_REVIEWS.includes(
+        record.outlineReview as CurriculumGenerationOutlineReview,
+      )
+    ) {
+      return {
+        ok: false,
+        message: `outlineReview must be one of ${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
+      };
+    }
+    value.outlineReview = record.outlineReview as CurriculumGenerationOutlineReview;
+  }
+  for (const key of ['interactive', 'taskEngine'] as const) {
+    const field = record[key];
+    if (field !== undefined) {
+      if (typeof field !== 'boolean') return { ok: false, message: `${key} must be a boolean` };
+      value[key] = field;
+    }
+  }
+  if (record.voice !== undefined) {
+    const voice = parseGenerationJobVoice(record.voice);
+    if (!voice.ok) return voice;
+    value.voice = voice.value;
+  }
+  return { ok: true, value };
+}
+
+/** An existing ledger course, or a fully specified assembly item. */
+export type ParsedCurriculumBatchItem =
+  | {
+      kind: 'assembly';
+      generation: ParsedGenerationJobInput;
+      maxAttempts: number;
+    }
+  | {
+      kind: 'course';
+      courseId: string;
+      options: ParsedCurriculumBatchRunOptions;
+      maxAttempts: number;
+    };
+
+export interface ParsedCurriculumBatchInput {
+  name: string;
+  items: ParsedCurriculumBatchItem[];
+}
+
+/**
+ * The batch body is a list of existing curriculum courses to generate and/or
+ * explicit assembly+course items. Run options are shared with the one-click
+ * API. At most 50 items are accepted so one request cannot create an
+ * unbounded owner queue.
+ */
+export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurriculumBatchInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const name =
+    typeof record.name === 'string' && record.name.trim().length > 0
+      ? record.name.trim().slice(0, 160)
+      : '批量生成';
+  const rawItems = record.items;
+  if (!Array.isArray(rawItems)) return { ok: false, message: 'items must be an array' };
+  if (rawItems.length === 0) return { ok: false, message: 'items must contain at least one item' };
+  if (rawItems.length > 50) return { ok: false, message: 'items is too large' };
+
+  const items: ParsedCurriculumBatchItem[] = [];
+  for (const [index, rawItem] of rawItems.entries()) {
+    const item = asRecord(rawItem);
+    if (!item) return { ok: false, message: `items[${index}] must be an object` };
+
+    const maxAttemptsRaw = item.maxAttempts;
+    let maxAttempts = 1;
+    if (maxAttemptsRaw !== undefined) {
+      if (
+        typeof maxAttemptsRaw !== 'number' ||
+        !Number.isInteger(maxAttemptsRaw) ||
+        maxAttemptsRaw < 1 ||
+        maxAttemptsRaw > 10
+      ) {
+        return { ok: false, message: `items[${index}].maxAttempts must be an integer 1-10` };
+      }
+      maxAttempts = maxAttemptsRaw;
+    }
+
+    if ('assembly' in item) {
+      const generation = parseGenerationJobInput(item);
+      if (!generation.ok) {
+        return { ok: false, message: `items[${index}]: ${generation.message}` };
+      }
+      items.push({ kind: 'assembly', generation: generation.value, maxAttempts });
+      continue;
+    }
+
+    const courseId = item.courseId;
+    if (typeof courseId !== 'string' || courseId.trim().length === 0) {
+      return {
+        ok: false,
+        message: `items[${index}] must have a non-empty courseId or an assembly`,
+      };
+    }
+    const options = parseCurriculumBatchRunOptions(item);
+    if (!options.ok) return { ok: false, message: `items[${index}]: ${options.message}` };
+    items.push({
+      kind: 'course',
+      courseId: courseId.trim(),
+      options: options.value,
+      maxAttempts,
+    });
+  }
+
+  return { ok: true, value: { name, items } };
+}

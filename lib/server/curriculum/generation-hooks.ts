@@ -11,8 +11,12 @@
 import { fenceOwnerWrite } from '@/lib/persistence/owner-merges';
 import type { GenerationRunHookEvent } from '@/lib/server/generation-run-hooks';
 
-import { bindCurriculumGenerationRunStage, getCurriculumProvider } from './store';
-import type { CurriculumGenerationRunUpdate } from './store';
+import {
+  bindCurriculumBatchItemByRun,
+  bindCurriculumGenerationRunStage,
+  getCurriculumProvider,
+} from './store';
+import type { CurriculumBatchRunUpdate, CurriculumGenerationRunUpdate } from './store';
 
 /** Map one committed run event to the curriculum job patch it implies. */
 export function curriculumGenerationUpdateForRunEvent(
@@ -42,15 +46,55 @@ export function curriculumGenerationUpdateForRunEvent(
   }
 }
 
+/** Map one committed run event to the batch item state it implies. */
+export function curriculumBatchUpdateForRunEvent(
+  event: GenerationRunHookEvent,
+): CurriculumBatchRunUpdate | null {
+  switch (event.type) {
+    case 'started':
+      return { status: 'running' };
+    case 'outline-ready':
+      return { status: 'awaiting_outline' };
+    case 'scene-appended':
+      return { status: 'running', stageId: event.stageId };
+    case 'paused':
+      return {
+        status: 'paused',
+        error: {
+          code: event.errorCode ?? 'GENERATION_PAUSED',
+          ...(event.step ? { step: event.step } : {}),
+        },
+      };
+    case 'completed':
+      return { status: 'completed', stageId: event.stageId };
+    case 'ended':
+      return { status: 'ended' };
+    default:
+      return null;
+  }
+}
+
 export async function onCurriculumGenerationRunEvent(event: GenerationRunHookEvent): Promise<void> {
   const update = curriculumGenerationUpdateForRunEvent(event);
-  if (!update) return;
+  const batchUpdate = curriculumBatchUpdateForRunEvent(event);
+  if (!update && !batchUpdate) return;
   try {
     const { withTransaction } = await getCurriculumProvider();
     await withTransaction(async (tx) => {
       await fenceOwnerWrite(tx, event.currentOwnerId);
-      await bindCurriculumGenerationRunStage(tx, event.currentOwnerId, event.runId, update);
+      if (update) {
+        await bindCurriculumGenerationRunStage(tx, event.currentOwnerId, event.runId, update);
+      }
+      if (batchUpdate) {
+        await bindCurriculumBatchItemByRun(tx, event.currentOwnerId, event.runId, batchUpdate);
+      }
     });
+    // An item finished or paused: fill any free generation slot now instead
+    // of waiting for the next timer tick.
+    if (batchUpdate && batchUpdate.status !== 'running') {
+      const { wakeCurriculumBatchRunner } = await import('./batch-runner');
+      wakeCurriculumBatchRunner();
+    }
   } catch (error) {
     // A dropped write-back is not worth failing the run; the run snapshot and
     // the curriculum job row remain available for a later reconciliation.

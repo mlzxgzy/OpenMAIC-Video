@@ -18,6 +18,10 @@ import { getServerPersistenceProvider } from '@/lib/persistence/server-provider'
 import type {
   CourseKnowledgeCoverageLevel,
   CourseKnowledgePointRecord,
+  CurriculumBatchItemRecord,
+  CurriculumBatchItemStatus,
+  CurriculumBatchRecord,
+  CurriculumBatchStatus,
   CurriculumCourseRecord,
   CurriculumCourseStatus,
   CurriculumGenerationJobError,
@@ -95,6 +99,18 @@ export interface CurriculumGenerationJobInput {
   courseId: string;
   outlineReview: CurriculumGenerationOutlineReview;
   request?: Record<string, unknown>;
+}
+
+export interface CurriculumBatchItemInput {
+  title: string;
+  courseId?: string | null;
+  request: Record<string, unknown>;
+  maxAttempts?: number;
+}
+
+export interface CurriculumBatchInput {
+  name: string;
+  items: CurriculumBatchItemInput[];
 }
 
 export class CurriculumNotFoundError extends Error {
@@ -202,6 +218,36 @@ interface GenerationJobRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
+interface BatchRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  status: string;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface BatchItemRow extends Record<string, unknown> {
+  id: string;
+  batch_id: string;
+  position: number | string;
+  course_id: string | null;
+  title: string;
+  status: string;
+  attempts: number | string;
+  max_attempts: number | string;
+  request: Record<string, unknown>;
+  generation_job_id: string | null;
+  run_id: string | null;
+  stage_id: string | null;
+  error: Record<string, unknown> | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
 
@@ -219,6 +265,12 @@ const KNOWLEDGE_POINT_RELATION_COLUMNS = `id, source_knowledge_point_id, target_
 
 const GENERATION_JOB_COLUMNS = `id, course_id, run_id, stage_id, status, outline_review,
        error, started_at, completed_at, created_at, updated_at`;
+
+const BATCH_COLUMNS = `id, name, status, started_at, completed_at, created_at, updated_at`;
+
+const BATCH_ITEM_COLUMNS = `id, batch_id, position, course_id, title, status, attempts, max_attempts,
+       request, generation_job_id, run_id, stage_id, error, started_at, completed_at,
+       created_at, updated_at`;
 
 const SCHEMA_STATE_KEY = Symbol.for('openmaic.curriculum.schema');
 const schemaState = globalThis as typeof globalThis & {
@@ -364,6 +416,49 @@ function mapGenerationJob(row: GenerationJobRow): CurriculumGenerationJobRecord 
     stageId: row.stage_id,
     status: row.status as CurriculumGenerationJobStatus,
     outlineReview: row.outline_review as CurriculumGenerationOutlineReview,
+    error:
+      error && typeof error.code === 'string'
+        ? {
+            code: error.code,
+            ...(typeof error.message === 'string' ? { message: error.message } : {}),
+            ...(typeof error.step === 'string' || error.step === null
+              ? { step: error.step as string | null }
+              : {}),
+          }
+        : null,
+    startedAt: nullableIso(row.started_at),
+    completedAt: nullableIso(row.completed_at),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapBatch(row: BatchRow): CurriculumBatchRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status as CurriculumBatchStatus,
+    startedAt: nullableIso(row.started_at),
+    completedAt: nullableIso(row.completed_at),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapBatchItem(row: BatchItemRow): CurriculumBatchItemRecord {
+  const error = row.error;
+  return {
+    id: row.id,
+    batchId: row.batch_id,
+    position: numeric(row.position),
+    courseId: row.course_id,
+    title: row.title,
+    status: row.status as CurriculumBatchItemStatus,
+    attempts: numeric(row.attempts),
+    maxAttempts: numeric(row.max_attempts),
+    generationJobId: row.generation_job_id,
+    runId: row.run_id,
+    stageId: row.stage_id,
     error:
       error && typeof error.code === 'string'
         ? {
@@ -537,6 +632,8 @@ export async function listCurriculum(
     courseKnowledgeResult,
     knowledgeRelationResult,
     generationJobResult,
+    batchResult,
+    batchItemResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
       `SELECT id, name, description, created_at, updated_at
@@ -587,6 +684,20 @@ export async function listCurriculum(
         ORDER BY created_at DESC`,
       [ownerId],
     ),
+    queryable.query<BatchRow>(
+      `SELECT ${BATCH_COLUMNS}
+         FROM curriculum_batch
+        WHERE owner_id = $1
+        ORDER BY created_at DESC`,
+      [ownerId],
+    ),
+    queryable.query<BatchItemRow>(
+      `SELECT ${BATCH_ITEM_COLUMNS}
+         FROM curriculum_batch_item
+        WHERE owner_id = $1
+        ORDER BY batch_id, position`,
+      [ownerId],
+    ),
   ]);
 
   const courses = courseResult.rows.map(mapCourse);
@@ -604,6 +715,8 @@ export async function listCurriculum(
     courseKnowledgePoints: courseKnowledgeResult.rows.map(mapCourseKnowledgePoint),
     knowledgePointRelations: knowledgeRelationResult.rows.map(mapKnowledgePointRelation),
     generationJobs: generationJobResult.rows.map(mapGenerationJob),
+    batches: batchResult.rows.map(mapBatch),
+    batchItems: batchItemResult.rows.map(mapBatchItem),
   };
 }
 
@@ -1124,4 +1237,416 @@ export async function bindCurriculumGenerationRunStage(
   );
   const row = result.rows[0];
   return row ? mapGenerationJob(row) : null;
+}
+
+export interface ClaimedCurriculumBatchItem {
+  record: CurriculumBatchItemRecord;
+  request: Record<string, unknown>;
+}
+
+export interface CurriculumBatchRunUpdate {
+  status: CurriculumBatchItemStatus;
+  stageId?: string | null;
+  error?: CurriculumGenerationJobError | null;
+}
+
+/** Recompute one batch from its item states; a user pause/cancel is sticky. */
+async function recalculateBatchStatus(
+  queryable: Queryable,
+  ownerId: string,
+  batchId: string,
+): Promise<CurriculumBatchRecord | null> {
+  const result = await queryable.query<BatchRow>(
+    `WITH counts AS (
+       SELECT
+         count(*) FILTER (WHERE status IN
+           ('queued','starting','running','awaiting_outline')) AS active,
+         count(*) FILTER (WHERE status = 'completed') AS completed,
+         count(*) FILTER (WHERE status IN ('failed','ended')) AS failed,
+         count(*) FILTER (WHERE status = 'paused') AS paused,
+         count(*) AS total
+       FROM curriculum_batch_item
+       WHERE owner_id = $1 AND batch_id = $2
+     )
+     UPDATE curriculum_batch b
+        SET status = CASE
+              WHEN b.status = 'cancelled' THEN 'cancelled'
+              WHEN b.status = 'paused' THEN 'paused'
+              WHEN counts.active > 0 THEN 'running'
+              WHEN counts.paused > 0 THEN 'paused'
+              WHEN counts.completed = counts.total THEN 'completed'
+              WHEN counts.failed > 0 THEN 'failed'
+              ELSE b.status
+            END,
+            started_at = CASE
+              WHEN b.started_at IS NULL AND counts.active > 0 THEN now()
+              ELSE b.started_at
+            END,
+            completed_at = CASE
+              WHEN counts.active = 0
+               AND counts.paused = 0
+               AND (counts.failed > 0 OR counts.completed = counts.total)
+              THEN COALESCE(b.completed_at, now())
+              ELSE b.completed_at
+            END,
+            updated_at = now()
+       FROM counts
+      WHERE b.owner_id = $1 AND b.id = $2
+      RETURNING ${BATCH_COLUMNS}`,
+    [ownerId, batchId],
+  );
+  const row = result.rows[0];
+  return row ? mapBatch(row) : null;
+}
+
+/** Create a durable batch and its assembled course items in one owner write. */
+export async function createCurriculumBatch(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumBatchInput,
+): Promise<{ batch: CurriculumBatchRecord; items: CurriculumBatchItemRecord[] }> {
+  const name = optionalText(input.name);
+  if (!name) throw new CurriculumValidationError('name is required');
+  if (name.length > 160) throw new CurriculumValidationError('name is too long');
+  if (input.items.length === 0) throw new CurriculumValidationError('items must not be empty');
+  if (input.items.length > 50) throw new CurriculumValidationError('items is too large');
+
+  const batchId = createId('batch');
+  const batchResult = await queryable.query<BatchRow>(
+    `INSERT INTO curriculum_batch (id, owner_id, name)
+     VALUES ($1, $2, $3)
+     RETURNING ${BATCH_COLUMNS}`,
+    [batchId, ownerId, name],
+  );
+  const batchRow = batchResult.rows[0];
+  if (!batchRow) throw new CurriculumValidationError('batch could not be created');
+
+  const items: CurriculumBatchItemRecord[] = [];
+  for (const [index, item] of input.items.entries()) {
+    const title = optionalText(item.title);
+    if (!title) throw new CurriculumValidationError(`items[${index}].title is required`);
+    if (item.courseId) await assertCourseOwned(queryable, ownerId, item.courseId);
+    const maxAttempts = Math.max(1, Math.min(10, Math.round(item.maxAttempts ?? 1)));
+    const result = await queryable.query<BatchItemRow>(
+      `INSERT INTO curriculum_batch_item
+         (id, owner_id, batch_id, position, course_id, title, request, max_attempts)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8)
+       RETURNING ${BATCH_ITEM_COLUMNS}`,
+      [
+        createId('citem'),
+        ownerId,
+        batchId,
+        index,
+        item.courseId ?? null,
+        title,
+        JSON.stringify(item.request ?? {}),
+        maxAttempts,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError(`items[${index}] could not be created`);
+    items.push(mapBatchItem(row));
+  }
+
+  return { batch: mapBatch(batchRow), items };
+}
+
+/** The owner ids that have a runnable batch item, oldest batch first. */
+export async function listOwnersWithRunnableCurriculumBatchItems(
+  queryable: Queryable,
+  limit = 100,
+): Promise<string[]> {
+  const result = await queryable.query<{ owner_id: string }>(
+    `SELECT b.owner_id
+       FROM curriculum_batch_item i
+       JOIN curriculum_batch b ON b.id = i.batch_id
+      WHERE i.status = 'queued' AND b.status IN ('queued','running')
+      GROUP BY b.owner_id
+      ORDER BY min(b.created_at), b.owner_id
+      LIMIT $1`,
+    [Math.max(1, Math.min(1000, Math.round(limit)))],
+  );
+  return result.rows.map((row) => row.owner_id);
+}
+
+/**
+ * Claim the oldest runnable item for one owner. A `starting` item that stayed
+ * untouched for 15 minutes is treated as an interrupted start and queued
+ * again; the start path itself only parks an item in `starting` for the
+ * duration of one local function call.
+ */
+export async function claimNextCurriculumBatchItem(
+  queryable: Queryable,
+  ownerId: string,
+): Promise<ClaimedCurriculumBatchItem | null> {
+  await queryable.query(
+    `UPDATE curriculum_batch_item
+        SET status = 'queued',
+            error = $2::jsonb,
+            updated_at = now()
+      WHERE owner_id = $1
+        AND status = 'starting'
+        AND updated_at < now() - interval '15 minutes'`,
+    [
+      ownerId,
+      JSON.stringify({
+        code: 'BATCH_START_INTERRUPTED',
+        message: 'the previous start attempt was interrupted and has been queued again',
+      }),
+    ],
+  );
+
+  const result = await queryable.query<BatchItemRow>(
+    `WITH next AS (
+       SELECT i.id
+         FROM curriculum_batch_item i
+         JOIN curriculum_batch b ON b.id = i.batch_id
+        WHERE i.owner_id = $1
+          AND i.status = 'queued'
+          AND b.status IN ('queued','running')
+        ORDER BY b.created_at, i.position
+        FOR UPDATE OF i SKIP LOCKED
+        LIMIT 1
+     )
+     UPDATE curriculum_batch_item item
+        SET status = 'starting',
+            attempts = item.attempts + 1,
+            started_at = COALESCE(item.started_at, now()),
+            error = NULL,
+            updated_at = now()
+       FROM next
+      WHERE item.id = next.id
+      RETURNING item.id, item.batch_id, item.position, item.course_id, item.title,
+                item.status, item.attempts, item.max_attempts, item.request,
+                item.generation_job_id, item.run_id, item.stage_id, item.error,
+                item.started_at, item.completed_at, item.created_at, item.updated_at`,
+    [ownerId],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  await recalculateBatchStatus(queryable, ownerId, row.batch_id);
+  return { record: mapBatchItem(row), request: row.request };
+}
+
+/** Put a claimed item back after capacity refused the start; attempts are kept. */
+export async function requeueCurriculumBatchItem(
+  queryable: Queryable,
+  ownerId: string,
+  itemId: string,
+  error?: CurriculumGenerationJobError | null,
+): Promise<CurriculumBatchItemRecord> {
+  const result = await queryable.query<BatchItemRow>(
+    `UPDATE curriculum_batch_item
+        SET status = 'queued',
+            error = $3::jsonb,
+            updated_at = now()
+      WHERE owner_id = $1 AND id = $2
+      RETURNING ${BATCH_ITEM_COLUMNS}`,
+    [ownerId, itemId, error === null || error === undefined ? null : JSON.stringify(error)],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  await recalculateBatchStatus(queryable, ownerId, row.batch_id);
+  return mapBatchItem(row);
+}
+
+/** The generation run now exists: link it to the batch item. */
+export async function markCurriculumBatchItemRunning(
+  queryable: Queryable,
+  ownerId: string,
+  itemId: string,
+  jobId: string,
+  runId: string,
+): Promise<CurriculumBatchItemRecord> {
+  const result = await queryable.query<BatchItemRow>(
+    `UPDATE curriculum_batch_item
+        SET status = 'running',
+            generation_job_id = $3,
+            run_id = $4,
+            error = NULL,
+            updated_at = now()
+      WHERE owner_id = $1 AND id = $2
+      RETURNING ${BATCH_ITEM_COLUMNS}`,
+    [ownerId, itemId, jobId, runId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  await recalculateBatchStatus(queryable, ownerId, row.batch_id);
+  return mapBatchItem(row);
+}
+
+/** A start failure before a run exists. */
+export async function failCurriculumBatchItem(
+  queryable: Queryable,
+  ownerId: string,
+  itemId: string,
+  error: CurriculumGenerationJobError,
+): Promise<CurriculumBatchItemRecord> {
+  const result = await queryable.query<BatchItemRow>(
+    `UPDATE curriculum_batch_item
+        SET status = 'failed',
+            error = $3::jsonb,
+            completed_at = COALESCE(completed_at, now()),
+            updated_at = now()
+      WHERE owner_id = $1 AND id = $2
+      RETURNING ${BATCH_ITEM_COLUMNS}`,
+    [ownerId, itemId, JSON.stringify(error)],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  await recalculateBatchStatus(queryable, ownerId, row.batch_id);
+  return mapBatchItem(row);
+}
+
+/**
+ * Apply one committed generation-run event to the batch item that owns the
+ * run. The generation job is updated first by the hook, so this mirrors the
+ * job's final stage/error (the job resolves the one-course-per-stage case).
+ */
+export async function bindCurriculumBatchItemByRun(
+  queryable: Queryable,
+  ownerId: string,
+  runId: string,
+  update: CurriculumBatchRunUpdate,
+): Promise<CurriculumBatchItemRecord | null> {
+  const itemResult = await queryable.query<BatchItemRow>(
+    `SELECT ${BATCH_ITEM_COLUMNS}
+       FROM curriculum_batch_item
+      WHERE owner_id = $1 AND run_id = $2
+      FOR UPDATE`,
+    [ownerId, runId],
+  );
+  const item = itemResult.rows[0];
+  if (!item) return null;
+
+  const jobResult = await queryable.query<GenerationJobRow>(
+    `SELECT ${GENERATION_JOB_COLUMNS}
+       FROM curriculum_generation_job
+      WHERE owner_id = $1 AND run_id = $2`,
+    [ownerId, runId],
+  );
+  const job = jobResult.rows[0] ?? null;
+  const stageId = job?.stage_id ?? update.stageId ?? null;
+  const error =
+    job?.error && typeof job.error.code === 'string'
+      ? (job.error as unknown as CurriculumGenerationJobError)
+      : (update.error ?? null);
+
+  const result = await queryable.query<BatchItemRow>(
+    `UPDATE curriculum_batch_item
+        SET stage_id = COALESCE($3, stage_id),
+            status = $4,
+            error = COALESCE($5::jsonb, error),
+            started_at = CASE
+              WHEN started_at IS NULL AND $3 IS NOT NULL THEN now()
+              ELSE started_at
+            END,
+            completed_at = CASE
+              WHEN $4 IN ('completed','failed','ended','cancelled')
+              THEN COALESCE(completed_at, now())
+              ELSE completed_at
+            END,
+            updated_at = now()
+      WHERE owner_id = $1 AND run_id = $2
+      RETURNING ${BATCH_ITEM_COLUMNS}`,
+    [ownerId, runId, stageId, update.status, error === null ? null : JSON.stringify(error)],
+  );
+  const row = result.rows[0];
+  if (!row) return null;
+  await recalculateBatchStatus(queryable, ownerId, row.batch_id);
+  return mapBatchItem(row);
+}
+
+export type CurriculumBatchAction = 'pause' | 'resume' | 'cancel' | 'retry';
+
+/** Apply a user batch action and answer the updated batch. */
+export async function applyCurriculumBatchAction(
+  queryable: Queryable,
+  ownerId: string,
+  batchId: string,
+  action: CurriculumBatchAction,
+): Promise<CurriculumBatchRecord> {
+  const batchResult = await queryable.query<BatchRow>(
+    `SELECT ${BATCH_COLUMNS}
+       FROM curriculum_batch
+      WHERE owner_id = $1 AND id = $2
+      FOR UPDATE`,
+    [ownerId, batchId],
+  );
+  const batch = batchResult.rows[0];
+  if (!batch) throw new CurriculumNotFoundError('batch not found');
+  if (batch.status === 'cancelled' && action !== 'retry') {
+    throw new CurriculumConflictError('a cancelled batch cannot be changed');
+  }
+
+  if (action === 'pause') {
+    await queryable.query(
+      `UPDATE curriculum_batch
+          SET status = 'paused', updated_at = now()
+        WHERE owner_id = $1 AND id = $2`,
+      [ownerId, batchId],
+    );
+  } else if (action === 'resume') {
+    await queryable.query(
+      `UPDATE curriculum_batch
+          SET status = 'running',
+              completed_at = NULL,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2`,
+      [ownerId, batchId],
+    );
+    await recalculateBatchStatus(queryable, ownerId, batchId);
+  } else if (action === 'cancel') {
+    await queryable.query(
+      `UPDATE curriculum_batch_item
+          SET status = 'cancelled',
+              completed_at = COALESCE(completed_at, now()),
+              updated_at = now()
+        WHERE owner_id = $1 AND batch_id = $2
+          AND status IN ('queued','starting')`,
+      [ownerId, batchId],
+    );
+    await queryable.query(
+      `UPDATE curriculum_batch
+          SET status = 'cancelled',
+              completed_at = COALESCE(completed_at, now()),
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2`,
+      [ownerId, batchId],
+    );
+  } else {
+    // retry: requeue every failed/paused/ended item; running items are kept.
+    await queryable.query(
+      `UPDATE curriculum_batch_item
+          SET status = 'queued',
+              attempts = 0,
+              generation_job_id = NULL,
+              run_id = NULL,
+              stage_id = NULL,
+              error = NULL,
+              started_at = NULL,
+              completed_at = NULL,
+              updated_at = now()
+        WHERE owner_id = $1 AND batch_id = $2
+          AND status IN ('failed','paused','ended','cancelled')`,
+      [ownerId, batchId],
+    );
+    await queryable.query(
+      `UPDATE curriculum_batch
+          SET status = 'queued',
+              completed_at = NULL,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2`,
+      [ownerId, batchId],
+    );
+    await recalculateBatchStatus(queryable, ownerId, batchId);
+  }
+
+  const result = await queryable.query<BatchRow>(
+    `SELECT ${BATCH_COLUMNS} FROM curriculum_batch WHERE owner_id = $1 AND id = $2`,
+    [ownerId, batchId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('batch not found');
+  return mapBatch(row);
 }
