@@ -21,6 +21,20 @@ export type KnowledgePointDifficulty = (typeof KNOWLEDGE_POINT_DIFFICULTIES)[num
 export const COURSE_KNOWLEDGE_COVERAGE_LEVELS = ['introduced', 'practiced', 'mastered'] as const;
 export type CourseKnowledgeCoverageLevel = (typeof COURSE_KNOWLEDGE_COVERAGE_LEVELS)[number];
 
+/**
+ * Knowledge-point relations are direction-aware. `contains` and `related`
+ * exist because curriculum authors often need a lightweight relation even
+ * when the strict parent-child tree is not the right shape; `prerequisite`
+ * and `follow-up` are the learning-order edges used by the knowledge graph.
+ */
+export const KNOWLEDGE_POINT_RELATION_TYPES = [
+  'prerequisite',
+  'follow-up',
+  'contains',
+  'related',
+] as const;
+export type KnowledgePointRelationType = (typeof KNOWLEDGE_POINT_RELATION_TYPES)[number];
+
 export interface CurriculumSeriesRecord {
   id: string;
   name: string;
@@ -82,10 +96,21 @@ export interface CourseKnowledgePointRecord {
   updatedAt: string;
 }
 
+export interface KnowledgePointRelationRecord {
+  id: string;
+  sourceKnowledgePointId: string;
+  targetKnowledgePointId: string;
+  relationType: KnowledgePointRelationType;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CurriculumSnapshot {
   series: CurriculumSeriesRecord[];
   courses: CurriculumCourseRecord[];
   relations: CurriculumRelationRecord[];
   knowledgePoints: KnowledgePointRecord[];
   courseKnowledgePoints: CourseKnowledgePointRecord[];
+  knowledgePointRelations: KnowledgePointRelationRecord[];
 }

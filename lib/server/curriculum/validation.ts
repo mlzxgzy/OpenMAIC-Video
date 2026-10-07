@@ -3,11 +3,13 @@ import {
   CURRICULUM_COURSE_STATUSES,
   CURRICULUM_RELATION_TYPES,
   KNOWLEDGE_POINT_DIFFICULTIES,
+  KNOWLEDGE_POINT_RELATION_TYPES,
   KNOWLEDGE_POINT_TYPES,
   type CourseKnowledgeCoverageLevel,
   type CurriculumCourseStatus,
   type CurriculumRelationType,
   type KnowledgePointDifficulty,
+  type KnowledgePointRelationType,
   type KnowledgePointType,
 } from '@/lib/curriculum/types';
 
@@ -313,4 +315,42 @@ export function parseCourseKnowledgePointsInput(
     links.push(parsed);
   }
   return { ok: true, value: links };
+}
+
+export interface ParsedKnowledgePointRelationInput {
+  sourceKnowledgePointId: string;
+  targetKnowledgePointId: string;
+  relationType: KnowledgePointRelationType;
+  note?: string | null;
+}
+
+export function parseKnowledgePointRelationInput(
+  body: unknown,
+): ParseResult<ParsedKnowledgePointRelationInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const { sourceKnowledgePointId, targetKnowledgePointId, relationType } = record;
+  if (typeof sourceKnowledgePointId !== 'string' || sourceKnowledgePointId.trim().length === 0) {
+    return { ok: false, message: 'sourceKnowledgePointId is required' };
+  }
+  if (typeof targetKnowledgePointId !== 'string' || targetKnowledgePointId.trim().length === 0) {
+    return { ok: false, message: 'targetKnowledgePointId is required' };
+  }
+  if (!KNOWLEDGE_POINT_RELATION_TYPES.includes(relationType as KnowledgePointRelationType)) {
+    return {
+      ok: false,
+      message: `relationType must be one of ${KNOWLEDGE_POINT_RELATION_TYPES.join(', ')}`,
+    };
+  }
+  const note = readOptionalText(record, 'note');
+  if (isParseFailure(note)) return note;
+  return {
+    ok: true,
+    value: {
+      sourceKnowledgePointId: sourceKnowledgePointId.trim(),
+      targetKnowledgePointId: targetKnowledgePointId.trim(),
+      relationType: relationType as KnowledgePointRelationType,
+      note: note === undefined ? undefined : note,
+    },
+  };
 }

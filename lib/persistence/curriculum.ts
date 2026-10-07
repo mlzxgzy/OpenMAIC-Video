@@ -128,6 +128,38 @@ CREATE INDEX IF NOT EXISTS curriculum_course_kp_owner_course_idx
   ON curriculum_course_knowledge_point (owner_id, course_id, sort_order);
 `;
 
+/**
+ * Knowledge-point graph edges. The parent/child tree lives on
+ * `curriculum_knowledge_point.parent_id`; this table carries the additional
+ * direction-aware learning relations.
+ */
+const CURRICULUM_KNOWLEDGE_POINT_RELATIONS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_knowledge_point_relation (
+  id                        TEXT PRIMARY KEY,
+  owner_id                  TEXT NOT NULL,
+  source_knowledge_point_id TEXT NOT NULL REFERENCES curriculum_knowledge_point(id) ON DELETE CASCADE,
+  target_knowledge_point_id TEXT NOT NULL REFERENCES curriculum_knowledge_point(id) ON DELETE CASCADE,
+  relation_type             TEXT NOT NULL,
+  note                      TEXT,
+  created_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_kp_relation_distinct CHECK
+    (source_knowledge_point_id <> target_knowledge_point_id),
+  CONSTRAINT curriculum_kp_relation_type_known CHECK
+    (relation_type IN ('prerequisite','follow-up','contains','related'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_kp_relation_owner_edge_idx
+  ON curriculum_knowledge_point_relation
+    (owner_id, source_knowledge_point_id, target_knowledge_point_id, relation_type);
+
+CREATE INDEX IF NOT EXISTS curriculum_kp_relation_owner_source_idx
+  ON curriculum_knowledge_point_relation (owner_id, source_knowledge_point_id);
+
+CREATE INDEX IF NOT EXISTS curriculum_kp_relation_owner_target_idx
+  ON curriculum_knowledge_point_relation (owner_id, target_knowledge_point_id);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -136,6 +168,12 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 2,
       name: 'knowledge_points',
       up: CURRICULUM_KNOWLEDGE_POINTS_SCHEMA,
+      transaction: true,
+    },
+    {
+      version: 3,
+      name: 'knowledge_point_relations',
+      up: CURRICULUM_KNOWLEDGE_POINT_RELATIONS_SCHEMA,
       transaction: true,
     },
   ],

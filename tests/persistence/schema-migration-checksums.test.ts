@@ -200,6 +200,13 @@ const SHIPPED: readonly (readonly [
     true,
     'ed25fdcc1124b07fbd34a645d43835f8f756dccefbda1ba4f6978851412cbad5',
   ],
+  [
+    'curriculum',
+    3,
+    'knowledge_point_relations',
+    true,
+    '8682a4ab20bbeb736568c99c79a651c92afec966fba4671e987b5c583ffd98ed',
+  ],
 ];
 
 /**

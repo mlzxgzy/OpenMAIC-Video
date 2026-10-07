@@ -26,6 +26,8 @@ import type {
   CurriculumSnapshot,
   KnowledgePointDifficulty,
   KnowledgePointRecord,
+  KnowledgePointRelationRecord,
+  KnowledgePointRelationType,
   KnowledgePointType,
 } from '@/lib/curriculum/types';
 
@@ -75,6 +77,13 @@ export interface CourseKnowledgePointInput {
   knowledgePointId: string;
   coverageLevel?: CourseKnowledgeCoverageLevel;
   sortOrder?: number;
+  note?: string | null;
+}
+
+export interface KnowledgePointRelationInput {
+  sourceKnowledgePointId: string;
+  targetKnowledgePointId: string;
+  relationType: KnowledgePointRelationType;
   note?: string | null;
 }
 
@@ -159,6 +168,16 @@ interface CourseKnowledgePointRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
+interface KnowledgePointRelationRow extends Record<string, unknown> {
+  id: string;
+  source_knowledge_point_id: string;
+  target_knowledge_point_id: string;
+  relation_type: string;
+  note: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
 
@@ -170,6 +189,9 @@ const KNOWLEDGE_POINT_COLUMNS = `id, series_id, parent_id, name, code, type, dif
 
 const COURSE_KNOWLEDGE_POINT_COLUMNS = `course_id, knowledge_point_id, coverage_level,
        sort_order, note, created_at, updated_at`;
+
+const KNOWLEDGE_POINT_RELATION_COLUMNS = `id, source_knowledge_point_id, target_knowledge_point_id,
+       relation_type, note, created_at, updated_at`;
 
 const SCHEMA_STATE_KEY = Symbol.for('openmaic.curriculum.schema');
 const schemaState = globalThis as typeof globalThis & {
@@ -290,6 +312,18 @@ function mapCourseKnowledgePoint(row: CourseKnowledgePointRow): CourseKnowledgeP
   };
 }
 
+function mapKnowledgePointRelation(row: KnowledgePointRelationRow): KnowledgePointRelationRecord {
+  return {
+    id: row.id,
+    sourceKnowledgePointId: row.source_knowledge_point_id,
+    targetKnowledgePointId: row.target_knowledge_point_id,
+    relationType: row.relation_type as KnowledgePointRelationType,
+    note: row.note,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
 function optionalText(value: string | null | undefined): string | null {
   if (value === undefined || value === null) return null;
   const trimmed = value.trim();
@@ -392,49 +426,103 @@ async function assertKnowledgePointParent(
   }
 }
 
+const DIRECTED_KNOWLEDGE_POINT_RELATION_TYPES: readonly KnowledgePointRelationType[] = [
+  'prerequisite',
+  'follow-up',
+  'contains',
+];
+
+/**
+ * Directed knowledge relations must stay acyclic. The check asks whether the
+ * new target can already reach the new source following the same relation
+ * type: if it can, adding source -> target would close a cycle.
+ */
+async function assertKnowledgePointRelationAcyclic(
+  queryable: Queryable,
+  ownerId: string,
+  sourceKnowledgePointId: string,
+  targetKnowledgePointId: string,
+  relationType: KnowledgePointRelationType,
+): Promise<void> {
+  if (!DIRECTED_KNOWLEDGE_POINT_RELATION_TYPES.includes(relationType)) return;
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    `WITH RECURSIVE reachable AS (
+       SELECT target_knowledge_point_id AS id
+         FROM curriculum_knowledge_point_relation
+        WHERE owner_id = $1
+          AND source_knowledge_point_id = $2
+          AND relation_type = $3
+       UNION
+       SELECT relation.target_knowledge_point_id
+         FROM curriculum_knowledge_point_relation relation
+         JOIN reachable ON relation.source_knowledge_point_id = reachable.id
+        WHERE relation.owner_id = $1
+          AND relation.relation_type = $3
+     )
+     SELECT id FROM reachable WHERE id = $4 LIMIT 1`,
+    [ownerId, targetKnowledgePointId, relationType, sourceKnowledgePointId],
+  );
+  if (result.rows[0]) {
+    throw new CurriculumValidationError('knowledge point relation would create a cycle');
+  }
+}
+
 /** Every series, course, relation, knowledge point and course-point link of one owner. */
 export async function listCurriculum(
   queryable: Queryable,
   ownerId: string,
 ): Promise<CurriculumSnapshot> {
-  const [seriesResult, courseResult, relationResult, knowledgeResult, courseKnowledgeResult] =
-    await Promise.all([
-      queryable.query<SeriesRow>(
-        `SELECT id, name, description, created_at, updated_at
-           FROM curriculum_series
-          WHERE owner_id = $1
-          ORDER BY lower(name), created_at`,
-        [ownerId],
-      ),
-      queryable.query<CourseRow>(
-        `SELECT ${COURSE_COLUMNS}
-           FROM curriculum_course
-          WHERE owner_id = $1
-          ORDER BY COALESCE(series_id, ''), lesson_order, lower(title), created_at`,
-        [ownerId],
-      ),
-      queryable.query<RelationRow>(
-        `SELECT ${RELATION_COLUMNS}
-           FROM curriculum_course_relation
-          WHERE owner_id = $1
-          ORDER BY created_at`,
-        [ownerId],
-      ),
-      queryable.query<KnowledgePointRow>(
-        `SELECT ${KNOWLEDGE_POINT_COLUMNS}
-           FROM curriculum_knowledge_point
-          WHERE owner_id = $1
-          ORDER BY COALESCE(series_id, ''), sort_order, lower(name), created_at`,
-        [ownerId],
-      ),
-      queryable.query<CourseKnowledgePointRow>(
-        `SELECT ${COURSE_KNOWLEDGE_POINT_COLUMNS}
-           FROM curriculum_course_knowledge_point
-          WHERE owner_id = $1
-          ORDER BY course_id, sort_order, created_at`,
-        [ownerId],
-      ),
-    ]);
+  const [
+    seriesResult,
+    courseResult,
+    relationResult,
+    knowledgeResult,
+    courseKnowledgeResult,
+    knowledgeRelationResult,
+  ] = await Promise.all([
+    queryable.query<SeriesRow>(
+      `SELECT id, name, description, created_at, updated_at
+         FROM curriculum_series
+        WHERE owner_id = $1
+        ORDER BY lower(name), created_at`,
+      [ownerId],
+    ),
+    queryable.query<CourseRow>(
+      `SELECT ${COURSE_COLUMNS}
+         FROM curriculum_course
+        WHERE owner_id = $1
+        ORDER BY COALESCE(series_id, ''), lesson_order, lower(title), created_at`,
+      [ownerId],
+    ),
+    queryable.query<RelationRow>(
+      `SELECT ${RELATION_COLUMNS}
+         FROM curriculum_course_relation
+        WHERE owner_id = $1
+        ORDER BY created_at`,
+      [ownerId],
+    ),
+    queryable.query<KnowledgePointRow>(
+      `SELECT ${KNOWLEDGE_POINT_COLUMNS}
+         FROM curriculum_knowledge_point
+        WHERE owner_id = $1
+        ORDER BY COALESCE(series_id, ''), sort_order, lower(name), created_at`,
+      [ownerId],
+    ),
+    queryable.query<CourseKnowledgePointRow>(
+      `SELECT ${COURSE_KNOWLEDGE_POINT_COLUMNS}
+         FROM curriculum_course_knowledge_point
+        WHERE owner_id = $1
+        ORDER BY course_id, sort_order, created_at`,
+      [ownerId],
+    ),
+    queryable.query<KnowledgePointRelationRow>(
+      `SELECT ${KNOWLEDGE_POINT_RELATION_COLUMNS}
+         FROM curriculum_knowledge_point_relation
+        WHERE owner_id = $1
+        ORDER BY created_at`,
+      [ownerId],
+    ),
+  ]);
 
   const courses = courseResult.rows.map(mapCourse);
   const courseCounts = new Map<string, number>();
@@ -449,6 +537,7 @@ export async function listCurriculum(
     relations: relationResult.rows.map(mapRelation),
     knowledgePoints: knowledgeResult.rows.map(mapKnowledgePoint),
     courseKnowledgePoints: courseKnowledgeResult.rows.map(mapCourseKnowledgePoint),
+    knowledgePointRelations: knowledgeRelationResult.rows.map(mapKnowledgePointRelation),
   };
 }
 
@@ -790,4 +879,56 @@ export async function setCourseKnowledgePoints(
     );
     sortOrder += 1;
   }
+}
+
+/** Create (or update the note of) one direction-aware knowledge-point relation. */
+export async function createKnowledgePointRelation(
+  queryable: Queryable,
+  ownerId: string,
+  input: KnowledgePointRelationInput,
+): Promise<KnowledgePointRelationRecord> {
+  if (input.sourceKnowledgePointId === input.targetKnowledgePointId) {
+    throw new CurriculumValidationError('a knowledge point cannot relate to itself');
+  }
+  await assertKnowledgePointOwned(queryable, ownerId, input.sourceKnowledgePointId);
+  await assertKnowledgePointOwned(queryable, ownerId, input.targetKnowledgePointId);
+  await assertKnowledgePointRelationAcyclic(
+    queryable,
+    ownerId,
+    input.sourceKnowledgePointId,
+    input.targetKnowledgePointId,
+    input.relationType,
+  );
+
+  const result = await queryable.query<KnowledgePointRelationRow>(
+    `INSERT INTO curriculum_knowledge_point_relation
+       (id, owner_id, source_knowledge_point_id, target_knowledge_point_id, relation_type, note)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (owner_id, source_knowledge_point_id, target_knowledge_point_id, relation_type)
+     DO UPDATE SET note = EXCLUDED.note, updated_at = now()
+     RETURNING ${KNOWLEDGE_POINT_RELATION_COLUMNS}`,
+    [
+      createId('kprel'),
+      ownerId,
+      input.sourceKnowledgePointId,
+      input.targetKnowledgePointId,
+      input.relationType,
+      optionalText(input.note),
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumValidationError('knowledge point relation could not be created');
+  return mapKnowledgePointRelation(row);
+}
+
+export async function deleteKnowledgePointRelation(
+  queryable: Queryable,
+  ownerId: string,
+  relationId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_knowledge_point_relation WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, relationId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('knowledge point relation not found');
 }

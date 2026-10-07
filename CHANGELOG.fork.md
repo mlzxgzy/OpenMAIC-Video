@@ -101,6 +101,22 @@
   `knowledgePoints=15`、`courseKnowledgePoints=13`。
 
 
+- **知识点关系 + 覆盖分析**：新增 `curriculum_knowledge_point_relation` 表、
+  `/api/curriculum/knowledge-point-relations` POST/DELETE 接口、
+  `GET /api/curriculum/coverage` 报告接口，以及 `/curriculum` 页面的“知识点关系与
+  覆盖分析”面板。关系类型支持先修、后继、包含、相关；有向关系会通过递归查询
+  拒绝成环。覆盖分析按知识点汇总课程绑定、最高覆盖层级和空缺知识点，并按课程
+  汇总知识点覆盖数量；纯函数 `lib/curriculum/coverage.ts` 同时服务 API 与前端，
+  保证两端使用同一套口径。课程 schemas 新增 v3 migration，并已更新迁移 checksum
+  金标。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；迁移 checksum 测试和新增的
+  `tests/curriculum/coverage.test.ts`（2 例）通过；
+  `POST/DELETE /api/curriculum/knowledge-point-relations` 冒烟通过，反向成环关系
+  返回 400；`GET /api/curriculum/coverage?seriesId=...` 返回 15 个知识点的覆盖
+  报告；已为 `CTF综合实战` 写入 4 条先修/相关关系，`/curriculum` 页面 SSR 200。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 
