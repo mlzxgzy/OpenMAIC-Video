@@ -45,6 +45,12 @@ export interface ServerPersistenceProvider {
    * transaction, for a caller that must check and mutate atomically.
    */
   assetStoreIn(queryable: Queryable): ServerPersistenceProvider['assetStore'];
+  /**
+   * The runtime store with every statement on `queryable`, an already open
+   * transaction. For a caller inside one that needs the cascade of a document
+   * deletion to join it rather than open its own.
+   */
+  runtimeStoreIn(queryable: Queryable): ServerPersistenceProvider['runtimeStore'];
 }
 
 interface ProviderState {
@@ -124,10 +130,9 @@ async function createServerPersistenceProvider(
         pendingTtlMs,
         ...(quotaBytes === undefined ? {} : { quotaBytes }),
       });
-    return {
-      pool,
-      runtimeStore: new PgRuntimeStore(queryable, {
-        withTransaction,
+    const runtimeRegistry = (on: Queryable, transaction: WithTransaction) =>
+      new PgRuntimeStore(on, {
+        withTransaction: transaction,
         payloadValidators: APP_RUNTIME_PAYLOAD_VALIDATORS,
         // Every runtime session is created by a request (the persistence
         // route, the chat route's whiteboard), for the request's owner: the
@@ -138,10 +143,17 @@ async function createServerPersistenceProvider(
           await fenceOwnerWrite(transaction, learnerKey);
           return learnerKey;
         },
-      }),
+      });
+    return {
+      pool,
+      runtimeStore: runtimeRegistry(queryable, withTransaction),
       assetStore: assetRegistry(queryable, withTransaction),
       withTransaction,
       assetStoreIn: (pinned) => assetRegistry(pinned, (body) => body(pinned)),
+      // No create hook on this half: it is built for the deletion cascade
+      // alone, whose writes are deletes decided under the course's ownership
+      // row lock in the transaction they join.
+      runtimeStoreIn: (pinned) => runtimeRegistry(pinned, (body) => body(pinned)),
     };
   } catch (error) {
     await pool.end().catch(() => {});

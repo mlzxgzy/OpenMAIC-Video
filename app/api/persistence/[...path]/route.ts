@@ -227,7 +227,7 @@ async function createPersistenceHandler(
   poolFactory?: PersistencePoolFactory,
 ): Promise<RequestListener> {
   const { ownerId } = principal;
-  const { pool, runtimeStore, assetStore, withTransaction, assetStoreIn } =
+  const { pool, runtimeStore, assetStore, withTransaction, assetStoreIn, runtimeStoreIn } =
     await getServerPersistenceProvider(connectionString, poolFactory);
   const hooks = getPersistenceHooks();
   const documentStore = createOwnerBoundDocumentStore({
@@ -236,6 +236,7 @@ async function createPersistenceHandler(
     principal,
     validateScene: validateAppScene,
     validateStage: validateAppStage,
+    runtimeStoreIn,
   });
   const beforeAssetAllocate = hooks.beforeAssetAllocate;
   // One identity for all three contracts, resolved server-side by the owner

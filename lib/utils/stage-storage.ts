@@ -29,7 +29,6 @@ import {
   type AppDocumentOutline,
 } from '@/lib/document-store';
 import { clearAllForScene } from '@/lib/quiz/persistence';
-import { beginStageRuntimeDeletionSafely } from '@/lib/runtime/store';
 import { clearStageDrainWatermarks } from '@/lib/pbl/v2/runtime/drain';
 import { createLogger } from '@/lib/logger';
 import {
@@ -650,11 +649,14 @@ async function performStageDeletion(stageId: string): Promise<void> {
               clearAllForScene(sceneId);
             }
 
-            // Learner-runtime data is a separate store, so it is cascaded after
-            // the document: a runtime failure must not undo the deletion (the
-            // helper warns instead of throwing).
-            const runtimeDeletion = beginStageRuntimeDeletionSafely(stageId);
-            await runtimeDeletion.completion;
+            // No learner-runtime cascade here. The server retires a course's
+            // runtime rows in the same transaction as its tombstone, where it
+            // has already proved the caller owns the course
+            // (owner-bound-document-store.ts). The browser could not do it: the
+            // runtime HTTP contract has no owner-scoped stage delete — it is an
+            // admin capability this app grants to nobody — so a client-side
+            // cascade of any spelling was refused with 403 FORBIDDEN_ADMIN and
+            // warned about on every course deletion.
             try {
               await clearStageDrainWatermarks(stageId);
             } catch (error) {
@@ -663,10 +665,6 @@ async function performStageDeletion(stageId: string): Promise<void> {
 
             log.info(`Deleted stage: ${stageId}`);
             releaseCaller(undefined);
-            // The public deletion remains bounded, but this callback deliberately
-            // retains the exclusive lock until a late runtime cascade can no longer
-            // delete data written after the caller was released.
-            await runtimeDeletion.settlement;
           } catch (error) {
             log.error('Failed to delete stage:', error);
             throw error;

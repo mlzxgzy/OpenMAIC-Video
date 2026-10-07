@@ -34,13 +34,12 @@ vi.mock('@/lib/document-store', () => ({
 
 // The live classroom-deletion flow (app/page.tsx) goes through
 // `deleteStageData` in stage-storage. Mock its module dependencies and run the
-// REAL function to prove it cascades into the runtime layer.
-vi.mock('@/lib/runtime/store', () => ({
-  beginStageRuntimeDeletionSafely: vi.fn(() => ({
-    completion: Promise.resolve(),
-    settlement: Promise.resolve(),
-  })),
-}));
+// REAL function to prove what the cascade does and does not attempt.
+//
+// Runtime rows are NOT cascaded from here: the server retires them in the same
+// transaction as the tombstone, where it has already proved ownership. The
+// runtime HTTP contract has no owner-scoped stage delete, so a client-side
+// cascade could only ever be refused with 403 FORBIDDEN_ADMIN.
 vi.mock('@/lib/device-storage/database', () => ({
   db: {
     mediaFiles: {
@@ -66,13 +65,11 @@ vi.mock('@/lib/utils/chat-storage-lock', () => ({
 }));
 
 import { deleteStageData } from '@/lib/utils/stage-storage';
-import { beginStageRuntimeDeletionSafely } from '@/lib/runtime/store';
 import { withRuntimeStorageExclusiveLockUntilSettled } from '@/lib/utils/chat-storage-lock';
 
 describe('deleteStageData runtime cascade', () => {
   it('cascades into the runtime store with the deleted stageId', async () => {
     await deleteStageData('stage-7');
-    expect(vi.mocked(beginStageRuntimeDeletionSafely)).toHaveBeenCalledExactlyOnceWith('stage-7');
     expect(vi.mocked(withRuntimeStorageExclusiveLockUntilSettled)).toHaveBeenCalledOnce();
     expect(deleteDocument).toHaveBeenCalledExactlyOnceWith('stage-7');
     expect(clearCurrentScene).toHaveBeenCalledExactlyOnceWith('stage-7');

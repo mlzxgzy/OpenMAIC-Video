@@ -328,12 +328,47 @@ describe('runtime and assets are keyed by the resolved owner', () => {
       expect(created.status).toBe(404);
       await expect(created.json()).resolves.toMatchObject({ error: { code: 'STAGE_NOT_FOUND' } });
 
-      // Nothing was written behind the refusals.
-      const rows = await pool.query(
+      // The cascade wrote nothing behind the refusals, and the rows the
+      // tombstone reached are gone: the retirement cascades into the runtime
+      // store in its own transaction, so a deleted course keeps no session and
+      // no record beside it.
+      const sessions = await pool.query('SELECT id FROM runtime_sessions WHERE stage_id = $1', [
+        stageId,
+      ]);
+      expect(sessions.rows).toEqual([]);
+      const records = await pool.query(
         'SELECT id FROM runtime_records WHERE session_id = $1 ORDER BY seq',
         ['session-t'],
       );
-      expect(rows.rows).toEqual([{ id: 'record-t-1' }]);
+      expect(records.rows).toEqual([]);
+    });
+
+    it('reclaims a deleted course’s runtime for every learner, not just the deleter', async () => {
+      const stageId = 'stage-tombstoned-shared';
+      // A published course is readable by anyone, so a viewer can hold their
+      // own runtime on it. That is the point of the cascade being
+      // learner-agnostic: the course is gone, so its runtime is gone for them
+      // too — and the browser cannot ask for it, because the runtime contract
+      // has no owner-scoped stage delete.
+      for (const who of ['alice', 'bob'] as const) {
+        await saveCourse('alice', stageId);
+        const learner = who === 'alice' ? ALICE : BOB;
+        const created = await call(who, '/runtime/sessions', {
+          method: 'POST',
+          json: sessionInit(`session-shared-${who}`, stageId, learner),
+        });
+        expect(created.status).toBe(201);
+      }
+
+      expect(
+        (await call('alice', `/documents/${stageId}`, { method: 'DELETE' })).status,
+      ).toBeLessThan(300);
+
+      const rows = await pool.query(
+        'SELECT id, learner_key FROM runtime_sessions WHERE stage_id = $1',
+        [stageId],
+      );
+      expect(rows.rows).toEqual([]);
     });
 
     it.each(['/runtime/%73essions', '/runtime/sess%69ons', '/%72untime/sessions'])(
@@ -366,7 +401,11 @@ describe('runtime and assets are keyed by the resolved owner', () => {
         method: 'POST',
         json: sessionInit('session-hidden', stageId, ALICE),
       });
-      await call('alice', `/documents/${stageId}`, { method: 'DELETE' });
+      // Tombstone the course directly rather than through the route, so the
+      // session really is hidden while really still there: the deletion
+      // cascade now reclaims those rows in the same transaction as the
+      // tombstone, which would leave nothing for this case to hide.
+      await pool.query('UPDATE stage_meta SET deleted_at = $2 WHERE stage_id = $1', [stageId, ISO]);
       expect((await call('alice', '/runtime/sessions/session-hidden')).status).toBe(404);
 
       for (const who of ['alice', 'bob'] as const) {

@@ -42,11 +42,15 @@ export async function getOwnerScopedDocumentStore(
   owner: string | OwnerPrincipal,
   mutationFence?: (queryable: Queryable) => Promise<void>,
 ): Promise<OwnerScopedDocumentStore> {
-  const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+  const { pool, runtimeStoreIn } = await getServerPersistenceProvider(
+    process.env.DATABASE_URL ?? '',
+  );
   return ownerBoundStore(
     pool,
     owner,
     mutationFence,
+    undefined,
+    runtimeStoreIn,
   )(typeof owner === 'string' ? owner : owner.ownerId);
 }
 
@@ -55,6 +59,7 @@ function ownerBoundStore(
   owner: string | OwnerPrincipal,
   mutationFence?: (queryable: Queryable) => Promise<void>,
   generationRunId?: string,
+  runtimeStoreIn?: Parameters<typeof createOwnerBoundDocumentStore>[0]['runtimeStoreIn'],
 ): (ownerId: string) => OwnerScopedDocumentStore {
   // A request passes its resolved principal, so the host create hooks see it;
   // a background run knows only the owner id.
@@ -69,6 +74,7 @@ function ownerBoundStore(
         validateStage: validateAppStage,
         mutationFence,
         ...(generationRunId ? { generationRunId } : {}),
+        ...(runtimeStoreIn ? { runtimeStoreIn } : {}),
       }) as unknown as OwnerScopedDocumentStore,
     );
 }
@@ -86,10 +92,12 @@ export async function getBackgroundDocumentStore(
   /** The generation run writing (its course is read-only to everyone else). */
   generationRunId?: string,
 ): Promise<OwnerScopedDocumentStore> {
-  const { pool } = await getServerPersistenceProvider(process.env.DATABASE_URL ?? '');
+  const { pool, runtimeStoreIn } = await getServerPersistenceProvider(
+    process.env.DATABASE_URL ?? '',
+  );
   return forwardingDocumentStore(
     storedOwnerId,
-    ownerBoundStore(pool, storedOwnerId, mutationFence, generationRunId),
+    ownerBoundStore(pool, storedOwnerId, mutationFence, generationRunId, runtimeStoreIn),
     pool as unknown as Queryable,
   );
 }

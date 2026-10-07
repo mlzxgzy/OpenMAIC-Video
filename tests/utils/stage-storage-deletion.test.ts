@@ -109,12 +109,6 @@ vi.mock('@/lib/media/asset-pool', () => ({
 vi.mock('@/lib/media/use-asset-url', () => ({ assetRefExists }));
 vi.mock('@/lib/playback/cursor', () => ({ clearCursor: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('@/lib/quiz/persistence', () => ({ clearAllForScene: vi.fn() }));
-vi.mock('@/lib/runtime/store', () => ({
-  beginStageRuntimeDeletionSafely: vi.fn(() => ({
-    completion: Promise.resolve(),
-    settlement: Promise.resolve(),
-  })),
-}));
 vi.mock('@/lib/pbl/v2/runtime/drain', () => ({
   clearStageDrainWatermarks: vi.fn().mockResolvedValue(undefined),
 }));

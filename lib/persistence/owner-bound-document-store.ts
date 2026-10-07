@@ -12,6 +12,7 @@ import type {
   DocumentStore,
   DocumentSummary,
   MaicDocument,
+  RuntimeStore,
   SceneLike,
   SceneValidator,
   StageValidator,
@@ -60,6 +61,14 @@ export interface OwnerBoundDocumentStoreOptions {
    * content writes with `COURSE_GENERATING`; the run's own go through.
    */
   generationRunId?: string;
+  /**
+   * The runtime store pinned to the deletion transaction, for the cascade half
+   * of {@link OwnerBoundDocumentStore.deleteDocument}. Unset, the cascade is
+   * skipped: the caller has no such store (a test double, a deployment without
+   * the runtime tables) and runtime rows of the retired course, if any, are
+   * left behind rather than written to by something the caller did not supply.
+   */
+  runtimeStoreIn?: (queryable: Queryable) => Pick<RuntimeStore, 'deleteStageRuntime'>;
   /**
    * The principal the request writing through this store was resolved to.
    * Passed to the create hooks; absent for a background agent run, which
@@ -268,6 +277,10 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
     private readonly ownerId: string,
     /** The same store, pinned to one already-open transaction. See its use. */
     private readonly pinnedToTransaction: (queryable: Queryable) => PgDocumentStore<TScene, TStage>,
+    /** The runtime store pinned to the same transaction. See its use. */
+    private readonly pinnedRuntimeStore?: (
+      queryable: Queryable,
+    ) => Pick<RuntimeStore, 'deleteStageRuntime'>,
   ) {}
 
   /**
@@ -382,6 +395,9 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
    * All of it in one transaction, deliberately. A withdrawal that committed
    * beside a tombstone that did not would free the assets of a course still
    * live and still naming them; the rollback is what makes that unreachable.
+   * The learner-runtime rows go the same way, for the same reason: a cascade
+   * that committed beside a tombstone that did not would delete a live
+   * course's chat, quiz, PBL and playback data.
    */
   async deleteDocument(stageId: string): Promise<void> {
     // The runs the deletion ended, reported to the host once it committed.
@@ -432,6 +448,31 @@ class OwnerBoundDocumentStore<TScene extends SceneLike, TStage extends Stage>
               `absent or not owned by ${this.ownerId}. Its registry entries will not be ` +
               `reclaimed.`,
           );
+        }
+        // The learner-runtime half of the same retirement, in this
+        // transaction, so a course that is retired leaves no runtime rows
+        // behind beside it.
+        //
+        // It is here rather than in the browser because this is where the
+        // ownership question is already settled: `runTransaction` took the
+        // `stage_meta` row `FOR UPDATE` and refused a foreign owner before
+        // this body ran, so the cascade acts on a course this owner holds.
+        // The HTTP route cannot do the same — its `DELETE /runtime/stages/:id`
+        // is an admin capability (`authorizeAdmin`), which this app grants to
+        // nobody, so a browser-driven cascade can only ever be refused. It
+        // also could not be scoped per learner: runtime rows carry only a
+        // stage id, and the store's own contract for this call is deliberately
+        // learner-agnostic ("delete ALL learners' runtime for a stage"), which
+        // is right here — a retired course keeps no runtime for anyone — and
+        // would be a cross-owner deletion if it were reachable from a request.
+        //
+        // Pinned to this transaction for the reason the asset withdrawal above
+        // is: a second connection would contend for rows this one already
+        // holds, and the package's delete is a single statement either way.
+        // The write lock this holds is the `stage_meta` row, so the cascade
+        // also serializes against a claim retiring this owner.
+        if (this.pinnedRuntimeStore) {
+          await this.pinnedRuntimeStore(queryable).deleteStageRuntime(stageId);
         }
       }),
     );
@@ -678,5 +719,6 @@ export function createOwnerBoundDocumentStore<
     withTransaction,
     options.ownerId,
     pinnedToTransaction,
+    ...(options.runtimeStoreIn ? [options.runtimeStoreIn] : []),
   );
 }

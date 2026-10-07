@@ -15,12 +15,6 @@ vi.mock('@/lib/document-store', () => ({
     deleteDocument: vi.fn().mockResolvedValue(undefined),
   })),
 }));
-vi.mock('@/lib/runtime/store', () => ({
-  beginStageRuntimeDeletionSafely: vi.fn(() => ({
-    completion: Promise.resolve(),
-    settlement: Promise.resolve(),
-  })),
-}));
 vi.mock('@/lib/device-storage/database', () => ({
   db: {
     mediaFiles: {
