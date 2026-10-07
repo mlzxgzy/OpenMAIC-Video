@@ -16,6 +16,7 @@ import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
 import type {
+  CourseIndicatorSupportRecord,
   CourseKnowledgeCoverageLevel,
   CourseKnowledgePointRecord,
   CurriculumBatchItemRecord,
@@ -31,6 +32,12 @@ import type {
   CurriculumGenerationJobRecord,
   CurriculumGenerationJobStatus,
   CurriculumGenerationOutlineReview,
+  CurriculumGraduationIndicatorRecord,
+  CurriculumProgramCourseCategory,
+  CurriculumProgramCourseRecord,
+  CurriculumProgramRecord,
+  CurriculumProgramStatus,
+  CurriculumProgramVersionRecord,
   CurriculumRelationRecord,
   CurriculumRelationType,
   CurriculumSeriesRecord,
@@ -726,6 +733,11 @@ export async function listCurriculum(
     batchResult,
     batchItemResult,
     exportJobResult,
+    programResult,
+    programVersionResult,
+    graduationIndicatorResult,
+    programCourseResult,
+    courseIndicatorSupportResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
       `SELECT id, name, description, created_at, updated_at
@@ -797,6 +809,41 @@ export async function listCurriculum(
         ORDER BY created_at DESC`,
       [ownerId],
     ),
+    queryable.query<ProgramRow>(
+      `SELECT ${PROGRAM_COLUMNS}
+         FROM curriculum_program
+        WHERE owner_id = $1
+        ORDER BY lower(name), created_at`,
+      [ownerId],
+    ),
+    queryable.query<ProgramVersionRow>(
+      `SELECT ${PROGRAM_VERSION_COLUMNS}
+         FROM curriculum_program_version
+        WHERE owner_id = $1
+        ORDER BY COALESCE(program_id, ''), created_at`,
+      [ownerId],
+    ),
+    queryable.query<GraduationIndicatorRow>(
+      `SELECT ${GRADUATION_INDICATOR_COLUMNS}
+         FROM curriculum_graduation_indicator
+        WHERE owner_id = $1
+        ORDER BY program_version_id, sort_order, lower(code), created_at`,
+      [ownerId],
+    ),
+    queryable.query<ProgramCourseRow>(
+      `SELECT ${PROGRAM_COURSE_COLUMNS}
+         FROM curriculum_program_course
+        WHERE owner_id = $1
+        ORDER BY program_version_id, sort_order, created_at`,
+      [ownerId],
+    ),
+    queryable.query<CourseIndicatorSupportRow>(
+      `SELECT ${COURSE_INDICATOR_SUPPORT_COLUMNS}
+         FROM curriculum_course_indicator_support
+        WHERE owner_id = $1
+        ORDER BY program_version_id, program_course_id, indicator_id`,
+      [ownerId],
+    ),
   ]);
 
   const courses = courseResult.rows.map(mapCourse);
@@ -817,6 +864,11 @@ export async function listCurriculum(
     batches: batchResult.rows.map(mapBatch),
     batchItems: batchItemResult.rows.map(mapBatchItem),
     exportJobs: exportJobResult.rows.map(mapExportJob),
+    programs: programResult.rows.map(mapProgram),
+    programVersions: programVersionResult.rows.map(mapProgramVersion),
+    graduationIndicators: graduationIndicatorResult.rows.map(mapGraduationIndicator),
+    programCourses: programCourseResult.rows.map(mapProgramCourse),
+    courseIndicatorSupports: courseIndicatorSupportResult.rows.map(mapCourseIndicatorSupport),
   };
 }
 
@@ -2025,4 +2077,738 @@ export async function applyCurriculumExportJobAction(
   const row = result.rows[0];
   if (!row) throw new CurriculumNotFoundError('export job not found');
   return mapExportJob(row);
+}
+
+interface ProgramRow extends Record<string, unknown> {
+  id: string;
+  name: string;
+  code: string | null;
+  description: string | null;
+  status: string;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface ProgramVersionRow extends Record<string, unknown> {
+  id: string;
+  program_id: string;
+  name: string;
+  version: string | null;
+  grade_year: string | null;
+  description: string | null;
+  status: string;
+  target_credits: number | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface GraduationIndicatorRow extends Record<string, unknown> {
+  id: string;
+  program_version_id: string;
+  code: string;
+  title: string;
+  description: string | null;
+  target_weight: number | string;
+  sort_order: number | string;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface ProgramCourseRow extends Record<string, unknown> {
+  id: string;
+  program_version_id: string;
+  course_id: string | null;
+  title: string;
+  code: string | null;
+  semester: string | null;
+  category: string;
+  credits: number | string | null;
+  hours: number | string | null;
+  sort_order: number | string;
+  note: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface CourseIndicatorSupportRow extends Record<string, unknown> {
+  id: string;
+  program_version_id: string;
+  program_course_id: string;
+  indicator_id: string;
+  weight: number | string;
+  note: string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+const PROGRAM_COLUMNS = `id, name, code, description, status, created_at, updated_at`;
+
+const PROGRAM_VERSION_COLUMNS = `id, program_id, name, version, grade_year, description,
+       status, target_credits, created_at, updated_at`;
+
+const GRADUATION_INDICATOR_COLUMNS = `id, program_version_id, code, title, description,
+       target_weight, sort_order, created_at, updated_at`;
+
+const PROGRAM_COURSE_COLUMNS = `id, program_version_id, course_id, title, code, semester,
+       category, credits, hours, sort_order, note, created_at, updated_at`;
+
+const COURSE_INDICATOR_SUPPORT_COLUMNS = `id, program_version_id, program_course_id,
+       indicator_id, weight, note, created_at, updated_at`;
+
+function mapProgram(row: ProgramRow): CurriculumProgramRecord {
+  return {
+    id: row.id,
+    name: row.name,
+    code: row.code,
+    description: row.description,
+    status: row.status as CurriculumProgramStatus,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapProgramVersion(row: ProgramVersionRow): CurriculumProgramVersionRecord {
+  return {
+    id: row.id,
+    programId: row.program_id,
+    name: row.name,
+    version: row.version,
+    gradeYear: row.grade_year,
+    description: row.description,
+    status: row.status as CurriculumProgramStatus,
+    targetCredits: nullableNumeric(row.target_credits),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapGraduationIndicator(row: GraduationIndicatorRow): CurriculumGraduationIndicatorRecord {
+  return {
+    id: row.id,
+    programVersionId: row.program_version_id,
+    code: row.code,
+    title: row.title,
+    description: row.description,
+    targetWeight: numeric(row.target_weight),
+    sortOrder: numeric(row.sort_order),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapProgramCourse(row: ProgramCourseRow): CurriculumProgramCourseRecord {
+  return {
+    id: row.id,
+    programVersionId: row.program_version_id,
+    courseId: row.course_id,
+    title: row.title,
+    code: row.code,
+    semester: row.semester,
+    category: row.category as CurriculumProgramCourseCategory,
+    credits: nullableNumeric(row.credits),
+    hours: nullableNumeric(row.hours),
+    sortOrder: numeric(row.sort_order),
+    note: row.note,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapCourseIndicatorSupport(row: CourseIndicatorSupportRow): CourseIndicatorSupportRecord {
+  return {
+    id: row.id,
+    programVersionId: row.program_version_id,
+    programCourseId: row.program_course_id,
+    indicatorId: row.indicator_id,
+    weight: numeric(row.weight),
+    note: row.note,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+export interface CurriculumProgramInput {
+  name: string;
+  code?: string | null;
+  description?: string | null;
+  status?: CurriculumProgramStatus;
+}
+
+export type CurriculumProgramPatch = Partial<CurriculumProgramInput>;
+
+export interface CurriculumProgramVersionInput {
+  programId: string;
+  name: string;
+  version?: string | null;
+  gradeYear?: string | null;
+  description?: string | null;
+  status?: CurriculumProgramStatus;
+  targetCredits?: number | null;
+}
+
+export type CurriculumProgramVersionPatch = Partial<
+  Omit<CurriculumProgramVersionInput, 'programId'>
+>;
+
+export interface CurriculumGraduationIndicatorInput {
+  programVersionId: string;
+  code: string;
+  title: string;
+  description?: string | null;
+  targetWeight?: number;
+  sortOrder?: number;
+}
+
+export type CurriculumGraduationIndicatorPatch = Partial<
+  Omit<CurriculumGraduationIndicatorInput, 'programVersionId'>
+>;
+
+export interface CurriculumProgramCourseInput {
+  programVersionId: string;
+  courseId?: string | null;
+  title: string;
+  code?: string | null;
+  semester?: string | null;
+  category?: CurriculumProgramCourseCategory;
+  credits?: number | null;
+  hours?: number | null;
+  sortOrder?: number;
+  note?: string | null;
+}
+
+export type CurriculumProgramCoursePatch = Partial<
+  Omit<CurriculumProgramCourseInput, 'programVersionId'>
+>;
+
+export interface CourseIndicatorSupportInput {
+  indicatorId: string;
+  weight: number;
+  note?: string | null;
+}
+
+async function readProgramRow(
+  queryable: Queryable,
+  ownerId: string,
+  programId: string,
+): Promise<ProgramRow | null> {
+  const result = await queryable.query<ProgramRow>(
+    `SELECT ${PROGRAM_COLUMNS} FROM curriculum_program WHERE owner_id = $1 AND id = $2`,
+    [ownerId, programId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function assertProgramOwned(
+  queryable: Queryable,
+  ownerId: string,
+  programId: string | null | undefined,
+): Promise<void> {
+  if (!programId) return;
+  const row = await readProgramRow(queryable, ownerId, programId);
+  if (!row) throw new CurriculumNotFoundError('program not found');
+}
+
+async function readProgramVersionRow(
+  queryable: Queryable,
+  ownerId: string,
+  programVersionId: string,
+): Promise<ProgramVersionRow | null> {
+  const result = await queryable.query<ProgramVersionRow>(
+    `SELECT ${PROGRAM_VERSION_COLUMNS}
+       FROM curriculum_program_version
+      WHERE owner_id = $1 AND id = $2`,
+    [ownerId, programVersionId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function assertProgramVersionOwned(
+  queryable: Queryable,
+  ownerId: string,
+  programVersionId: string | null | undefined,
+): Promise<void> {
+  if (!programVersionId) return;
+  const row = await readProgramVersionRow(queryable, ownerId, programVersionId);
+  if (!row) throw new CurriculumNotFoundError('program version not found');
+}
+
+async function readProgramCourseRow(
+  queryable: Queryable,
+  ownerId: string,
+  programCourseId: string,
+): Promise<ProgramCourseRow | null> {
+  const result = await queryable.query<ProgramCourseRow>(
+    `SELECT ${PROGRAM_COURSE_COLUMNS}
+       FROM curriculum_program_course
+      WHERE owner_id = $1 AND id = $2`,
+    [ownerId, programCourseId],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function assertIndicatorOwned(
+  queryable: Queryable,
+  ownerId: string,
+  indicatorId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'SELECT id FROM curriculum_graduation_indicator WHERE owner_id = $1 AND id = $2',
+    [ownerId, indicatorId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('graduation indicator not found');
+}
+
+/** Create a program, or update its metadata when the owner already has one by that name. */
+export async function createCurriculumProgram(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumProgramInput,
+): Promise<CurriculumProgramRecord> {
+  const name = optionalText(input.name);
+  if (!name) throw new CurriculumValidationError('name is required');
+  if (name.length > 240) throw new CurriculumValidationError('name is too long');
+  const result = await queryable.query<ProgramRow>(
+    `INSERT INTO curriculum_program
+       (id, owner_id, name, code, description, status)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (owner_id, name) DO UPDATE
+       SET code = EXCLUDED.code,
+           description = EXCLUDED.description,
+           status = EXCLUDED.status,
+           updated_at = now()
+     RETURNING ${PROGRAM_COLUMNS}`,
+    [
+      createId('program'),
+      ownerId,
+      name,
+      optionalText(input.code),
+      optionalText(input.description),
+      input.status ?? 'active',
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumValidationError('program could not be created');
+  return mapProgram(row);
+}
+
+export async function updateCurriculumProgram(
+  queryable: Queryable,
+  ownerId: string,
+  programId: string,
+  patch: CurriculumProgramPatch,
+): Promise<CurriculumProgramRecord> {
+  const existing = await readProgramRow(queryable, ownerId, programId);
+  if (!existing) throw new CurriculumNotFoundError('program not found');
+  const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
+  if (!nextName) throw new CurriculumValidationError('name is required');
+  try {
+    const result = await queryable.query<ProgramRow>(
+      `UPDATE curriculum_program
+          SET name = $3,
+              code = $4,
+              description = $5,
+              status = $6,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${PROGRAM_COLUMNS}`,
+      [
+        ownerId,
+        programId,
+        nextName,
+        patch.code !== undefined ? optionalText(patch.code) : existing.code,
+        patch.description !== undefined ? optionalText(patch.description) : existing.description,
+        patch.status !== undefined ? patch.status : existing.status,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('program not found');
+    return mapProgram(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('this owner already has a program with that name');
+    }
+    throw error;
+  }
+}
+
+export async function deleteCurriculumProgram(
+  queryable: Queryable,
+  ownerId: string,
+  programId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_program WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, programId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('program not found');
+}
+
+export async function createCurriculumProgramVersion(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumProgramVersionInput,
+): Promise<CurriculumProgramVersionRecord> {
+  const name = optionalText(input.name);
+  if (!name) throw new CurriculumValidationError('name is required');
+  await assertProgramOwned(queryable, ownerId, input.programId);
+  try {
+    const result = await queryable.query<ProgramVersionRow>(
+      `INSERT INTO curriculum_program_version
+         (id, owner_id, program_id, name, version, grade_year, description, status, target_credits)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING ${PROGRAM_VERSION_COLUMNS}`,
+      [
+        createId('program-version'),
+        ownerId,
+        input.programId,
+        name,
+        optionalText(input.version),
+        optionalText(input.gradeYear),
+        optionalText(input.description),
+        input.status ?? 'draft',
+        input.targetCredits ?? null,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('program version could not be created');
+    return mapProgramVersion(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('this program already has a version with that name');
+    }
+    throw error;
+  }
+}
+
+export async function updateCurriculumProgramVersion(
+  queryable: Queryable,
+  ownerId: string,
+  programVersionId: string,
+  patch: CurriculumProgramVersionPatch,
+): Promise<CurriculumProgramVersionRecord> {
+  const existing = await readProgramVersionRow(queryable, ownerId, programVersionId);
+  if (!existing) throw new CurriculumNotFoundError('program version not found');
+  const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
+  if (!nextName) throw new CurriculumValidationError('name is required');
+  try {
+    const result = await queryable.query<ProgramVersionRow>(
+      `UPDATE curriculum_program_version
+          SET name = $3,
+              version = $4,
+              grade_year = $5,
+              description = $6,
+              status = $7,
+              target_credits = $8,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${PROGRAM_VERSION_COLUMNS}`,
+      [
+        ownerId,
+        programVersionId,
+        nextName,
+        patch.version !== undefined ? optionalText(patch.version) : existing.version,
+        patch.gradeYear !== undefined ? optionalText(patch.gradeYear) : existing.grade_year,
+        patch.description !== undefined ? optionalText(patch.description) : existing.description,
+        patch.status !== undefined ? patch.status : existing.status,
+        patch.targetCredits !== undefined
+          ? patch.targetCredits
+          : nullableNumeric(existing.target_credits),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('program version not found');
+    return mapProgramVersion(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('this program already has a version with that name');
+    }
+    throw error;
+  }
+}
+
+export async function deleteCurriculumProgramVersion(
+  queryable: Queryable,
+  ownerId: string,
+  programVersionId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_program_version WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, programVersionId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('program version not found');
+}
+
+export async function createGraduationIndicator(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumGraduationIndicatorInput,
+): Promise<CurriculumGraduationIndicatorRecord> {
+  const code = optionalText(input.code);
+  const title = optionalText(input.title);
+  if (!code) throw new CurriculumValidationError('code is required');
+  if (!title) throw new CurriculumValidationError('title is required');
+  await assertProgramVersionOwned(queryable, ownerId, input.programVersionId);
+  try {
+    const result = await queryable.query<GraduationIndicatorRow>(
+      `INSERT INTO curriculum_graduation_indicator
+         (id, owner_id, program_version_id, code, title, description, target_weight, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING ${GRADUATION_INDICATOR_COLUMNS}`,
+      [
+        createId('indicator'),
+        ownerId,
+        input.programVersionId,
+        code,
+        title,
+        optionalText(input.description),
+        input.targetWeight ?? 3,
+        input.sortOrder ?? 0,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('indicator could not be created');
+    return mapGraduationIndicator(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError(
+        'this program version already has an indicator with that code',
+      );
+    }
+    throw error;
+  }
+}
+
+export async function updateGraduationIndicator(
+  queryable: Queryable,
+  ownerId: string,
+  indicatorId: string,
+  patch: CurriculumGraduationIndicatorPatch,
+): Promise<CurriculumGraduationIndicatorRecord> {
+  const existingResult = await queryable.query<GraduationIndicatorRow>(
+    `SELECT ${GRADUATION_INDICATOR_COLUMNS}
+       FROM curriculum_graduation_indicator
+      WHERE owner_id = $1 AND id = $2`,
+    [ownerId, indicatorId],
+  );
+  const existing = existingResult.rows[0];
+  if (!existing) throw new CurriculumNotFoundError('graduation indicator not found');
+  const code = patch.code !== undefined ? optionalText(patch.code) : existing.code;
+  const title = patch.title !== undefined ? optionalText(patch.title) : existing.title;
+  if (!code) throw new CurriculumValidationError('code is required');
+  if (!title) throw new CurriculumValidationError('title is required');
+  try {
+    const result = await queryable.query<GraduationIndicatorRow>(
+      `UPDATE curriculum_graduation_indicator
+          SET code = $3,
+              title = $4,
+              description = $5,
+              target_weight = $6,
+              sort_order = $7,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${GRADUATION_INDICATOR_COLUMNS}`,
+      [
+        ownerId,
+        indicatorId,
+        code,
+        title,
+        patch.description !== undefined ? optionalText(patch.description) : existing.description,
+        patch.targetWeight !== undefined ? patch.targetWeight : numeric(existing.target_weight),
+        patch.sortOrder !== undefined ? patch.sortOrder : numeric(existing.sort_order),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('graduation indicator not found');
+    return mapGraduationIndicator(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError(
+        'this program version already has an indicator with that code',
+      );
+    }
+    throw error;
+  }
+}
+
+export async function deleteGraduationIndicator(
+  queryable: Queryable,
+  ownerId: string,
+  indicatorId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_graduation_indicator WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, indicatorId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('graduation indicator not found');
+}
+
+export async function createCurriculumProgramCourse(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumProgramCourseInput,
+): Promise<CurriculumProgramCourseRecord> {
+  await assertProgramVersionOwned(queryable, ownerId, input.programVersionId);
+  if (input.courseId) await assertCourseOwned(queryable, ownerId, input.courseId);
+  let title = optionalText(input.title);
+  if (!title && input.courseId) {
+    const course = await readCourseRow(queryable, ownerId, input.courseId);
+    title = course?.title ?? null;
+  }
+  if (!title) throw new CurriculumValidationError('title is required');
+  try {
+    const result = await queryable.query<ProgramCourseRow>(
+      `INSERT INTO curriculum_program_course
+         (id, owner_id, program_version_id, course_id, title, code, semester, category,
+          credits, hours, sort_order, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING ${PROGRAM_COURSE_COLUMNS}`,
+      [
+        createId('program-course'),
+        ownerId,
+        input.programVersionId,
+        input.courseId ?? null,
+        title,
+        optionalText(input.code),
+        optionalText(input.semester),
+        input.category ?? 'required',
+        input.credits ?? null,
+        input.hours ?? null,
+        input.sortOrder ?? 0,
+        optionalText(input.note),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('program course could not be created');
+    return mapProgramCourse(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('this course is already in the program version');
+    }
+    throw error;
+  }
+}
+
+export async function updateCurriculumProgramCourse(
+  queryable: Queryable,
+  ownerId: string,
+  programCourseId: string,
+  patch: CurriculumProgramCoursePatch,
+): Promise<CurriculumProgramCourseRecord> {
+  const existing = await readProgramCourseRow(queryable, ownerId, programCourseId);
+  if (!existing) throw new CurriculumNotFoundError('program course not found');
+  const nextCourseId = patch.courseId !== undefined ? patch.courseId : existing.course_id;
+  if (nextCourseId) await assertCourseOwned(queryable, ownerId, nextCourseId);
+  let nextTitle = patch.title !== undefined ? optionalText(patch.title) : existing.title;
+  if (!nextTitle && nextCourseId) {
+    const course = await readCourseRow(queryable, ownerId, nextCourseId);
+    nextTitle = course?.title ?? null;
+  }
+  if (!nextTitle) throw new CurriculumValidationError('title is required');
+  try {
+    const result = await queryable.query<ProgramCourseRow>(
+      `UPDATE curriculum_program_course
+          SET course_id = $3,
+              title = $4,
+              code = $5,
+              semester = $6,
+              category = $7,
+              credits = $8,
+              hours = $9,
+              sort_order = $10,
+              note = $11,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${PROGRAM_COURSE_COLUMNS}`,
+      [
+        ownerId,
+        programCourseId,
+        nextCourseId ?? null,
+        nextTitle,
+        patch.code !== undefined ? optionalText(patch.code) : existing.code,
+        patch.semester !== undefined ? optionalText(patch.semester) : existing.semester,
+        patch.category !== undefined ? patch.category : existing.category,
+        patch.credits !== undefined ? patch.credits : nullableNumeric(existing.credits),
+        patch.hours !== undefined ? patch.hours : nullableNumeric(existing.hours),
+        patch.sortOrder !== undefined ? patch.sortOrder : numeric(existing.sort_order),
+        patch.note !== undefined ? optionalText(patch.note) : existing.note,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('program course not found');
+    return mapProgramCourse(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('this course is already in the program version');
+    }
+    throw error;
+  }
+}
+
+export async function deleteCurriculumProgramCourse(
+  queryable: Queryable,
+  ownerId: string,
+  programCourseId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_program_course WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, programCourseId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('program course not found');
+}
+
+/**
+ * Replace all graduation-indicator support rows for one planned course. Each
+ * indicator must belong to the same program version as the planned course.
+ */
+export async function setCourseIndicatorSupports(
+  queryable: Queryable,
+  ownerId: string,
+  programCourseId: string,
+  supports: CourseIndicatorSupportInput[],
+): Promise<CourseIndicatorSupportRecord[]> {
+  const programCourse = await readProgramCourseRow(queryable, ownerId, programCourseId);
+  if (!programCourse) throw new CurriculumNotFoundError('program course not found');
+  for (const support of supports) {
+    await assertIndicatorOwned(queryable, ownerId, support.indicatorId);
+  }
+  const indicatorIds = supports.map((support) => support.indicatorId);
+  if (indicatorIds.length > 0) {
+    const mismatched = await queryable.query<{ id: string } & Record<string, unknown>>(
+      `SELECT id
+         FROM curriculum_graduation_indicator
+        WHERE owner_id = $1
+          AND id = ANY($2::text[])
+          AND program_version_id <> $3`,
+      [ownerId, indicatorIds, programCourse.program_version_id],
+    );
+    if (mismatched.rows.length > 0) {
+      throw new CurriculumValidationError('indicator does not belong to this program version');
+    }
+  }
+  await queryable.query(
+    'DELETE FROM curriculum_course_indicator_support WHERE owner_id = $1 AND program_course_id = $2',
+    [ownerId, programCourseId],
+  );
+  const inserted: CourseIndicatorSupportRecord[] = [];
+  for (const support of supports) {
+    const result = await queryable.query<CourseIndicatorSupportRow>(
+      `INSERT INTO curriculum_course_indicator_support
+         (id, owner_id, program_version_id, program_course_id, indicator_id, weight, note)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING ${COURSE_INDICATOR_SUPPORT_COLUMNS}`,
+      [
+        createId('support'),
+        ownerId,
+        programCourse.program_version_id,
+        programCourseId,
+        support.indicatorId,
+        support.weight,
+        optionalText(support.note),
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('support could not be created');
+    inserted.push(mapCourseIndicatorSupport(row));
+  }
+  return inserted;
 }

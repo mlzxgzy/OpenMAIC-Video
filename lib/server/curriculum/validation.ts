@@ -2,6 +2,8 @@ import {
   COURSE_KNOWLEDGE_COVERAGE_LEVELS,
   CURRICULUM_COURSE_STATUSES,
   CURRICULUM_GENERATION_OUTLINE_REVIEWS,
+  CURRICULUM_PROGRAM_COURSE_CATEGORIES,
+  CURRICULUM_PROGRAM_STATUSES,
   CURRICULUM_RELATION_TYPES,
   KNOWLEDGE_POINT_DIFFICULTIES,
   KNOWLEDGE_POINT_RELATION_TYPES,
@@ -9,6 +11,8 @@ import {
   type CourseKnowledgeCoverageLevel,
   type CurriculumCourseStatus,
   type CurriculumGenerationOutlineReview,
+  type CurriculumProgramCourseCategory,
+  type CurriculumProgramStatus,
   type CurriculumRelationType,
   type KnowledgePointDifficulty,
   type KnowledgePointRelationType,
@@ -806,4 +810,279 @@ export function parseCurriculumExportJobAction(
     ok: false,
     message: 'action must be one of attach-render, progress, complete, fail, retry, cancel',
   };
+}
+
+export interface ParsedProgramInput {
+  name?: string;
+  code?: string | null;
+  description?: string | null;
+  status?: CurriculumProgramStatus;
+}
+
+export function parseProgramInput(
+  body: unknown,
+  options: { requireName: boolean },
+): ParseResult<ParsedProgramInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const value: ParsedProgramInput = {};
+  const name = record.name;
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      return { ok: false, message: 'name must be a non-empty string' };
+    }
+    value.name = name.trim();
+  } else if (options.requireName) {
+    return { ok: false, message: 'name is required' };
+  }
+  for (const key of ['code', 'description'] as const) {
+    const parsed = readOptionalText(record, key);
+    if (isParseFailure(parsed)) return parsed;
+    if (parsed !== undefined) value[key] = parsed;
+  }
+  if ('status' in record) {
+    const status = record.status;
+    if (!CURRICULUM_PROGRAM_STATUSES.includes(status as CurriculumProgramStatus)) {
+      return {
+        ok: false,
+        message: `status must be one of ${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
+      };
+    }
+    value.status = status as CurriculumProgramStatus;
+  }
+  return { ok: true, value };
+}
+
+export interface ParsedProgramVersionInput {
+  programId?: string;
+  name?: string;
+  version?: string | null;
+  gradeYear?: string | null;
+  description?: string | null;
+  status?: CurriculumProgramStatus;
+  targetCredits?: number | null;
+}
+
+export function parseProgramVersionInput(
+  body: unknown,
+  options: { requireProgramId: boolean; requireName: boolean },
+): ParseResult<ParsedProgramVersionInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const value: ParsedProgramVersionInput = {};
+  const programId = record.programId;
+  if (programId !== undefined) {
+    if (typeof programId !== 'string' || programId.trim().length === 0) {
+      return { ok: false, message: 'programId must be a non-empty string' };
+    }
+    value.programId = programId.trim();
+  } else if (options.requireProgramId) {
+    return { ok: false, message: 'programId is required' };
+  }
+  const name = record.name;
+  if (name !== undefined) {
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      return { ok: false, message: 'name must be a non-empty string' };
+    }
+    value.name = name.trim();
+  } else if (options.requireName) {
+    return { ok: false, message: 'name is required' };
+  }
+  for (const key of ['version', 'gradeYear', 'description'] as const) {
+    const parsed = readOptionalText(record, key);
+    if (isParseFailure(parsed)) return parsed;
+    if (parsed !== undefined) value[key] = parsed;
+  }
+  if ('status' in record) {
+    const status = record.status;
+    if (!CURRICULUM_PROGRAM_STATUSES.includes(status as CurriculumProgramStatus)) {
+      return {
+        ok: false,
+        message: `status must be one of ${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
+      };
+    }
+    value.status = status as CurriculumProgramStatus;
+  }
+  const targetCredits = readOptionalNumber(record, 'targetCredits');
+  if (isParseFailure(targetCredits)) return targetCredits;
+  if (targetCredits !== undefined) value.targetCredits = targetCredits;
+  return { ok: true, value };
+}
+
+export interface ParsedGraduationIndicatorInput {
+  programVersionId?: string;
+  code?: string;
+  title?: string;
+  description?: string | null;
+  targetWeight?: number;
+  sortOrder?: number;
+}
+
+export function parseGraduationIndicatorInput(
+  body: unknown,
+  options: { requireProgramVersionId: boolean; requireCode: boolean; requireTitle: boolean },
+): ParseResult<ParsedGraduationIndicatorInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const value: ParsedGraduationIndicatorInput = {};
+  const programVersionId = record.programVersionId;
+  if (programVersionId !== undefined) {
+    if (typeof programVersionId !== 'string' || programVersionId.trim().length === 0) {
+      return { ok: false, message: 'programVersionId must be a non-empty string' };
+    }
+    value.programVersionId = programVersionId.trim();
+  } else if (options.requireProgramVersionId) {
+    return { ok: false, message: 'programVersionId is required' };
+  }
+  for (const key of ['code', 'title'] as const) {
+    const valueAtKey = record[key];
+    if (valueAtKey !== undefined) {
+      if (typeof valueAtKey !== 'string' || valueAtKey.trim().length === 0) {
+        return { ok: false, message: `${key} must be a non-empty string` };
+      }
+      value[key] = valueAtKey.trim();
+    } else if (
+      (key === 'code' && options.requireCode) ||
+      (key === 'title' && options.requireTitle)
+    ) {
+      return { ok: false, message: `${key} is required` };
+    }
+  }
+  const description = readOptionalText(record, 'description');
+  if (isParseFailure(description)) return description;
+  if (description !== undefined) value.description = description;
+  const targetWeight = readOptionalNumber(record, 'targetWeight');
+  if (isParseFailure(targetWeight)) return targetWeight;
+  if (targetWeight !== undefined) {
+    if (
+      targetWeight === null ||
+      !Number.isInteger(targetWeight) ||
+      targetWeight < 1 ||
+      targetWeight > 10
+    ) {
+      return { ok: false, message: 'targetWeight must be an integer between 1 and 10' };
+    }
+    value.targetWeight = targetWeight;
+  }
+  const sortOrder = readOptionalNumber(record, 'sortOrder');
+  if (isParseFailure(sortOrder)) return sortOrder;
+  if (sortOrder !== undefined) {
+    if (sortOrder === null || !Number.isInteger(sortOrder)) {
+      return { ok: false, message: 'sortOrder must be an integer or null' };
+    }
+    value.sortOrder = sortOrder;
+  }
+  return { ok: true, value };
+}
+
+export interface ParsedProgramCourseInput {
+  programVersionId?: string;
+  courseId?: string | null;
+  title?: string | null;
+  code?: string | null;
+  semester?: string | null;
+  category?: CurriculumProgramCourseCategory;
+  credits?: number | null;
+  hours?: number | null;
+  sortOrder?: number;
+  note?: string | null;
+}
+
+export function parseProgramCourseInput(
+  body: unknown,
+  options: { requireProgramVersionId: boolean },
+): ParseResult<ParsedProgramCourseInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const value: ParsedProgramCourseInput = {};
+  const programVersionId = record.programVersionId;
+  if (programVersionId !== undefined) {
+    if (typeof programVersionId !== 'string' || programVersionId.trim().length === 0) {
+      return { ok: false, message: 'programVersionId must be a non-empty string' };
+    }
+    value.programVersionId = programVersionId.trim();
+  } else if (options.requireProgramVersionId) {
+    return { ok: false, message: 'programVersionId is required' };
+  }
+  const courseId = readOptionalText(record, 'courseId');
+  if (isParseFailure(courseId)) return courseId;
+  if (courseId !== undefined) value.courseId = courseId;
+  for (const key of ['title', 'code', 'semester', 'note'] as const) {
+    const parsed = readOptionalText(record, key);
+    if (isParseFailure(parsed)) return parsed;
+    if (parsed !== undefined) {
+      if (key === 'title' && parsed !== null && parsed.trim().length === 0) {
+        return { ok: false, message: 'title must be a non-empty string or null' };
+      }
+      value[key] = parsed;
+    }
+  }
+  if ('category' in record) {
+    const category = record.category;
+    if (
+      !CURRICULUM_PROGRAM_COURSE_CATEGORIES.includes(category as CurriculumProgramCourseCategory)
+    ) {
+      return {
+        ok: false,
+        message: `category must be one of ${CURRICULUM_PROGRAM_COURSE_CATEGORIES.join(', ')}`,
+      };
+    }
+    value.category = category as CurriculumProgramCourseCategory;
+  }
+  for (const key of ['credits', 'hours'] as const) {
+    const parsed = readOptionalNumber(record, key);
+    if (isParseFailure(parsed)) return parsed;
+    if (parsed !== undefined) value[key] = parsed;
+  }
+  const sortOrder = readOptionalNumber(record, 'sortOrder');
+  if (isParseFailure(sortOrder)) return sortOrder;
+  if (sortOrder !== undefined) {
+    if (sortOrder === null || !Number.isInteger(sortOrder)) {
+      return { ok: false, message: 'sortOrder must be an integer or null' };
+    }
+    value.sortOrder = sortOrder;
+  }
+  return { ok: true, value };
+}
+
+export interface ParsedCourseIndicatorSupportsInput {
+  supports: Array<{ indicatorId: string; weight: number; note?: string | null }>;
+}
+
+export function parseCourseIndicatorSupportsInput(
+  body: unknown,
+): ParseResult<ParsedCourseIndicatorSupportsInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const rawSupports = record.supports;
+  if (!Array.isArray(rawSupports)) return { ok: false, message: 'supports must be an array' };
+  const seen = new Set<string>();
+  const supports: ParsedCourseIndicatorSupportsInput['supports'] = [];
+  for (const rawSupport of rawSupports) {
+    const support = asRecord(rawSupport);
+    if (!support) return { ok: false, message: 'each support must be a JSON object' };
+    if (typeof support.indicatorId !== 'string' || support.indicatorId.trim().length === 0) {
+      return { ok: false, message: 'indicatorId is required for each support' };
+    }
+    const indicatorId = support.indicatorId.trim();
+    if (seen.has(indicatorId)) {
+      return { ok: false, message: 'indicatorId must not be duplicated' };
+    }
+    seen.add(indicatorId);
+    const weight = readOptionalNumber(support, 'weight');
+    if (isParseFailure(weight)) return weight;
+    if (
+      weight === undefined ||
+      weight === null ||
+      !Number.isInteger(weight) ||
+      weight < 0 ||
+      weight > 5
+    ) {
+      return { ok: false, message: 'weight must be an integer between 0 and 5' };
+    }
+    const note = readOptionalText(support, 'note');
+    if (isParseFailure(note)) return note;
+    supports.push({ indicatorId, weight, note: note === undefined ? undefined : note });
+  }
+  return { ok: true, value: { supports } };
 }

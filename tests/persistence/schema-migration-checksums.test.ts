@@ -228,6 +228,13 @@ const SHIPPED: readonly (readonly [
     true,
     '5a64e968a81460d905d01ebe6bf12aa94cedbb217684f061552ca73fedda174f',
   ],
+  [
+    'curriculum',
+    7,
+    'program_plan',
+    true,
+    'ab73309d438b62690f534d760fc1d387b5da2f1a8b030cfd0b3fc81ab3e67851',
+  ],
 ];
 
 /**

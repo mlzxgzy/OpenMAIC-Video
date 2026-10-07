@@ -307,6 +307,124 @@ CREATE INDEX IF NOT EXISTS curriculum_export_job_stage_idx
   ON curriculum_export_job (owner_id, stage_id, created_at);
 `;
 
+/**
+ * Program-plan layer: a training program (专业/方向), its published versions
+ * (培养方案版本), graduation indicators (毕业要求/指标点), the planned course
+ * list (课程-学期), and the course-indicator support matrix. The matrix points
+ * at `curriculum_program_course`, not directly at `curriculum_course`, so a
+ * planned slot can be scored before a generated classroom exists.
+ */
+const CURRICULUM_PROGRAM_PLAN_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_program (
+  id          TEXT PRIMARY KEY,
+  owner_id    TEXT NOT NULL,
+  name        TEXT NOT NULL,
+  code        TEXT,
+  description TEXT,
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (owner_id, name),
+  CONSTRAINT curriculum_program_status_known CHECK
+    (status IN ('draft','active','archived'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_program_owner_status_idx
+  ON curriculum_program (owner_id, status, created_at);
+
+CREATE TABLE IF NOT EXISTS curriculum_program_version (
+  id             TEXT PRIMARY KEY,
+  owner_id       TEXT NOT NULL,
+  program_id     TEXT NOT NULL REFERENCES curriculum_program(id) ON DELETE CASCADE,
+  name           TEXT NOT NULL,
+  version        TEXT,
+  grade_year     TEXT,
+  description    TEXT,
+  status         TEXT NOT NULL DEFAULT 'draft',
+  target_credits DOUBLE PRECISION,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (program_id, name),
+  CONSTRAINT curriculum_program_version_status_known CHECK
+    (status IN ('draft','active','archived')),
+  CONSTRAINT curriculum_program_version_credits_nonnegative CHECK
+    (target_credits IS NULL OR target_credits >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_program_version_program_idx
+  ON curriculum_program_version (owner_id, program_id, created_at);
+
+CREATE TABLE IF NOT EXISTS curriculum_graduation_indicator (
+  id                 TEXT PRIMARY KEY,
+  owner_id           TEXT NOT NULL,
+  program_version_id TEXT NOT NULL REFERENCES curriculum_program_version(id) ON DELETE CASCADE,
+  code               TEXT NOT NULL,
+  title              TEXT NOT NULL,
+  description        TEXT,
+  target_weight      INTEGER NOT NULL DEFAULT 3,
+  sort_order         INTEGER NOT NULL DEFAULT 0,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (program_version_id, code),
+  CONSTRAINT curriculum_graduation_indicator_weight_known CHECK
+    (target_weight BETWEEN 1 AND 10)
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_graduation_indicator_version_idx
+  ON curriculum_graduation_indicator (owner_id, program_version_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS curriculum_program_course (
+  id                 TEXT PRIMARY KEY,
+  owner_id           TEXT NOT NULL,
+  program_version_id TEXT NOT NULL REFERENCES curriculum_program_version(id) ON DELETE CASCADE,
+  course_id          TEXT REFERENCES curriculum_course(id) ON DELETE SET NULL,
+  title              TEXT NOT NULL,
+  code               TEXT,
+  semester           TEXT,
+  category           TEXT NOT NULL DEFAULT 'required',
+  credits            DOUBLE PRECISION,
+  hours              DOUBLE PRECISION,
+  sort_order         INTEGER NOT NULL DEFAULT 0,
+  note               TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_program_course_category_known CHECK
+    (category IN ('required','elective','practice','general')),
+  CONSTRAINT curriculum_program_course_credits_nonnegative CHECK
+    (credits IS NULL OR credits >= 0),
+  CONSTRAINT curriculum_program_course_hours_nonnegative CHECK
+    (hours IS NULL OR hours >= 0)
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_program_course_version_idx
+  ON curriculum_program_course (owner_id, program_version_id, sort_order, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_program_course_version_course_idx
+  ON curriculum_program_course (program_version_id, course_id)
+  WHERE course_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS curriculum_course_indicator_support (
+  id                TEXT PRIMARY KEY,
+  owner_id          TEXT NOT NULL,
+  program_version_id TEXT NOT NULL REFERENCES curriculum_program_version(id) ON DELETE CASCADE,
+  program_course_id TEXT NOT NULL REFERENCES curriculum_program_course(id) ON DELETE CASCADE,
+  indicator_id      TEXT NOT NULL REFERENCES curriculum_graduation_indicator(id) ON DELETE CASCADE,
+  weight            INTEGER NOT NULL DEFAULT 1,
+  note              TEXT,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (program_course_id, indicator_id),
+  CONSTRAINT curriculum_course_indicator_support_weight_known CHECK
+    (weight BETWEEN 0 AND 5)
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_course_indicator_support_version_idx
+  ON curriculum_course_indicator_support (owner_id, program_version_id, indicator_id);
+
+CREATE INDEX IF NOT EXISTS curriculum_course_indicator_support_course_idx
+  ON curriculum_course_indicator_support (owner_id, program_course_id);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -339,6 +457,12 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 6,
       name: 'export_jobs',
       up: CURRICULUM_EXPORT_JOBS_SCHEMA,
+      transaction: true,
+    },
+    {
+      version: 7,
+      name: 'program_plan',
+      up: CURRICULUM_PROGRAM_PLAN_SCHEMA,
       transaction: true,
     },
   ],

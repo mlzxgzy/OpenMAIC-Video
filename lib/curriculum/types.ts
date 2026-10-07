@@ -200,6 +200,80 @@ export interface CurriculumBatchItemRecord {
   updatedAt: string;
 }
 
+/** Program-plan layer: a training program, its versions and graduation indicators. */
+export const CURRICULUM_PROGRAM_STATUSES = ['draft', 'active', 'archived'] as const;
+export type CurriculumProgramStatus = (typeof CURRICULUM_PROGRAM_STATUSES)[number];
+
+export const CURRICULUM_PROGRAM_COURSE_CATEGORIES = [
+  'required',
+  'elective',
+  'practice',
+  'general',
+] as const;
+export type CurriculumProgramCourseCategory = (typeof CURRICULUM_PROGRAM_COURSE_CATEGORIES)[number];
+
+export interface CurriculumProgramRecord {
+  id: string;
+  name: string;
+  code: string | null;
+  description: string | null;
+  status: CurriculumProgramStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurriculumProgramVersionRecord {
+  id: string;
+  programId: string;
+  name: string;
+  version: string | null;
+  gradeYear: string | null;
+  description: string | null;
+  status: CurriculumProgramStatus;
+  targetCredits: number | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurriculumGraduationIndicatorRecord {
+  id: string;
+  programVersionId: string;
+  code: string;
+  title: string;
+  description: string | null;
+  targetWeight: number;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CurriculumProgramCourseRecord {
+  id: string;
+  programVersionId: string;
+  courseId: string | null;
+  title: string;
+  code: string | null;
+  semester: string | null;
+  category: CurriculumProgramCourseCategory;
+  credits: number | null;
+  hours: number | null;
+  sortOrder: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CourseIndicatorSupportRecord {
+  id: string;
+  programVersionId: string;
+  programCourseId: string;
+  indicatorId: string;
+  weight: number;
+  note: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 /** Owner-scoped MP4 export jobs produced from completed batch items. */
 export const CURRICULUM_EXPORT_JOB_STATUSES = [
   'queued',
@@ -249,4 +323,9 @@ export interface CurriculumSnapshot {
   batches: CurriculumBatchRecord[];
   batchItems: CurriculumBatchItemRecord[];
   exportJobs: CurriculumExportJobRecord[];
+  programs: CurriculumProgramRecord[];
+  programVersions: CurriculumProgramVersionRecord[];
+  graduationIndicators: CurriculumGraduationIndicatorRecord[];
+  programCourses: CurriculumProgramCourseRecord[];
+  courseIndicatorSupports: CourseIndicatorSupportRecord[];
 }

@@ -72,6 +72,11 @@ function snapshot(
     batches: [],
     batchItems: [],
     exportJobs: [],
+    programs: [],
+    programVersions: [],
+    graduationIndicators: [],
+    programCourses: [],
+    courseIndicatorSupports: [],
   };
 }
 

@@ -9,6 +9,7 @@ import { BatchQueuePanel } from '@/components/curriculum/batch-queue-panel';
 import { BatchExportPanel } from '@/components/curriculum/batch-export-panel';
 import { CourseAssemblerPanel } from '@/components/curriculum/course-assembler-panel';
 import { KnowledgeRelationsPanel } from '@/components/curriculum/knowledge-relations-panel';
+import { ProgramPlanPanel } from '@/components/curriculum/program-plan-panel';
 import { Controls } from '@/components/ai-elements/controls';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -97,6 +98,11 @@ export function CurriculumWorkspace() {
     batches: [],
     batchItems: [],
     exportJobs: [],
+    programs: [],
+    programVersions: [],
+    graduationIndicators: [],
+    programCourses: [],
+    courseIndicatorSupports: [],
   });
   const [stages, setStages] = useState<StageOption[]>([]);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
@@ -667,6 +673,8 @@ export function CurriculumWorkspace() {
               </div>
             </CardContent>
           </Card>
+
+          <ProgramPlanPanel snapshot={snapshot} onChanged={load} />
 
           <KnowledgePointsPanel
             seriesId={selectedSeriesId}
