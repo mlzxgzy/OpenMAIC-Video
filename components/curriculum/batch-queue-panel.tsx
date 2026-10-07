@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { ListChecks, Loader2, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { ExternalLink, ListChecks, Loader2, Pause, Play, RotateCcw, Trash2 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -323,11 +324,19 @@ export function BatchQueuePanel({
                           </span>
                         </span>
                         <span className="text-muted-foreground shrink-0">
-                          {item.stageId
-                            ? '已有课堂'
-                            : item.attempts > 0
-                              ? `尝试 ${item.attempts}`
-                              : ''}
+                          {item.stageId ? (
+                            <Link
+                              href={`/classroom/${item.stageId}`}
+                              className="text-primary inline-flex items-center gap-1 font-medium hover:underline"
+                            >
+                              打开课堂
+                              <ExternalLink className="size-3" />
+                            </Link>
+                          ) : item.attempts > 0 ? (
+                            `尝试 ${item.attempts}`
+                          ) : (
+                            ''
+                          )}
                         </span>
                       </div>
                     ))}

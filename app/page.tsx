@@ -27,6 +27,7 @@ import {
   X,
   Presentation,
   Loader2,
+  BookOpen,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
@@ -201,9 +202,7 @@ function HomePage() {
   // filter offers just those two there instead of letting the learner tick a
   // type this mode would never produce.
   const availableSceneTypes: readonly SceneType[] =
-    form.interactiveMode || form.vocationalTestMode
-      ? INTERACTIVE_SCENE_TYPES
-      : ALL_SCENE_TYPES;
+    form.interactiveMode || form.vocationalTestMode ? INTERACTIVE_SCENE_TYPES : ALL_SCENE_TYPES;
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState<
@@ -622,7 +621,7 @@ function HomePage() {
       if (materialIds.length > 0 && !(await courseMaterials.verify())) {
         throw new Error(t('toolbar.materialUnavailable'));
       }
-            // Never send a selection the current mode cannot satisfy: an outline of
+      // Never send a selection the current mode cannot satisfy: an outline of
       // only unavailable types would come back empty and fail the step. A
       // selection that kept nothing usable falls back to the whole mode.
       const usable = availableSceneTypes.filter((type) => form.sceneTypes.includes(type));
@@ -696,6 +695,20 @@ function HomePage() {
           className="hidden"
         />
       )}
+      {/* ═══ Global entry: course system / curriculum workspace ═══ */}
+      <div className="fixed top-4 left-4 z-50">
+        <button
+          type="button"
+          onClick={() => router.push('/curriculum')}
+          className="flex items-center gap-2 rounded-full border border-gray-100/50 bg-white/70 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white hover:text-gray-900 dark:border-gray-700/50 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+          title="打开课程体系与培养方案"
+          aria-label="打开课程体系与培养方案"
+        >
+          <BookOpen className="size-3.5" />
+          <span className="hidden sm:inline">课程体系</span>
+        </button>
+      </div>
+
       {/* ═══ Top-right pill (unchanged) ═══ */}
       <div
         ref={toolbarRef}

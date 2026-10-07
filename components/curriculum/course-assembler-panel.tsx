@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Boxes, Download, Loader2, Rocket, Save, Sparkles } from 'lucide-react';
+import Link from 'next/link';
+import { Boxes, Download, ExternalLink, Loader2, Rocket, Save, Sparkles } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -524,7 +525,13 @@ export function CourseAssemblerPanel({
                 {latestJob.runId ? ` · ${latestJob.runId}` : ''}
               </span>
               {latestJob.stageId ? (
-                <span className="text-muted-foreground">stage {latestJob.stageId}</span>
+                <Link
+                  href={`/classroom/${latestJob.stageId}`}
+                  className="text-primary inline-flex items-center gap-1 font-medium hover:underline"
+                >
+                  打开课堂
+                  <ExternalLink className="size-3" />
+                </Link>
               ) : null}
               {latestJob.error ? (
                 <span className="text-amber-700">

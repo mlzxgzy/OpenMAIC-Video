@@ -1,7 +1,22 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import {
+  ArrowLeft,
+  BookOpen,
+  Boxes,
+  GraduationCap,
+  ListChecks,
+  Loader2,
+  Network,
+  Plus,
+  RefreshCw,
+  Save,
+  Trash2,
+  Video,
+} from 'lucide-react';
 
 import { Canvas } from '@/components/ai-elements/canvas';
 import { KnowledgePointsPanel } from '@/components/curriculum/knowledge-points-panel';
@@ -60,6 +75,45 @@ const EMPTY_COURSE_FORM: CourseFormState = {
   description: '',
 };
 
+const WORKFLOW_STEPS = [
+  {
+    id: 'curriculum-ledger',
+    label: '课程台账',
+    hint: '先建系列和课程',
+    icon: BookOpen,
+  },
+  {
+    id: 'curriculum-knowledge',
+    label: '知识体系',
+    hint: '维护知识点和先修关系',
+    icon: Network,
+  },
+  {
+    id: 'curriculum-program',
+    label: '培养方案',
+    hint: '课程-指标点支撑矩阵',
+    icon: GraduationCap,
+  },
+  {
+    id: 'curriculum-assembly',
+    label: '课程组装',
+    hint: '选知识点生成课程包',
+    icon: Boxes,
+  },
+  {
+    id: 'curriculum-batch',
+    label: '批量生成',
+    hint: '排队生成课堂',
+    icon: ListChecks,
+  },
+  {
+    id: 'curriculum-export',
+    label: '视频导出',
+    hint: '浏览器队列导出 MP4',
+    icon: Video,
+  },
+] as const;
+
 const RELATION_LABELS: Record<CurriculumRelationType, string> = {
   prerequisite: '先修',
   'follow-up': '后续',
@@ -88,6 +142,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function CurriculumWorkspace() {
+  const router = useRouter();
   const [snapshot, setSnapshot] = useState<CurriculumSnapshot>({
     series: [],
     courses: [],
@@ -117,6 +172,10 @@ export function CurriculumWorkspace() {
   const [relationNote, setRelationNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const scrollToSection = (id: string) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
 
   const load = useCallback(async () => {
     setBusy('load');
@@ -329,19 +388,61 @@ export function CurriculumWorkspace() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div>
-          <p className="text-muted-foreground text-sm">课程产品层 / Curriculum</p>
-          <h1 className="text-2xl font-semibold">课程体系与关系图</h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            用稳定课程实体管理生成出来的课堂，并维护先修/后续/支撑关系。
-          </p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="flex min-w-0 items-start gap-3">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => router.push('/')}
+            title="返回首页"
+            aria-label="返回首页"
+            className="mt-0.5 shrink-0"
+          >
+            <ArrowLeft />
+          </Button>
+          <div className="min-w-0">
+            <p className="text-muted-foreground text-sm">课程产品层 / Curriculum</p>
+            <h1 className="text-2xl font-semibold">课程体系与培养方案</h1>
+            <p className="text-muted-foreground mt-1 text-sm">
+              用一条流水线完成：建课程 → 维护知识点 → 配培养方案 → 组装 → 生成课堂 → 导出视频。
+            </p>
+          </div>
         </div>
-        <Button variant="outline" onClick={() => void load()} disabled={busy !== null}>
-          {busy === 'load' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          刷新
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => router.push('/')}>
+            <BookOpen />
+            去单课生成
+          </Button>
+          <Button variant="outline" onClick={() => void load()} disabled={busy !== null}>
+            {busy === 'load' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            刷新
+          </Button>
+        </div>
       </header>
+
+      <nav className="sticky top-2 z-20 rounded-xl border bg-background/90 p-2 shadow-sm backdrop-blur">
+        <div className="flex flex-wrap gap-2">
+          {WORKFLOW_STEPS.map((step, index) => {
+            const Icon = step.icon;
+            return (
+              <button
+                key={step.id}
+                type="button"
+                onClick={() => scrollToSection(step.id)}
+                className="group inline-flex items-center gap-1.5 rounded-lg border border-transparent bg-muted/50 px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-border hover:bg-background hover:text-foreground"
+                title={step.hint}
+              >
+                <span className="flex size-5 items-center justify-center rounded-full bg-background text-[10px] font-semibold text-muted-foreground shadow-sm">
+                  {index + 1}
+                </span>
+                <Icon className="size-3.5" />
+                <span className="font-medium">{step.label}</span>
+                <span className="hidden text-muted-foreground/70 lg:inline">· {step.hint}</span>
+              </button>
+            );
+          })}
+        </div>
+      </nav>
 
       {error ? (
         <div className="rounded-md border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -410,331 +511,380 @@ export function CurriculumWorkspace() {
         </aside>
 
         <main className="flex flex-col gap-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>{editingCourseId ? '编辑课程' : '新建课程'}</CardTitle>
-              <CardDescription>
-                课程实体可关联一个已生成的 stage；一个 stage 只能挂到一门课程。
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              <Input
-                placeholder="课程标题 *"
-                value={courseForm.title}
-                onChange={(event) => setCourseForm({ ...courseForm, title: event.target.value })}
-              />
-              <Input
-                placeholder="课程编号，例如 CTF-1-1-1"
-                value={courseForm.code}
-                onChange={(event) => setCourseForm({ ...courseForm, code: event.target.value })}
-              />
-              <select
-                className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                value={courseForm.seriesId}
-                onChange={(event) => setCourseForm({ ...courseForm, seriesId: event.target.value })}
-              >
-                <option value="">未归属系列</option>
-                {snapshot.series.map((series) => (
-                  <option key={series.id} value={series.id}>
-                    {series.name}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                value={courseForm.stageId}
-                onChange={(event) => setCourseForm({ ...courseForm, stageId: event.target.value })}
-              >
-                <option value="">不关联课堂</option>
-                {stages.map((stage) => (
-                  <option key={stage.id} value={stage.id}>
-                    {stage.name} ({stage.id})
-                  </option>
-                ))}
-              </select>
-              <Input
-                placeholder="章，例如 第一章 CTF基础"
-                value={courseForm.chapter}
-                onChange={(event) => setCourseForm({ ...courseForm, chapter: event.target.value })}
-              />
-              <Input
-                placeholder="节，例如 第一节 CTF入门"
-                value={courseForm.section}
-                onChange={(event) => setCourseForm({ ...courseForm, section: event.target.value })}
-              />
-              <Input
-                type="number"
-                placeholder="目顺序"
-                value={courseForm.lessonOrder}
-                onChange={(event) =>
-                  setCourseForm({ ...courseForm, lessonOrder: event.target.value })
-                }
-              />
-              <Input
-                type="number"
-                placeholder="学时"
-                value={courseForm.hours}
-                onChange={(event) => setCourseForm({ ...courseForm, hours: event.target.value })}
-              />
-              <Input
-                type="number"
-                placeholder="学分"
-                value={courseForm.credits}
-                onChange={(event) => setCourseForm({ ...courseForm, credits: event.target.value })}
-              />
-              <Input
-                placeholder="学期，例如 2026春"
-                value={courseForm.semester}
-                onChange={(event) => setCourseForm({ ...courseForm, semester: event.target.value })}
-              />
-              <select
-                className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                value={courseForm.status}
-                onChange={(event) => setCourseForm({ ...courseForm, status: event.target.value })}
-              >
-                {CURRICULUM_COURSE_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-              <Textarea
-                placeholder="描述（可选）"
-                value={courseForm.description}
-                onChange={(event) =>
-                  setCourseForm({ ...courseForm, description: event.target.value })
-                }
-                className="md:col-span-2 xl:col-span-3"
-              />
-              <div className="flex gap-2 md:col-span-2 xl:col-span-3">
-                <Button
-                  onClick={() => void submitCourse()}
-                  disabled={busy !== null || !courseForm.title.trim()}
-                >
-                  {busy === 'course' ? <Loader2 className="animate-spin" /> : <Save />}
-                  {editingCourseId ? '保存修改' : '新建课程'}
-                </Button>
-                {editingCourseId ? (
-                  <Button variant="outline" onClick={resetCourseForm} disabled={busy !== null}>
-                    取消编辑
-                  </Button>
-                ) : null}
-              </div>
-            </CardContent>
-          </Card>
-
-          <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+          <section id="curriculum-ledger" className="flex scroll-mt-24 flex-col gap-6">
             <Card>
               <CardHeader>
-                <CardTitle>课程台账</CardTitle>
-                <CardDescription>{visibleCourses.length} 门课程</CardDescription>
+                <CardTitle>{editingCourseId ? '编辑课程' : '新建课程'}</CardTitle>
+                <CardDescription>
+                  课程实体可关联一个已生成的 stage；一个 stage 只能挂到一门课程。
+                </CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                {visibleCourses.map((course) => (
-                  <div
-                    key={course.id}
-                    className="border-border flex flex-col gap-2 rounded-lg border p-3 text-sm"
+              <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                <Input
+                  placeholder="课程标题 *"
+                  value={courseForm.title}
+                  onChange={(event) => setCourseForm({ ...courseForm, title: event.target.value })}
+                />
+                <Input
+                  placeholder="课程编号，例如 CTF-1-1-1"
+                  value={courseForm.code}
+                  onChange={(event) => setCourseForm({ ...courseForm, code: event.target.value })}
+                />
+                <select
+                  className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                  value={courseForm.seriesId}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, seriesId: event.target.value })
+                  }
+                >
+                  <option value="">未归属系列</option>
+                  {snapshot.series.map((series) => (
+                    <option key={series.id} value={series.id}>
+                      {series.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                  value={courseForm.stageId}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, stageId: event.target.value })
+                  }
+                >
+                  <option value="">不关联课堂</option>
+                  {stages.map((stage) => (
+                    <option key={stage.id} value={stage.id}>
+                      {stage.name} ({stage.id})
+                    </option>
+                  ))}
+                </select>
+                <Input
+                  placeholder="章，例如 第一章 CTF基础"
+                  value={courseForm.chapter}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, chapter: event.target.value })
+                  }
+                />
+                <Input
+                  placeholder="节，例如 第一节 CTF入门"
+                  value={courseForm.section}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, section: event.target.value })
+                  }
+                />
+                <Input
+                  type="number"
+                  placeholder="目顺序"
+                  value={courseForm.lessonOrder}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, lessonOrder: event.target.value })
+                  }
+                />
+                <Input
+                  type="number"
+                  placeholder="学时"
+                  value={courseForm.hours}
+                  onChange={(event) => setCourseForm({ ...courseForm, hours: event.target.value })}
+                />
+                <Input
+                  type="number"
+                  placeholder="学分"
+                  value={courseForm.credits}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, credits: event.target.value })
+                  }
+                />
+                <Input
+                  placeholder="学期，例如 2026春"
+                  value={courseForm.semester}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, semester: event.target.value })
+                  }
+                />
+                <select
+                  className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                  value={courseForm.status}
+                  onChange={(event) => setCourseForm({ ...courseForm, status: event.target.value })}
+                >
+                  {CURRICULUM_COURSE_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+                <Textarea
+                  placeholder="描述（可选）"
+                  value={courseForm.description}
+                  onChange={(event) =>
+                    setCourseForm({ ...courseForm, description: event.target.value })
+                  }
+                  className="md:col-span-2 xl:col-span-3"
+                />
+                <div className="flex gap-2 md:col-span-2 xl:col-span-3">
+                  <Button
+                    onClick={() => void submitCourse()}
+                    disabled={busy !== null || !courseForm.title.trim()}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{course.title}</div>
-                        <div className="text-muted-foreground text-xs">
-                          {[course.code, course.chapter, course.section]
-                            .filter(Boolean)
-                            .join(' · ')}
+                    {busy === 'course' ? <Loader2 className="animate-spin" /> : <Save />}
+                    {editingCourseId ? '保存修改' : '新建课程'}
+                  </Button>
+                  {editingCourseId ? (
+                    <Button variant="outline" onClick={resetCourseForm} disabled={busy !== null}>
+                      取消编辑
+                    </Button>
+                  ) : null}
+                </div>
+              </CardContent>
+            </Card>
+
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <Card>
+                <CardHeader>
+                  <CardTitle>课程台账</CardTitle>
+                  <CardDescription>{visibleCourses.length} 门课程</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  {visibleCourses.map((course) => (
+                    <div
+                      key={course.id}
+                      className="border-border flex flex-col gap-2 rounded-lg border p-3 text-sm"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-medium">{course.title}</div>
+                          <div className="text-muted-foreground text-xs">
+                            {[course.code, course.chapter, course.section]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </div>
+                        </div>
+                        <div className="flex gap-1">
+                          <Button size="xs" variant="outline" onClick={() => editCourse(course)}>
+                            编辑
+                          </Button>
+                          <Button
+                            size="xs"
+                            variant="destructive"
+                            onClick={() => void deleteCourse(course)}
+                            disabled={busy !== null}
+                          >
+                            <Trash2 />
+                          </Button>
                         </div>
                       </div>
-                      <div className="flex gap-1">
-                        <Button size="xs" variant="outline" onClick={() => editCourse(course)}>
-                          编辑
-                        </Button>
+                      <div className="text-muted-foreground grid grid-cols-2 gap-1 text-xs">
+                        <span>学时：{course.hours ?? '-'}</span>
+                        <span>状态：{course.status}</span>
+                        <span className="col-span-2 break-all">
+                          stage：
+                          {course.stageId ? (
+                            <Link
+                              href={`/classroom/${course.stageId}`}
+                              className="text-primary font-medium hover:underline"
+                            >
+                              {course.stageId} · 打开课堂
+                            </Link>
+                          ) : (
+                            '-'
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                  {visibleCourses.length === 0 ? (
+                    <p className="text-muted-foreground py-8 text-center text-sm">还没有课程</p>
+                  ) : null}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>课程关系</CardTitle>
+                  <CardDescription>维护先修、后续、相关、支撑关系。</CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <select
+                      className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                      value={relationSource}
+                      onChange={(event) => setRelationSource(event.target.value)}
+                    >
+                      <option value="">源课程</option>
+                      {snapshot.courses.map((course) => (
+                        <option key={course.id} value={course.id}>
+                          {course.title}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                      value={relationTarget}
+                      onChange={(event) => setRelationTarget(event.target.value)}
+                    >
+                      <option value="">目标课程</option>
+                      {snapshot.courses.map((course) => (
+                        <option key={course.id} value={course.id}>
+                          {course.title}
+                        </option>
+                      ))}
+                    </select>
+                    <select
+                      className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                      value={relationType}
+                      onChange={(event) =>
+                        setRelationType(event.target.value as CurriculumRelationType)
+                      }
+                    >
+                      {CURRICULUM_RELATION_TYPES.map((type) => (
+                        <option key={type} value={type}>
+                          {RELATION_LABELS[type]}
+                        </option>
+                      ))}
+                    </select>
+                    <Input
+                      placeholder="备注（可选）"
+                      value={relationNote}
+                      onChange={(event) => setRelationNote(event.target.value)}
+                    />
+                  </div>
+                  <Button
+                    onClick={() => void createRelation()}
+                    disabled={
+                      busy !== null ||
+                      !relationSource ||
+                      !relationTarget ||
+                      relationSource === relationTarget
+                    }
+                  >
+                    <Plus />
+                    新建/更新关系
+                  </Button>
+                  <div className="flex flex-col gap-2">
+                    {snapshot.relations.map((relation) => (
+                      <div
+                        key={relation.id}
+                        className="border-border flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
+                      >
+                        <span>
+                          {courseById.get(relation.sourceCourseId)?.title ??
+                            relation.sourceCourseId}
+                          {' → '}
+                          {RELATION_LABELS[relation.relationType]}
+                          {' → '}
+                          {courseById.get(relation.targetCourseId)?.title ??
+                            relation.targetCourseId}
+                        </span>
                         <Button
-                          size="xs"
-                          variant="destructive"
-                          onClick={() => void deleteCourse(course)}
+                          size="icon-xs"
+                          variant="ghost"
+                          onClick={() => void deleteRelation(relation)}
                           disabled={busy !== null}
                         >
                           <Trash2 />
                         </Button>
                       </div>
-                    </div>
-                    <div className="text-muted-foreground grid grid-cols-2 gap-1 text-xs">
-                      <span>学时：{course.hours ?? '-'}</span>
-                      <span>状态：{course.status}</span>
-                      <span className="col-span-2 break-all">stage：{course.stageId ?? '-'}</span>
-                    </div>
+                    ))}
                   </div>
-                ))}
-                {visibleCourses.length === 0 ? (
-                  <p className="text-muted-foreground py-8 text-center text-sm">还没有课程</p>
-                ) : null}
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            </div>
 
             <Card>
               <CardHeader>
-                <CardTitle>课程关系</CardTitle>
-                <CardDescription>维护先修、后续、相关、支撑关系。</CardDescription>
+                <CardTitle>课程关系图</CardTitle>
+                <CardDescription>当前筛选系列下的课程与关系。</CardDescription>
               </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <div className="grid gap-2 md:grid-cols-2">
-                  <select
-                    className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                    value={relationSource}
-                    onChange={(event) => setRelationSource(event.target.value)}
-                  >
-                    <option value="">源课程</option>
-                    {snapshot.courses.map((course) => (
-                      <option key={course.id} value={course.id}>
-                        {course.title}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                    value={relationTarget}
-                    onChange={(event) => setRelationTarget(event.target.value)}
-                  >
-                    <option value="">目标课程</option>
-                    {snapshot.courses.map((course) => (
-                      <option key={course.id} value={course.id}>
-                        {course.title}
-                      </option>
-                    ))}
-                  </select>
-                  <select
-                    className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                    value={relationType}
-                    onChange={(event) =>
-                      setRelationType(event.target.value as CurriculumRelationType)
-                    }
-                  >
-                    {CURRICULUM_RELATION_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {RELATION_LABELS[type]}
-                      </option>
-                    ))}
-                  </select>
-                  <Input
-                    placeholder="备注（可选）"
-                    value={relationNote}
-                    onChange={(event) => setRelationNote(event.target.value)}
-                  />
-                </div>
-                <Button
-                  onClick={() => void createRelation()}
-                  disabled={
-                    busy !== null ||
-                    !relationSource ||
-                    !relationTarget ||
-                    relationSource === relationTarget
-                  }
-                >
-                  <Plus />
-                  新建/更新关系
-                </Button>
-                <div className="flex flex-col gap-2">
-                  {snapshot.relations.map((relation) => (
-                    <div
-                      key={relation.id}
-                      className="border-border flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
-                    >
-                      <span>
-                        {courseById.get(relation.sourceCourseId)?.title ?? relation.sourceCourseId}
-                        {' → '}
-                        {RELATION_LABELS[relation.relationType]}
-                        {' → '}
-                        {courseById.get(relation.targetCourseId)?.title ?? relation.targetCourseId}
-                      </span>
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        onClick={() => void deleteRelation(relation)}
-                        disabled={busy !== null}
-                      >
-                        <Trash2 />
-                      </Button>
-                    </div>
-                  ))}
+              <CardContent>
+                <div className="h-[520px] overflow-hidden rounded-lg border">
+                  <Canvas nodes={graphNodes} edges={graphEdges} fitView>
+                    <Controls />
+                  </Canvas>
                 </div>
               </CardContent>
             </Card>
-          </div>
+          </section>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>课程关系图</CardTitle>
-              <CardDescription>当前筛选系列下的课程与关系。</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="h-[520px] overflow-hidden rounded-lg border">
-                <Canvas nodes={graphNodes} edges={graphEdges} fitView>
-                  <Controls />
-                </Canvas>
-              </div>
-            </CardContent>
-          </Card>
+          <section id="curriculum-knowledge" className="flex scroll-mt-24 flex-col gap-6">
+            <KnowledgePointsPanel
+              seriesId={selectedSeriesId}
+              courses={visibleCourses}
+              knowledgePoints={snapshot.knowledgePoints}
+              courseKnowledgePoints={snapshot.courseKnowledgePoints}
+              onChanged={load}
+            />
 
-          <ProgramPlanPanel snapshot={snapshot} onChanged={load} />
-          <ProgramDiffPanel snapshot={snapshot} onChanged={load} />
+            <KnowledgeRelationsPanel
+              seriesId={selectedSeriesId}
+              courses={snapshot.courses}
+              knowledgePoints={snapshot.knowledgePoints}
+              knowledgePointRelations={snapshot.knowledgePointRelations}
+              courseKnowledgePoints={snapshot.courseKnowledgePoints}
+              onChanged={load}
+            />
+          </section>
 
-          <KnowledgePointsPanel
-            seriesId={selectedSeriesId}
-            courses={visibleCourses}
-            knowledgePoints={snapshot.knowledgePoints}
-            courseKnowledgePoints={snapshot.courseKnowledgePoints}
-            onChanged={load}
-          />
+          <section id="curriculum-program" className="flex scroll-mt-24 flex-col gap-6">
+            <ProgramPlanPanel snapshot={snapshot} onChanged={load} />
+            <ProgramDiffPanel snapshot={snapshot} onChanged={load} />
+          </section>
 
-          <KnowledgeRelationsPanel
-            seriesId={selectedSeriesId}
-            courses={snapshot.courses}
-            knowledgePoints={snapshot.knowledgePoints}
-            knowledgePointRelations={snapshot.knowledgePointRelations}
-            courseKnowledgePoints={snapshot.courseKnowledgePoints}
-            onChanged={load}
-          />
+          <section id="curriculum-assembly" className="flex scroll-mt-24 flex-col gap-6">
+            <CourseAssemblerPanel
+              seriesId={selectedSeriesId}
+              courses={snapshot.courses}
+              knowledgePoints={snapshot.knowledgePoints}
+              courseKnowledgePoints={snapshot.courseKnowledgePoints}
+              generationJobs={snapshot.generationJobs}
+              onChanged={load}
+            />
+          </section>
 
-          <CourseAssemblerPanel
-            seriesId={selectedSeriesId}
-            courses={snapshot.courses}
-            knowledgePoints={snapshot.knowledgePoints}
-            courseKnowledgePoints={snapshot.courseKnowledgePoints}
-            generationJobs={snapshot.generationJobs}
-            onChanged={load}
-          />
+          <section id="curriculum-batch" className="flex scroll-mt-24 flex-col gap-6">
+            <BatchQueuePanel
+              seriesId={selectedSeriesId}
+              courses={snapshot.courses}
+              courseKnowledgePoints={snapshot.courseKnowledgePoints}
+              batches={snapshot.batches}
+              batchItems={snapshot.batchItems}
+              onChanged={load}
+            />
+          </section>
 
-          <BatchQueuePanel
-            seriesId={selectedSeriesId}
-            courses={snapshot.courses}
-            courseKnowledgePoints={snapshot.courseKnowledgePoints}
-            batches={snapshot.batches}
-            batchItems={snapshot.batchItems}
-            onChanged={load}
-          />
+          <section id="curriculum-export" className="flex scroll-mt-24 flex-col gap-6">
+            <BatchExportPanel
+              seriesId={selectedSeriesId}
+              courses={snapshot.courses}
+              batchItems={snapshot.batchItems}
+              exportJobs={snapshot.exportJobs}
+              onChanged={load}
+            />
 
-          <BatchExportPanel
-            seriesId={selectedSeriesId}
-            courses={snapshot.courses}
-            batchItems={snapshot.batchItems}
-            exportJobs={snapshot.exportJobs}
-            onChanged={load}
-          />
-
-          <Card size="sm">
-            <CardHeader>
-              <CardTitle>已有 stage</CardTitle>
-              <CardDescription>生成出来的课堂，可被课程台账关联。</CardDescription>
-            </CardHeader>
-            <CardContent className="grid gap-2 md:grid-cols-2">
-              {stages.map((stage) => (
-                <div key={stage.id} className="border-border rounded-md border px-3 py-2 text-xs">
-                  <div className="font-medium">{stage.name}</div>
-                  <div className="text-muted-foreground break-all">{stage.id}</div>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
+            <Card size="sm">
+              <CardHeader>
+                <CardTitle>已有 stage</CardTitle>
+                <CardDescription>生成出来的课堂，可被课程台账关联。</CardDescription>
+              </CardHeader>
+              <CardContent className="grid gap-2 md:grid-cols-2">
+                {stages.map((stage) => (
+                  <div
+                    key={stage.id}
+                    className="border-border flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium">{stage.name}</div>
+                      <div className="text-muted-foreground break-all">{stage.id}</div>
+                    </div>
+                    <Link
+                      href={`/classroom/${stage.id}`}
+                      className="text-primary shrink-0 font-medium hover:underline"
+                    >
+                      打开课堂
+                    </Link>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          </section>
         </main>
       </div>
     </div>
