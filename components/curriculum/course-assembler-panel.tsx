@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Boxes, Download, ExternalLink, Loader2, Rocket, Save, Sparkles } from 'lucide-react';
 
@@ -24,6 +24,10 @@ interface CourseAssemblerPanelProps {
   knowledgePoints: KnowledgePointRecord[];
   courseKnowledgePoints: CourseKnowledgePointRecord[];
   generationJobs: CurriculumGenerationJobRecord[];
+  /** Pre-populate the form and selected knowledge points from this course. */
+  initialCourseId?: string | null;
+  /** Update this course instead of creating a new draft when saving/generating. */
+  targetCourseId?: string | null;
   onChanged: () => Promise<void> | void;
 }
 
@@ -103,6 +107,8 @@ export function CourseAssemblerPanel({
   knowledgePoints,
   courseKnowledgePoints,
   generationJobs,
+  initialCourseId,
+  targetCourseId,
   onChanged,
 }: CourseAssemblerPanelProps) {
   const [form, setForm] = useState<AssemblyFormState>(EMPTY_FORM);
@@ -113,6 +119,7 @@ export function CourseAssemblerPanel({
   const [startedJob, setStartedJob] = useState<CurriculumGenerationJobRecord | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const bootstrappedRef = useRef(false);
 
   const visiblePoints = useMemo(() => {
     if (!seriesId) return knowledgePoints;
@@ -204,25 +211,35 @@ export function CourseAssemblerPanel({
     setSavedCourseId(null);
   };
 
-  const fillFromCourse = (courseId: string) => {
-    setSourceCourseId(courseId);
-    const course = courses.find((candidate) => candidate.id === courseId);
-    if (!course) return;
-    const links = courseKnowledgePoints.filter((link) => link.courseId === courseId);
-    setForm((current) => ({
-      ...current,
-      title: current.title || course.title,
-      code: current.code || course.code || '',
-      chapter: current.chapter || course.chapter || '',
-      section: current.section || course.section || '',
-      hours: current.hours || (course.hours === null ? '' : String(course.hours)),
-    }));
-    setSelection(
-      Object.fromEntries(links.map((link) => [link.knowledgePointId, link.coverageLevel])),
-    );
-    setPlan(null);
-    setSavedCourseId(null);
-  };
+  const fillFromCourse = useCallback(
+    (courseId: string) => {
+      setSourceCourseId(courseId);
+      const course = courses.find((candidate) => candidate.id === courseId);
+      if (!course) return;
+      const links = courseKnowledgePoints.filter((link) => link.courseId === courseId);
+      setForm((current) => ({
+        ...current,
+        title: current.title || course.title,
+        code: current.code || course.code || '',
+        chapter: current.chapter || course.chapter || '',
+        section: current.section || course.section || '',
+        hours: current.hours || (course.hours === null ? '' : String(course.hours)),
+      }));
+      setSelection(
+        Object.fromEntries(links.map((link) => [link.knowledgePointId, link.coverageLevel])),
+      );
+      setPlan(null);
+      setSavedCourseId(null);
+    },
+    [courseKnowledgePoints, courses],
+  );
+
+  useEffect(() => {
+    if (bootstrappedRef.current || !initialCourseId) return;
+    if (!courses.some((course) => course.id === initialCourseId)) return;
+    bootstrappedRef.current = true;
+    fillFromCourse(initialCourseId);
+  }, [courses, fillFromCourse, initialCourseId]);
 
   const buildPlan = useCallback(async () => {
     if (!form.title.trim()) {
@@ -272,20 +289,24 @@ export function CourseAssemblerPanel({
     setBusy('save');
     setError(null);
     try {
+      const targetCourse = targetCourseId
+        ? courses.find((candidate) => candidate.id === targetCourseId)
+        : undefined;
       const courseBody = {
         title: currentPlan.title,
         code: currentPlan.code.trim() || null,
         seriesId: currentPlan.seriesId,
         chapter: currentPlan.chapter.trim() || null,
         section: currentPlan.section.trim() || null,
-        lessonOrder: visibleCourses.length + 1,
+        lessonOrder: targetCourse?.lessonOrder ?? visibleCourses.length + 1,
         hours: currentPlan.hours,
-        status: 'draft' as const,
+        status: targetCourse?.status ?? ('draft' as const),
         description: currentPlan.coursePackage.objectives.join('；'),
       };
-      const coursePayload = savedCourseId
+      const savedCourse = savedCourseId ?? targetCourseId;
+      const coursePayload = savedCourse
         ? await requestJson<{ course: CurriculumCourseRecord }>(
-            `/api/curriculum/courses/${savedCourseId}`,
+            `/api/curriculum/courses/${savedCourse}`,
             { method: 'PATCH', body: JSON.stringify(courseBody) },
           )
         : await requestJson<{ course: CurriculumCourseRecord }>('/api/curriculum/courses', {
@@ -338,7 +359,7 @@ export function CourseAssemblerPanel({
               coverageLevel: point.coverageLevel,
             })),
           },
-          courseId: savedCourseId,
+          courseId: targetCourseId ?? savedCourseId,
           outlineReview: 'auto',
         }),
       });
@@ -498,7 +519,13 @@ export function CourseAssemblerPanel({
               disabled={busy !== null || !plan || savedCourseId !== null}
             >
               {busy === 'save' ? <Loader2 className="animate-spin" /> : <Save />}
-              {savedCourseId ? '已保存为课程草稿' : '保存为课程草稿'}
+              {savedCourseId
+                ? targetCourseId
+                  ? '已保存课程信息'
+                  : '已保存为课程草稿'
+                : targetCourseId
+                  ? '保存课程信息与知识点'
+                  : '保存为课程草稿'}
             </Button>
             <Button variant="outline" onClick={() => void copyRunCommand()} disabled={!plan}>
               复制启动命令

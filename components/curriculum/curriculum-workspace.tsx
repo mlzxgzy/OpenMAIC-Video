@@ -174,7 +174,6 @@ export function CurriculumWorkspace() {
   const [stages, setStages] = useState<StageOption[]>([]);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
   const [courseForm, setCourseForm] = useState<CourseFormState>(EMPTY_COURSE_FORM);
-  const [editingCourseId, setEditingCourseId] = useState<string | null>(null);
   const [seriesName, setSeriesName] = useState('');
   const [seriesDescription, setSeriesDescription] = useState('');
   const [relationSource, setRelationSource] = useState('');
@@ -369,7 +368,6 @@ export function CurriculumWorkspace() {
 
   const resetCourseForm = () => {
     setCourseForm({ ...EMPTY_COURSE_FORM, seriesId: selectedSeriesId });
-    setEditingCourseId(null);
   };
 
   useEffect(() => {
@@ -420,13 +418,10 @@ export function CurriculumWorkspace() {
     setBusy('course');
     setError(null);
     try {
-      await requestJson(
-        editingCourseId ? `/api/curriculum/courses/${editingCourseId}` : '/api/curriculum/courses',
-        {
-          method: editingCourseId ? 'PATCH' : 'POST',
-          body: JSON.stringify(body),
-        },
-      );
+      await requestJson('/api/curriculum/courses', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
       resetCourseForm();
       await load();
     } catch (cause) {
@@ -434,24 +429,6 @@ export function CurriculumWorkspace() {
     } finally {
       setBusy(null);
     }
-  };
-
-  const editCourse = (course: CurriculumCourseRecord) => {
-    setEditingCourseId(course.id);
-    setCourseForm({
-      title: course.title,
-      code: course.code ?? '',
-      seriesId: course.seriesId ?? '',
-      stageId: course.stageId ?? '',
-      chapter: course.chapter ?? '',
-      section: course.section ?? '',
-      lessonOrder: String(course.lessonOrder),
-      hours: course.hours === null ? '' : String(course.hours),
-      credits: course.credits === null ? '' : String(course.credits),
-      semester: course.semester ?? '',
-      status: course.status,
-      description: course.description ?? '',
-    });
   };
 
   const deleteCourse = async (course: CurriculumCourseRecord) => {
@@ -668,9 +645,9 @@ export function CurriculumWorkspace() {
             >
               <Card>
                 <CardHeader>
-                  <CardTitle>{editingCourseId ? '编辑课程' : '新建课程'}</CardTitle>
+                  <CardTitle>新建课程产品</CardTitle>
                   <CardDescription>
-                    课程实体可关联一个已生成的 stage；一个 stage 只能挂到一门课程。
+                    在这里创建课程产品；点击列表里的课程进入独立详情页，维护知识点、关系和生成课堂。
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -786,13 +763,8 @@ export function CurriculumWorkspace() {
                       disabled={busy !== null || !courseForm.title.trim()}
                     >
                       {busy === 'course' ? <Loader2 className="animate-spin" /> : <Save />}
-                      {editingCourseId ? '保存修改' : '新建课程'}
+                      新建课程产品
                     </Button>
-                    {editingCourseId ? (
-                      <Button variant="outline" onClick={resetCourseForm} disabled={busy !== null}>
-                        取消编辑
-                      </Button>
-                    ) : null}
                   </div>
                 </CardContent>
               </Card>
@@ -810,20 +782,25 @@ export function CurriculumWorkspace() {
                         className="border-border flex flex-col gap-2 rounded-lg border p-3 text-sm"
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <div className="font-medium">{course.title}</div>
+                          <div className="min-w-0">
+                            <Link
+                              href={`/curriculum/courses/${course.id}`}
+                              className="font-medium hover:underline"
+                            >
+                              {course.title}
+                            </Link>
                             <div className="text-muted-foreground text-xs">
                               {[course.code, course.chapter, course.section]
                                 .filter(Boolean)
                                 .join(' · ')}
                             </div>
                           </div>
-                          <div className="flex gap-1">
-                            <Button size="xs" variant="outline" onClick={() => editCourse(course)}>
-                              编辑
+                          <div className="flex shrink-0 gap-1">
+                            <Button asChild size="xs" variant="outline">
+                              <Link href={`/curriculum/courses/${course.id}`}>打开课程</Link>
                             </Button>
                             <Button
-                              size="xs"
+                              size="icon-xs"
                               variant="destructive"
                               onClick={() => void deleteCourse(course)}
                               disabled={busy !== null}

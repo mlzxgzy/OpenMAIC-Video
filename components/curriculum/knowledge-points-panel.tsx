@@ -24,6 +24,8 @@ interface KnowledgePointsPanelProps {
   courses: CurriculumCourseRecord[];
   knowledgePoints: KnowledgePointRecord[];
   courseKnowledgePoints: CourseKnowledgePointRecord[];
+  /** When set, the course binding panel selects this course on mount. */
+  defaultCourseId?: string | null;
   onChanged: () => Promise<void> | void;
 }
 
@@ -91,11 +93,12 @@ export function KnowledgePointsPanel({
   courses,
   knowledgePoints,
   courseKnowledgePoints,
+  defaultCourseId,
   onChanged,
 }: KnowledgePointsPanelProps) {
   const [form, setForm] = useState<KnowledgePointFormState>(EMPTY_FORM);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [selectedCourseId, setSelectedCourseId] = useState('');
+  const [selectedCourseId, setSelectedCourseId] = useState(defaultCourseId ?? '');
   const [coverageDraft, setCoverageDraft] = useState<Record<string, CourseKnowledgeCoverageLevel>>(
     {},
   );
@@ -111,6 +114,10 @@ export function KnowledgePointsPanel({
     if (!seriesId) return courses;
     return courses.filter((course) => course.seriesId === seriesId);
   }, [courses, seriesId]);
+
+  useEffect(() => {
+    if (defaultCourseId) setSelectedCourseId(defaultCourseId);
+  }, [defaultCourseId]);
 
   useEffect(() => {
     if (!selectedCourseId) {
