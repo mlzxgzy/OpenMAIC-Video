@@ -74,6 +74,9 @@ next-env.d.ts
 /data
 /logs
 
+# generated course exports (videos are large; copy them out if needed)
+/exports/
+
 # docs
 /docs
 # Eval results

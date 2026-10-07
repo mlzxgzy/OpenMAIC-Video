@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 1,
+  "code": "1-1-3",
+  "chapter": "第一章 CTF基础与工具环境",
+  "section": "第一节 CTF入门与赛制",
+  "title": "CTF学习路径与常用工具",
+  "type": "theory",
+  "hours": 1,
+  "objectives": [
+    "能画出 CTF 从基础打底到参赛复盘的学习路径",
+    "能说出每个学习阶段的核心任务",
+    "能按 Web、Crypto、Misc、Reverse、Pwn 方向选择常用工具",
+    "能建立刷题、写 Writeup、复盘的训练闭环"
+  ],
+  "generation": {
+    "sceneTypes": ["slide"],
+    "interactive": false,
+    "taskEngine": false,
+    "outlineReview": "auto",
+    "requirement": "请生成一门名为《CTF学习路径与常用工具》的 OpenMAIC 课程。\n课程定位：《CTF 综合实战》第一章第一节目3，理论课，1学时。\n学习目标：1. 能画出 CTF 从基础打底到参赛复盘的学习路径；2. 能说出每个学习阶段的核心任务；3. 能按 Web、Crypto、Misc、Reverse、Pwn 方向选择常用工具；4. 能建立刷题、写 Writeup、复盘的训练闭环。\n只使用 slide 场景，不要生成 code、interactive、pbl 等场景。\n内容必须覆盖以下14页：封面、本节目标、学习路径总览、第一阶段基础打底、第二阶段方向入门、第三阶段刷题训练、第四阶段参赛与复盘、常用环境与网络工具、Web方向常用工具、Crypto与Misc常用工具、Reverse与Pwn常用工具、笔记与知识管理、本节小结、随堂测验。\n讲解要适合语音合成，语言简洁、口语化，面向零基础学员。"
+  },
+  "slideOutline": [
+    {
+      "order": 1,
+      "title": "封面：CTF学习路径与常用工具",
+      "points": ["课程名称", "第一章第一节目3", "本节定位"],
+      "narration": "前两节我们认识了 CTF 的赛制和赛事。这一节我们来讲学习路径和常用工具，帮助你从零开始，知道先学什么、再学什么，以及每个方向应该用什么工具。"
+    },
+    {
+      "order": 2,
+      "title": "本节目标",
+      "points": [
+        "掌握四阶段学习路径",
+        "明确每个阶段的核心任务",
+        "了解各方向常用工具",
+        "建立刷题与复盘闭环"
+      ],
+      "narration": "学完这一节，你应该能够画出从基础打底到参赛复盘的完整路径，说清每个阶段的核心任务，按方向选择合适的工具，并且建立刷题、写 Writeup 和复盘的训练闭环。"
+    },
+    {
+      "order": 3,
+      "title": "学习路径总览",
+      "points": ["基础打底", "方向入门", "刷题训练", "参赛与复盘"],
+      "narration": "CTF 学习可以分成四个阶段：第一阶段是基础打底，第二阶段是方向入门，第三阶段是刷题训练，第四阶段是参赛和复盘。四个阶段循环往复，能力会不断提升。"
+    },
+    {
+      "order": 4,
+      "title": "第一阶段：基础打底",
+      "points": ["Linux 基本操作", "计算机网络基础", "Python 编程", "编码与密码学常识"],
+      "narration": "基础打底阶段要掌握 Linux 基本操作、计算机网络基础、Python 编程，以及常见编码和密码学常识。这些是后面所有方向的共同基础，基础不牢，后面刷题会很吃力。"
+    },
+    {
+      "order": 5,
+      "title": "第二阶段：方向入门",
+      "points": ["Web 安全", "Crypto 密码学", "Misc 杂项与取证", "Reverse 逆向", "Pwn 二进制"],
+      "narration": "方向入门阶段要了解 CTF 的五个主要方向：Web 安全、Crypto 密码学、Misc 杂项与取证、Reverse 逆向，以及 Pwn 二进制。你不需要一开始就样样精通，可以先选一到两个方向深入。"
+    },
+    {
+      "order": 6,
+      "title": "第三阶段：刷题训练",
+      "points": ["从简单题开始", "按方向集中刷题", "及时看 Writeup", "记录错题与套路"],
+      "narration": "刷题训练阶段，建议从简单题开始，按方向集中练习。遇到不会的题，不要死磕太久，及时看 Writeup，并且把错题和常见套路记录下来。刷题的目的不是做对一道题，而是建立解题思维。"
+    },
+    {
+      "order": 7,
+      "title": "第四阶段：参赛与复盘",
+      "points": ["组队参赛", "先从入门赛开始", "赛后写 Writeup", "复盘时间与分工"],
+      "narration": "参赛与复盘阶段，先从入门赛开始，和队友一起参加比赛。赛后一定要写 Writeup，复盘哪些题做出来了、哪些题卡住了、时间分配是否合理，以及下次怎样改进。"
+    },
+    {
+      "order": 8,
+      "title": "常用环境与网络工具",
+      "points": ["Kali Linux", "Docker", "VPN 与 SSH", "Wireshark"],
+      "narration": "常用环境方面，Kali Linux 集成了大量安全工具，Docker 可以快速搭起隔离环境，VPN 和 SSH 用于连接比赛网络和远程靶机，Wireshark 用来分析网络流量。"
+    },
+    {
+      "order": 9,
+      "title": "Web 方向常用工具",
+      "points": ["浏览器 DevTools", "Burp Suite", "OWASP ZAP", "dirsearch 与 sqlmap"],
+      "narration": "Web 方向最常用的是浏览器开发者工具和 Burp Suite，它们可以抓包、改包、分析请求。OWASP ZAP 是另一款常用的 Web 安全测试工具，dirsearch 用来扫目录，sqlmap 用来辅助检测 SQL 注入。"
+    },
+    {
+      "order": 10,
+      "title": "Crypto 与 Misc 常用工具",
+      "points": ["CyberChef", "Python 密码学库", "hashcat 与 John", "binwalk、zsteg、exiftool"],
+      "narration": "Crypto 和 Misc 方向常用 CyberChef 做编码转换，用 Python 密码学库写解题脚本，用 hashcat 和 John 破解哈希，用 binwalk、zsteg、exiftool 分析文件、图片和隐写内容。"
+    },
+    {
+      "order": 11,
+      "title": "Reverse 与 Pwn 常用工具",
+      "points": ["Ghidra 与 IDA", "x64dbg 与 gdb", "checksec", "pwntools 与 ROPgadget"],
+      "narration": "Reverse 方向常用 Ghidra 和 IDA 做静态分析，用 x64dbg 和 gdb 做动态调试。Pwn 方向常用 checksec 检查保护机制，用 pwntools 编写利用脚本，用 ROPgadget 查找 ROP 链所需的指令片段。"
+    },
+    {
+      "order": 12,
+      "title": "笔记与知识管理",
+      "points": ["Markdown 写 Writeup", "Git 管理脚本", "建立知识库", "维护错题本"],
+      "narration": "学习过程中要用 Markdown 写 Writeup，用 Git 管理解题脚本和工具配置，建立自己的知识库和错题本。坚持记录，你会发现很多题目背后的套路是相通的。"
+    },
+    {
+      "order": 13,
+      "title": "本节小结",
+      "points": [
+        "四阶段：基础、方向、刷题、参赛",
+        "工具按方向选择",
+        "刷题必须配合 Writeup",
+        "复盘是提升的关键"
+      ],
+      "narration": "最后总结一下：CTF 学习分为基础打底、方向入门、刷题训练、参赛复盘四个阶段；工具要按方向选择；刷题必须配合 Writeup；复盘才是能力提升的关键。"
+    },
+    {
+      "order": 14,
+      "title": "随堂测验",
+      "points": ["5 道单选", "3 道多选", "2 道判断", "覆盖学习路径与工具选择"],
+      "narration": "下面是随堂测验。请根据本节内容完成 5 道单选、3 道多选和 2 道判断，检查自己对学习路径、阶段任务和常用工具的掌握情况。"
+    }
+  ],
+  "theory": {
+    "singleChoice": 5,
+    "multipleChoice": 3,
+    "trueFalse": 2,
+    "knowledgeTags": [
+      "CTF学习路径",
+      "Linux基础",
+      "网络基础",
+      "Python",
+      "Web安全",
+      "Crypto",
+      "Misc",
+      "Reverse",
+      "Pwn",
+      "Burp Suite",
+      "CyberChef",
+      "Ghidra",
+      "pwntools",
+      "Writeup"
+    ]
+  },
+  "lab": null
+}

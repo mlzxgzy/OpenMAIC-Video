@@ -19,6 +19,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 const exitOnBootFailure = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/server/boot-failure', () => ({ exitOnBootFailure }));
 
+import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { ensureGenerationRunSchema } from '@/lib/persistence/generation-runs';
 import { startSchemaBootCheck } from '@/lib/persistence/schema-boot-check';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
@@ -78,6 +79,7 @@ describe.skipIf(!contractUrl)('versioned schema migrations at boot (PostgreSQL)'
       await withSchemaBootstrapLock(locked, ensureAgentSessionMaterialSchema);
       await withSchemaBootstrapLock(locked, ensureUserSkillSchema);
       await withSchemaBootstrapLock(locked, ensureGenerationRunSchema);
+      await withSchemaBootstrapLock(locked, ensureCurriculumSchema);
     } finally {
       await pool.end().catch(() => {});
     }

@@ -1,0 +1,143 @@
+{
+  "schemaVersion": 1,
+  "code": "1-1-1",
+  "chapter": "第一章 CTF基础与工具环境",
+  "section": "第一节 CTF入门与赛制",
+  "title": "CTF概述与竞赛形式",
+  "type": "theory",
+  "hours": 1,
+  "objectives": [
+    "能说出 CTF 的基本定义和起源",
+    "能区分 Jeopardy、AWD、King of the Hill 三种主要赛制",
+    "能说明 flag 的常见格式和提交规则",
+    "能识别 CTF 新手常见误区"
+  ],
+  "generation": {
+    "sceneTypes": ["slide"],
+    "interactive": false,
+    "taskEngine": false,
+    "outlineReview": "auto",
+    "requirement": "请生成一门名为《CTF概述与竞赛形式》的 OpenMAIC 课程。\n课程定位：《CTF 综合实战》第一章第一节目1，理论课，1学时。\n学习目标：1. 能说出CTF的基本定义和起源；2. 能区分Jeopardy、AWD、King of the Hill三种主要赛制；3. 能说明flag的常见格式和提交规则；4. 能识别CTF新手常见误区。\n只使用 slide 场景，不要生成 code、interactive、pbl 等场景。\n内容必须覆盖以下14页：封面、本节目标、什么是CTF、CTF的起源与发展、竞赛形式总览、Jeopardy赛制、Jeopardy计分与题型、AWD赛制、AWD攻防流程、King of the Hill与混合赛、flag格式与提交规则、新手常见误区、本节小结、随堂测验。\n讲解要适合语音合成，语言简洁、口语化，面向零基础学员。"
+  },
+  "slideOutline": [
+    {
+      "order": 1,
+      "title": "封面：CTF概述与竞赛形式",
+      "points": ["课程名称", "第一章第一节目1", "本节定位"],
+      "narration": "欢迎来到 CTF 综合实战课程。本节课我们要建立对 CTF 的整体认知，知道它是什么、有哪些赛制、flag 又是什么。"
+    },
+    {
+      "order": 2,
+      "title": "本节目标",
+      "points": [
+        "理解 CTF 定义与起源",
+        "区分三种主要赛制",
+        "掌握 flag 格式与提交规则",
+        "避开新手常见误区"
+      ],
+      "narration": "学完这一节，你应该能做到四件事：说出 CTF 的定义和起源，区分 Jeopardy、AWD、King of the Hill 三种赛制，知道 flag 的常见格式和提交规则，并且避开新手最容易踩的坑。"
+    },
+    {
+      "order": 3,
+      "title": "什么是 CTF",
+      "points": ["CTF = Capture The Flag", "中文常称“夺旗赛”", "通过解题或攻防获取 flag"],
+      "narration": "CTF 的全称是 Capture The Flag，中文一般叫夺旗赛。它的核心不是考试，而是通过解题、渗透或者攻防对抗，拿到题目里预设的 flag。"
+    },
+    {
+      "order": 4,
+      "title": "CTF 的起源与发展",
+      "points": ["1996 年 DEFCON CTF", "从线下比赛到线上平台", "国内外赛事越来越丰富"],
+      "narration": "CTF 最早可以追溯到 1996 年的 DEFCON CTF。后来它从线下比赛逐渐发展到线上平台，现在国内外都有大量赛事，已经成为安全人才培养的重要方式。"
+    },
+    {
+      "order": 5,
+      "title": "竞赛形式总览",
+      "points": ["Jeopardy 解题赛", "AWD 攻防赛", "King of the Hill 占山为王", "混合赛制"],
+      "narration": "CTF 不只有一种形式。最常见的是 Jeopardy 解题赛，还有 AWD 攻防赛、King of the Hill 占山为王，以及把多种形式组合起来的混合赛。"
+    },
+    {
+      "order": 6,
+      "title": "Jeopardy 赛制",
+      "points": ["按方向出题", "每题有分值", "提交 flag 得分", "适合个人和团队"],
+      "narration": "Jeopardy 是最常见的 CTF 赛制。题目按 Web、Crypto、Misc、Reverse、Pwn 等方向分类，每道题有分值，提交正确 flag 就能得分。"
+    },
+    {
+      "order": 7,
+      "title": "Jeopardy 计分与题型",
+      "points": ["动态积分", "一血/三血奖励", "题目难度分层", "解题时间不限"],
+      "narration": "Jeopardy 的分数通常是动态的，解出的人越多，题目分值可能越低。有些比赛还会给一血或者前三名额外加分。题目难度一般分层，比赛期间可以自由安排解题顺序。"
+    },
+    {
+      "order": 8,
+      "title": "AWD 赛制",
+      "points": [
+        "Attack With Defense",
+        "每队有需要防守的服务",
+        "攻击对手和修复漏洞都能得分",
+        "回合制"
+      ],
+      "narration": "AWD 是 Attack With Defense，也就是攻防对抗。每支队伍会分到若干有漏洞的服务，既要攻击别人的服务，也要修复自己的漏洞。比赛通常按回合进行，攻防都会实时计分。"
+    },
+    {
+      "order": 9,
+      "title": "AWD 攻防流程",
+      "points": ["服务加固", "漏洞扫描", "利用攻击", "修复与维持"],
+      "narration": "AWD 的标准流程一般包括四步：先加固自己的服务，再扫描和分析漏洞，然后利用漏洞攻击对手，最后持续修复和维持服务可用。攻防节奏很快，团队分工非常重要。"
+    },
+    {
+      "order": 10,
+      "title": "King of the Hill 与混合赛",
+      "points": ["占山为王", "持续控制目标得分", "混合赛越来越多", "考验综合能力"],
+      "narration": "King of the Hill 是占山为王模式，队伍要持续控制目标服务或者目标权限来得分。现在很多比赛会把解题、攻防和占山为王混合在一起，综合考察参赛者的能力。"
+    },
+    {
+      "order": 11,
+      "title": "flag 格式与提交规则",
+      "points": [
+        "常见格式 flag{...}",
+        "注意大小写和花括号",
+        "提交前检查格式",
+        "部分比赛限制提交次数"
+      ],
+      "narration": "flag 最常见的格式是 flag 加一对花括号。提交时要注意大小写、空格和花括号是否完整。有些比赛还会限制提交次数，所以提交前一定要检查清楚。"
+    },
+    {
+      "order": 12,
+      "title": "新手常见误区",
+      "points": ["只学工具不学原理", "忽略信息收集", "死磕一道题", "不做 Writeup"],
+      "narration": "新手常见的误区有几个：只学工具不学原理，忽略信息收集，死磕一道题浪费时间，以及做完题不写 Writeup。记住，信息收集和复盘和解题本身一样重要。"
+    },
+    {
+      "order": 13,
+      "title": "本节小结",
+      "points": [
+        "CTF 是夺旗赛",
+        "主要赛制：Jeopardy、AWD、KotH",
+        "flag 格式要规范",
+        "复盘比做完更重要"
+      ],
+      "narration": "最后总结一下：CTF 是夺旗赛，主流赛制是 Jeopardy、AWD 和 King of the Hill，flag 提交要规范，做完题一定要复盘和写 Writeup。"
+    },
+    {
+      "order": 14,
+      "title": "随堂测验",
+      "points": ["5 道单选", "3 道多选", "2 道判断", "覆盖本节核心概念"],
+      "narration": "下面是随堂测验。请根据本节内容完成 5 道单选、3 道多选和 2 道判断，检查自己对 CTF 基本概念和赛制的掌握情况。"
+    }
+  ],
+  "theory": {
+    "singleChoice": 5,
+    "multipleChoice": 3,
+    "trueFalse": 2,
+    "knowledgeTags": [
+      "CTF定义",
+      "CTF起源",
+      "Jeopardy",
+      "AWD",
+      "King of the Hill",
+      "flag",
+      "新手误区"
+    ]
+  },
+  "lab": null
+}

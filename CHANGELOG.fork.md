@@ -26,7 +26,69 @@
 
 ## [Unreleased]
 
+### Added
+
+- **目级课程包与生成脚本**：新增 `course-packages/`（课程包格式与 `1-1-1` 样例）、
+  `scripts/start-lesson-generation.mjs`，把《CTF 综合实战》的“目”转成一次
+  OpenMAIC 生成运行。脚本固定传 `sceneTypes: ["slide"]`、`interactive: false`、
+  `taskEngine: false`、`outlineReview: "auto"`，从源头保证每个目只生成 slide
+  课程，不会混入 code / interactive / PBL 场景。首条链路已实跑：
+  `1-1-1 CTF概述与竞赛形式` 生成完成，得到 14 个 slide scene 的
+  `stage-jK0vsZSWXvws`。
+
+  **这是课程生成功能，不是视频导出链路**：课程包是后续理论题、Docker 实操和
+  考试模块的挂载点，先以最小 JSON + CLI 跑通“课程包 → generation run → stage”，
+  等模板稳定后再进 L4 UI 和批量生产，避免过早把内容结构固化进数据库。
+
+  验证：`node --check scripts/start-lesson-generation.mjs` 通过；
+  `--dry-run` 能正确输出生成请求体；实跑 `POST /api/generation-runs` 得到
+  `state=completed`，stage 内 14/14 个 scene 均为 `slide`。
+
+- **生成脚本支持固定 owner 与课程库 folder**：`scripts/start-lesson-generation.mjs`
+  新增 `--anonymous-id <uuid>`、`--folder <name>`、`--folder-id <id>`。正式批量
+  生成时用同一个匿名 owner 和同一个 folder，54 个目的 stage 就不会散落到多个
+  匿名空间；不传 `--anonymous-id` 时仍保持旧行为，由服务端每次新建匿名 owner。
+  `--folder` 会先按名称查找、不存在才创建，运行完成后通过
+  `POST /api/folders/members` 把 stage 归档；`--folder-id` 用于已有 folder。
+  `--no-wait` 不知道最终 stageId，因此不自动归档。
+
+  验证：`node --check scripts/start-lesson-generation.mjs` 通过；
+  `--dry-run` 正确显示 owner 与 folder；已用稳定 owner
+  `anon:2f17ee10-95b7-448b-bd7f-282476f91430` 创建 folder `CTF综合实战`
+  （`folder-UIDtG6lf2eGE`），并把有声版 `1-1-1` 的
+  `stage-q7WI2k4kHWte` 归档进去。
+- **第一批目级课程包扩展与实跑**：新增 `course-packages/ctf/1-1-2.json`
+  （《CTF常见赛事与竞赛平台》）和 `1-1-3.json`（《CTF学习路径与常用工具》），
+  两包与 `1-1-1` 同结构，固定只生成 14 页 slide。已用稳定 owner
+  `anon:2f17ee10-95b7-448b-bd7f-282476f91430` 和 folder `CTF综合实战`
+  （`folder-UIDtG6lf2eGE`）完成生成并归档：
+
+  | 目 | run | stage | 结果 |
+  | --- | --- | --- | --- |
+  | `1-1-2` | `run-Zprg4tm7aUgA2-zy` | `stage-BN1nGN0TLQKk` | `state=completed`，14/14 scene 全部有声 |
+  | `1-1-3` | `run-T3UmWD7udyDARHsH` | `stage-n8VTErEDjf2t` | `state=completed`，14/14 scene 全部有声 |
+
+  验证：`/api/stages` 返回 3 个 stage 且 `folderId` 全部为
+  `folder-UIDtG6lf2eGE`；`1-1-2` 共 87 个 `audioId`、`1-1-3` 共 98 个
+  `audioId`，两个 stage 每个 scene 都至少绑定一条 TTS 音频。
+
+- **课程产品层第一版（课程台账 + 课程关系图）**：新增 `curriculum_*`
+  PostgreSQL 表、owner 隔离的 REST API（`/api/curriculum`、`/api/curriculum/series`、
+  `/api/curriculum/courses`、`/api/curriculum/relations`）和 `/curriculum`
+  工作台页面。第一版把已经生成出来的 `stage` 作为“课程内容”挂到稳定课程实体
+  上，支持系列、章/节/目、学时、学分、学期、状态、stage 关联，以及先修/
+  后续/相关/支撑关系和 React Flow 关系图。课程 schema 走惰性 migration，
+  并已注册到 `APP_SCHEMA_STORES` 参与启动校验。
+
+  验证：`tsc --noEmit`、ESLint 通过；schema 迁移 checksum 测试通过；
+  已用稳定 owner 建 `CTF综合实战` 系列，并把 3 个已生成 stage 写入课程台账
+  （`course-2pl8JEmB7px4` / `course-o3nxnlmzEtcv` / `course-CWwV3UclqNQ2`），
+  建立 `1-1-1 → 1-1-2 → 1-1-3` 的先修关系；`/api/curriculum` 返回 1 个系列、
+  3 门课程、2 条关系，`/curriculum` 页面 SSR 200。
+
 ### Changed
+- **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
+
 
 - **导出改走分块并行渲染**：两份 Compose 栈（`docker-compose.yml` 生产、
   `docker-compose.db.yml` 本地开发）默认开启 `RENDER_CHUNK_EXECUTION=true`、
