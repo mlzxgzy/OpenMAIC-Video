@@ -354,3 +354,60 @@ export function parseKnowledgePointRelationInput(
     },
   };
 }
+
+export interface ParsedCourseAssemblyInput {
+  seriesId?: string | null;
+  title: string;
+  code?: string | null;
+  chapter?: string | null;
+  section?: string | null;
+  type?: string | null;
+  hours?: number | null;
+  knowledgePoints: ParsedCourseKnowledgePointInput[];
+}
+
+export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCourseAssemblyInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+
+  const title = record.title;
+  if (typeof title !== 'string' || title.trim().length === 0) {
+    return { ok: false, message: 'title is required' };
+  }
+  if (title.trim().length > 240) return { ok: false, message: 'title is too long' };
+
+  const value: ParsedCourseAssemblyInput = {
+    title: title.trim(),
+    knowledgePoints: [],
+  };
+
+  for (const key of ['seriesId', 'code', 'chapter', 'section', 'type'] as const) {
+    const parsed = readOptionalText(record, key);
+    if (isParseFailure(parsed)) return parsed;
+    if (parsed !== undefined) {
+      const trimmed = parsed === null ? null : parsed.trim();
+      value[key] = trimmed && trimmed.length > 0 ? trimmed : null;
+    }
+  }
+  if (value.type && value.type.length > 60) {
+    return { ok: false, message: 'type is too long' };
+  }
+
+  const hours = readOptionalNumber(record, 'hours');
+  if (isParseFailure(hours)) return hours;
+  if (hours !== undefined) {
+    if (hours === null || hours <= 0) {
+      return { ok: false, message: 'hours must be a positive number or null' };
+    }
+    value.hours = hours;
+  }
+
+  const links = parseCourseKnowledgePointsInput({ knowledgePoints: record.knowledgePoints });
+  if (!links.ok) return { ok: false, message: links.message };
+  if (links.value.length === 0) {
+    return { ok: false, message: 'knowledgePoints must contain at least one item' };
+  }
+  value.knowledgePoints = links.value;
+
+  return { ok: true, value };
+}

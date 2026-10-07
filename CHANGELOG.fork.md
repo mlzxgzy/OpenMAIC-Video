@@ -117,6 +117,22 @@
   报告；已为 `CTF综合实战` 写入 4 条先修/相关关系，`/curriculum` 页面 SSR 200。
 
 
+- **课程组装器（知识点 → 课程包）**：新增纯函数 `lib/curriculum/assembly.ts`、
+  `POST /api/curriculum/assemblies` 预览接口，以及 `/curriculum` 页面的
+  “课程组装器”面板。组装器按 `parent_id`、`prerequisite`、`follow-up` 和
+  `contains` 关系做稳定拓扑排序，生成课程目标、slide 页序、知识点覆盖备注、
+  先修缺失警告，并输出可直接交给 `scripts/start-lesson-generation.mjs` 的
+  course-package JSON。页面支持从已有课程带入知识点、下载课程包、复制启动
+  命令，以及通过既有课程台账 API 保存为课程草稿并写入知识点覆盖关系。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；新增
+  `tests/curriculum/assembly.test.ts`（3 例）通过；
+  `POST /api/curriculum/assemblies` 冒烟通过，按先修关系正确排序并生成 7 页
+  课程包；缺失先修返回 `MISSING_PREREQUISITE` 警告；课程草稿创建 +
+  `PUT /api/curriculum/courses/[id]/knowledge-points` + 删除的冒烟通过；
+  `/curriculum` 页面 SSR 200。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 

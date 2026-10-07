@@ -5,6 +5,7 @@ import { Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 
 import { Canvas } from '@/components/ai-elements/canvas';
 import { KnowledgePointsPanel } from '@/components/curriculum/knowledge-points-panel';
+import { CourseAssemblerPanel } from '@/components/curriculum/course-assembler-panel';
 import { KnowledgeRelationsPanel } from '@/components/curriculum/knowledge-relations-panel';
 import { Controls } from '@/components/ai-elements/controls';
 import { Button } from '@/components/ui/button';
@@ -674,6 +675,14 @@ export function CurriculumWorkspace() {
             courses={snapshot.courses}
             knowledgePoints={snapshot.knowledgePoints}
             knowledgePointRelations={snapshot.knowledgePointRelations}
+            courseKnowledgePoints={snapshot.courseKnowledgePoints}
+            onChanged={load}
+          />
+
+          <CourseAssemblerPanel
+            seriesId={selectedSeriesId}
+            courses={snapshot.courses}
+            knowledgePoints={snapshot.knowledgePoints}
             courseKnowledgePoints={snapshot.courseKnowledgePoints}
             onChanged={load}
           />

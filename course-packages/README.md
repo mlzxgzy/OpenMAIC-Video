@@ -59,6 +59,28 @@ course-packages/
 
 这里固定只生成 slide，不生成 code、interactive、PBL 场景。
 
+## 从知识点组装课程包
+
+`/curriculum` 页面的“课程组装器”可以从知识点库生成一个课程包草稿：
+
+```text
+选择知识点 + 覆盖层级
+  → 按 parent / prerequisite / follow-up / contains 关系排序
+  → 生成 objectives、slideOutline 和 generation.requirement
+  → 下载 course-package JSON
+```
+
+下载文件名使用课程组装器里的 `code`，目录建议放到：
+
+```text
+course-packages/assembled/
+```
+
+生成出来的 JSON 与 `course-packages/ctf/1-1-1.json` 同结构，可以直接用下面的
+`start-lesson-generation.mjs` 启动生成；页面里也会显示对应的启动命令。
+组装器不会自动启动模型生成，避免误触发成本和 owner/folder 不一致。
+
+
 ## 启动生成
 
 推荐正式生成时固定 owner 和课程库 folder，避免 54 个目散落到不同匿名空间：
