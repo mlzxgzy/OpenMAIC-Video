@@ -1,14 +1,16 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
+  Download,
   GraduationCap,
   Loader2,
   Plus,
   Save,
   Trash2,
+  Upload,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -16,6 +18,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { buildProgramCoverage } from '@/lib/curriculum/program';
+import type { ProgramPlanExportFile } from '@/lib/curriculum/program-io';
 import {
   CURRICULUM_PROGRAM_COURSE_CATEGORIES,
   CURRICULUM_PROGRAM_STATUSES,
@@ -78,6 +81,20 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
+interface ProgramPlanExportResponse {
+  document: ProgramPlanExportFile;
+}
+
+interface ProgramPlanImportResponse {
+  result: {
+    program: CurriculumProgramRecord;
+    programVersion: CurriculumProgramVersionRecord;
+    indicators: unknown[];
+    programCourses: unknown[];
+    supports: unknown[];
+  };
+}
+
 export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps) {
   const [programId, setProgramId] = useState('');
   const [versionId, setVersionId] = useState('');
@@ -106,6 +123,8 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
   });
   const [selectedProgramCourseId, setSelectedProgramCourseId] = useState('');
   const [supportDraft, setSupportDraft] = useState<Record<string, number>>({});
+  const [importMode, setImportMode] = useState<'create' | 'replace'>('create');
+  const importFileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -305,6 +324,76 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
       setNotice('指标点支撑矩阵已保存。');
     });
 
+  const exportProgramPlan = () =>
+    run('export-program', async () => {
+      if (!versionId) return;
+      const payload = await requestJson<ProgramPlanExportResponse>(
+        `/api/curriculum/program-versions/${versionId}/export`,
+      );
+      const fileName =
+        `${payload.document.program.name}-${payload.document.programVersion.name}.program-plan.json`
+          .replace(/[\\/:*?"<>|]+/g, '-')
+          .slice(0, 180);
+      const blob = new Blob([JSON.stringify(payload.document, null, 2)], {
+        type: 'application/json;charset=utf-8',
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = fileName;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      setNotice('培养方案 JSON 已导出。');
+    });
+
+  const importProgramPlan = (file: File) => {
+    if (importMode === 'replace') {
+      if (!versionId) {
+        setError('请先选择要覆盖的培养方案版本。');
+        return;
+      }
+      const currentVersion = snapshot.programVersions.find((item) => item.id === versionId);
+      if (
+        !window.confirm(
+          `覆盖“${currentVersion?.name ?? '当前版本'}”？该版本的指标点、计划课程和支撑矩阵都会被替换。`,
+        )
+      ) {
+        return;
+      }
+    }
+    void run('import-program', async () => {
+      let document: unknown;
+      try {
+        document = JSON.parse(await file.text());
+      } catch {
+        throw new Error('JSON 文件格式不正确。');
+      }
+      const payload = await requestJson<ProgramPlanImportResponse>(
+        '/api/curriculum/program-versions/import',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            document,
+            mode: importMode,
+            programId: importMode === 'create' ? programId || null : null,
+            programVersionId: importMode === 'replace' ? versionId : null,
+          }),
+        },
+      );
+      setProgramId(payload.result.program.id);
+      setVersionId(payload.result.programVersion.id);
+      setNotice(
+        `已导入：${payload.result.indicators.length} 个指标点，${payload.result.programCourses.length} 门计划课程，${payload.result.supports.length} 条支撑关系。`,
+      );
+    });
+  };
+
+  const handleImportFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = '';
+    if (file) importProgramPlan(file);
+  };
+
   const selectedCourse = snapshot.courses.find((course) => course.id === courseForm.courseId);
 
   return (
@@ -329,6 +418,51 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
             {notice}
           </div>
         ) : null}
+
+        <div className="border-border flex flex-col gap-3 rounded-lg border bg-muted/20 p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-sm font-medium">培养方案导入 / 导出</div>
+              <div className="text-muted-foreground text-xs">
+                JSON 文件包含培养方案元数据、指标点、计划课程和课程-指标点支撑矩阵。
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                value={importMode}
+                onChange={(event) => setImportMode(event.target.value as 'create' | 'replace')}
+                disabled={busy !== null}
+              >
+                <option value="create">导入为新版本</option>
+                <option value="replace">覆盖当前版本</option>
+              </select>
+              <input
+                ref={importFileRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={handleImportFileChange}
+              />
+              <Button
+                variant="outline"
+                onClick={() => importFileRef.current?.click()}
+                disabled={busy !== null || (importMode === 'replace' && !versionId)}
+              >
+                {busy === 'import-program' ? <Loader2 className="animate-spin" /> : <Upload />}
+                导入 JSON
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void exportProgramPlan()}
+                disabled={busy !== null || !versionId}
+              >
+                {busy === 'export-program' ? <Loader2 className="animate-spin" /> : <Download />}
+                导出当前版本
+              </Button>
+            </div>
+          </div>
+        </div>
 
         <div className="grid gap-4 xl:grid-cols-3">
           <div className="border-border flex flex-col gap-3 rounded-lg border p-3">

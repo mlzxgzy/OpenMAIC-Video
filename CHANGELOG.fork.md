@@ -206,6 +206,40 @@
 
 
 
+- **培养方案与指标点矩阵**：新增 curriculum v7 migration（`curriculum_program`、
+  `curriculum_program_version`、`curriculum_graduation_indicator`、
+  `curriculum_program_course`、`curriculum_course_indicator_support`）、培养方案/
+  版本/指标点/计划课程/支撑矩阵 REST API、`GET /api/curriculum/program-coverage`
+  覆盖报告，以及 `/curriculum` 页面的“培养方案与指标点矩阵”面板。支持学分覆盖、
+  指标点空缺/偏弱/已达标、未关联课程、知识点空缺和冗余、学期学分分布；纯函数
+  `lib/curriculum/program.ts` 同时服务 API 与前端。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；curriculum + 迁移 tests
+  26 例、PostgreSQL schema migration tests 23 例通过；本地 PostgreSQL 已应用
+  v7 migration；真实 API 冒烟创建培养方案/版本/指标点/计划课程/支撑矩阵并返回
+  覆盖率报告；非法请求返回 400、重复关联课程返回 409、未知版本返回 404；
+  `/curriculum` SSR 200。
+
+
+- **培养方案 JSON 导入/导出**：新增版本化 JSON 格式
+  `openmaic.curriculum.program-plan`，纯函数
+  `lib/curriculum/program-io.ts` 负责构建/解析导出文件，指标点和支撑关系以
+  `indicatorCode` 引用，避免把 owner 本地 id 写进可分享文件。新增
+  `GET /api/curriculum/program-versions/[id]/export` 下载接口和
+  `POST /api/curriculum/program-versions/import` 导入接口，支持两种模式：
+  `create` 在选中/同名的培养方案下新建版本，`replace` 原子覆盖选中版本的指标点、
+  计划课程和支撑矩阵。导入时会先校验 JSON 结构、指标点代码引用和取值范围，
+  再按 `courseId → courseCode → title` 顺序匹配或回退为计划占位课程；整个导入在
+  owner write fence 的单事务中执行。`/curriculum` 培养方案面板新增导出当前版本、
+  导入为新版本、覆盖当前版本和 JSON 文件选择控件。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；新增
+  `tests/curriculum/program-io.test.ts`（3 例），curriculum + 迁移 checksum
+  tests 29 例通过；真实 API 冒烟完成 创建方案/版本/指标点/课程/支撑 →
+  导出 JSON → `create` 导入新版本 → `replace` 覆盖 → 删除方案的完整链路；
+  非法导入体返回 400，`/curriculum` SSR 200 且包含“培养方案导入 / 导出”。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 

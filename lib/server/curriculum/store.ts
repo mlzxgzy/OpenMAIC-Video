@@ -12,6 +12,7 @@ import { randomBytes } from 'node:crypto';
 import type { Queryable } from '@openmaic/storage/document/pg';
 import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
 
+import type { ProgramPlanExportCourse, ProgramPlanExportFile } from '@/lib/curriculum/program-io';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
@@ -2811,4 +2812,196 @@ export async function setCourseIndicatorSupports(
     inserted.push(mapCourseIndicatorSupport(row));
   }
   return inserted;
+}
+
+export type CurriculumProgramPlanImportMode = 'create' | 'replace';
+
+export interface CurriculumProgramPlanImportInput {
+  mode: CurriculumProgramPlanImportMode;
+  document: ProgramPlanExportFile;
+  programId?: string | null;
+  programVersionId?: string | null;
+}
+
+export interface CurriculumProgramPlanImportResult {
+  mode: CurriculumProgramPlanImportMode;
+  program: CurriculumProgramRecord;
+  programVersion: CurriculumProgramVersionRecord;
+  indicators: CurriculumGraduationIndicatorRecord[];
+  programCourses: CurriculumProgramCourseRecord[];
+  supports: CourseIndicatorSupportRecord[];
+}
+
+async function resolveImportedCourseId(
+  queryable: Queryable,
+  ownerId: string,
+  course: ProgramPlanExportCourse,
+): Promise<string | null> {
+  if (course.courseId) {
+    const owned = await readCourseRow(queryable, ownerId, course.courseId);
+    if (owned) return owned.id;
+  }
+  if (course.courseCode) {
+    const byCode = await queryable.query<{ id: string } & Record<string, unknown>>(
+      `SELECT id
+         FROM curriculum_course
+        WHERE owner_id = $1 AND lower(code) = lower($2)
+        ORDER BY created_at, id
+        LIMIT 1`,
+      [ownerId, course.courseCode],
+    );
+    if (byCode.rows[0]) return byCode.rows[0].id;
+  }
+  const byTitle = await queryable.query<{ id: string } & Record<string, unknown>>(
+    `SELECT id
+       FROM curriculum_course
+      WHERE owner_id = $1 AND lower(title) = lower($2)
+      ORDER BY created_at, id
+      LIMIT 1`,
+    [ownerId, course.title],
+  );
+  return byTitle.rows[0]?.id ?? null;
+}
+
+/**
+ * Import one validated program-plan document. `create` always adds a version;
+ * `replace` rewrites an existing version. The caller owns request identity and
+ * wraps this in a transaction with `fenceOwnerWrite`, so the whole import
+ * either commits as one plan or leaves the previous plan untouched.
+ */
+export async function importCurriculumProgramPlan(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumProgramPlanImportInput,
+): Promise<CurriculumProgramPlanImportResult> {
+  const { document, mode } = input;
+  let programRow: ProgramRow | null = null;
+  let versionRow: ProgramVersionRow | null = null;
+
+  if (mode === 'replace') {
+    if (!input.programVersionId) {
+      throw new CurriculumValidationError('programVersionId is required when mode is replace');
+    }
+    versionRow = await readProgramVersionRow(queryable, ownerId, input.programVersionId);
+    if (!versionRow) throw new CurriculumNotFoundError('program version not found');
+    programRow = await readProgramRow(queryable, ownerId, versionRow.program_id);
+    if (!programRow) throw new CurriculumNotFoundError('program not found');
+  } else {
+    if (input.programVersionId) {
+      throw new CurriculumValidationError('programVersionId is only used in replace mode');
+    }
+    if (input.programId) {
+      programRow = await readProgramRow(queryable, ownerId, input.programId);
+      if (!programRow) throw new CurriculumNotFoundError('program not found');
+    } else {
+      const createdProgram = await createCurriculumProgram(queryable, ownerId, {
+        name: document.program.name,
+        code: document.program.code,
+        description: document.program.description,
+        status: document.program.status,
+      });
+      programRow = await readProgramRow(queryable, ownerId, createdProgram.id);
+      if (!programRow) throw new CurriculumValidationError('program could not be created');
+    }
+    const createdVersion = await createCurriculumProgramVersion(queryable, ownerId, {
+      programId: programRow.id,
+      name: document.programVersion.name,
+      version: document.programVersion.version,
+      gradeYear: document.programVersion.gradeYear,
+      description: document.programVersion.description,
+      status: document.programVersion.status,
+      targetCredits: document.programVersion.targetCredits,
+    });
+    versionRow = await readProgramVersionRow(queryable, ownerId, createdVersion.id);
+    if (!versionRow) throw new CurriculumValidationError('program version could not be created');
+  }
+
+  if (mode === 'replace') {
+    await updateCurriculumProgramVersion(queryable, ownerId, versionRow.id, {
+      name: document.programVersion.name,
+      version: document.programVersion.version,
+      gradeYear: document.programVersion.gradeYear,
+      description: document.programVersion.description,
+      status: document.programVersion.status,
+      targetCredits: document.programVersion.targetCredits,
+    });
+    await queryable.query(
+      'DELETE FROM curriculum_course_indicator_support WHERE owner_id = $1 AND program_version_id = $2',
+      [ownerId, versionRow.id],
+    );
+    await queryable.query(
+      'DELETE FROM curriculum_graduation_indicator WHERE owner_id = $1 AND program_version_id = $2',
+      [ownerId, versionRow.id],
+    );
+    await queryable.query(
+      'DELETE FROM curriculum_program_course WHERE owner_id = $1 AND program_version_id = $2',
+      [ownerId, versionRow.id],
+    );
+    // The version row was read before the updates; refresh the metadata so the
+    // response reflects the values that were just written.
+    versionRow = await readProgramVersionRow(queryable, ownerId, versionRow.id);
+    if (!versionRow) throw new CurriculumNotFoundError('program version not found');
+  }
+
+  const indicators: CurriculumGraduationIndicatorRecord[] = [];
+  const indicatorByCode = new Map<string, CurriculumGraduationIndicatorRecord>();
+  for (const indicator of document.indicators) {
+    const created = await createGraduationIndicator(queryable, ownerId, {
+      programVersionId: versionRow.id,
+      code: indicator.code,
+      title: indicator.title,
+      description: indicator.description,
+      targetWeight: indicator.targetWeight,
+      sortOrder: indicator.sortOrder,
+    });
+    indicators.push(created);
+    indicatorByCode.set(created.code, created);
+  }
+
+  const programCourses: CurriculumProgramCourseRecord[] = [];
+  const supports: CourseIndicatorSupportRecord[] = [];
+  for (const course of document.courses) {
+    const courseId = await resolveImportedCourseId(queryable, ownerId, course);
+    const createdCourse = await createCurriculumProgramCourse(queryable, ownerId, {
+      programVersionId: versionRow.id,
+      courseId,
+      title: course.title,
+      code: course.code,
+      semester: course.semester,
+      category: course.category,
+      credits: course.credits,
+      hours: course.hours,
+      sortOrder: course.sortOrder,
+      note: course.note,
+    });
+    programCourses.push(createdCourse);
+
+    const inputSupports = course.supports.map((support) => {
+      const indicator = indicatorByCode.get(support.indicatorCode);
+      if (!indicator) {
+        throw new CurriculumValidationError(
+          `indicator "${support.indicatorCode}" does not belong to this program version`,
+        );
+      }
+      return { indicatorId: indicator.id, weight: support.weight, note: support.note };
+    });
+    if (inputSupports.length > 0) {
+      const inserted = await setCourseIndicatorSupports(
+        queryable,
+        ownerId,
+        createdCourse.id,
+        inputSupports,
+      );
+      supports.push(...inserted);
+    }
+  }
+
+  return {
+    mode,
+    program: mapProgram(programRow),
+    programVersion: mapProgramVersion(versionRow),
+    indicators,
+    programCourses,
+    supports,
+  };
 }

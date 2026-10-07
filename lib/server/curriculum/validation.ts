@@ -19,6 +19,10 @@ import {
   type KnowledgePointType,
 } from '@/lib/curriculum/types';
 import {
+  parseProgramPlanExportDocument,
+  type ProgramPlanExportFile,
+} from '@/lib/curriculum/program-io';
+import {
   VIDEO_FPS,
   VIDEO_QUALITIES,
   VIDEO_RESOLUTIONS,
@@ -1085,4 +1089,58 @@ export function parseCourseIndicatorSupportsInput(
     supports.push({ indicatorId, weight, note: note === undefined ? undefined : note });
   }
   return { ok: true, value: { supports } };
+}
+
+export interface ParsedProgramPlanImportInput {
+  document: ProgramPlanExportFile;
+  mode: 'create' | 'replace';
+  programId: string | null;
+  programVersionId: string | null;
+}
+
+/**
+ * Import body for a program plan. `create` always creates a new version
+ * (under the selected or imported program); `replace` rewrites the selected
+ * version after deleting its indicators, planned courses and support matrix.
+ */
+export function parseProgramPlanImportInput(
+  body: unknown,
+): ParseResult<ParsedProgramPlanImportInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const document = parseProgramPlanExportDocument(record.document);
+  if (!document.ok) return { ok: false, message: document.message };
+
+  const mode = record.mode ?? 'create';
+  if (mode !== 'create' && mode !== 'replace') {
+    return { ok: false, message: 'mode must be one of create, replace' };
+  }
+
+  const rawProgramId = readOptionalText(record, 'programId');
+  if (isParseFailure(rawProgramId)) return rawProgramId;
+  const rawProgramVersionId = readOptionalText(record, 'programVersionId');
+  if (isParseFailure(rawProgramVersionId)) return rawProgramVersionId;
+  const programId =
+    typeof rawProgramId === 'string' && rawProgramId.trim().length > 0 ? rawProgramId.trim() : null;
+  const programVersionId =
+    typeof rawProgramVersionId === 'string' && rawProgramVersionId.trim().length > 0
+      ? rawProgramVersionId.trim()
+      : null;
+
+  if (mode === 'replace' && !programVersionId) {
+    return { ok: false, message: 'programVersionId is required when mode is replace' };
+  }
+  if (mode === 'create' && programVersionId) {
+    return { ok: false, message: 'programVersionId is only allowed when mode is replace' };
+  }
+
+  return {
+    ok: true,
+    value: {
+      document: document.value,
+      mode,
+      programId,
+      programVersionId,
+    },
+  };
 }
