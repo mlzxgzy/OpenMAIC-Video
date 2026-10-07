@@ -1144,3 +1144,37 @@ export function parseProgramPlanImportInput(
     },
   };
 }
+
+export interface ParsedProgramVersionSyncInput {
+  sourceVersionId: string;
+  targetVersionId: string;
+}
+
+/**
+ * Parse the body of `POST /api/curriculum/program-versions/sync`. The sync
+ * route replaces the target version's indicators, planned courses and support
+ * matrix with the source version's content while keeping target metadata.
+ */
+export function parseProgramVersionSyncInput(
+  body: unknown,
+): ParseResult<ParsedProgramVersionSyncInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+
+  const source = record.sourceVersionId;
+  if (typeof source !== 'string' || source.trim().length === 0) {
+    return { ok: false, message: 'sourceVersionId is required' };
+  }
+  const target = record.targetVersionId;
+  if (typeof target !== 'string' || target.trim().length === 0) {
+    return { ok: false, message: 'targetVersionId is required' };
+  }
+
+  const sourceVersionId = source.trim();
+  const targetVersionId = target.trim();
+  if (sourceVersionId === targetVersionId) {
+    return { ok: false, message: 'sourceVersionId and targetVersionId must be different' };
+  }
+
+  return { ok: true, value: { sourceVersionId, targetVersionId } };
+}

@@ -2821,6 +2821,12 @@ export interface CurriculumProgramPlanImportInput {
   document: ProgramPlanExportFile;
   programId?: string | null;
   programVersionId?: string | null;
+  /**
+   * Sync mode uses `replace` to rewrite a target version's content from
+   * another version but keeps the target's own name, version number, grade
+   * year, status and target credits.
+   */
+  preserveVersionMetadata?: boolean;
 }
 
 export interface CurriculumProgramPlanImportResult {
@@ -2917,14 +2923,16 @@ export async function importCurriculumProgramPlan(
   }
 
   if (mode === 'replace') {
-    await updateCurriculumProgramVersion(queryable, ownerId, versionRow.id, {
-      name: document.programVersion.name,
-      version: document.programVersion.version,
-      gradeYear: document.programVersion.gradeYear,
-      description: document.programVersion.description,
-      status: document.programVersion.status,
-      targetCredits: document.programVersion.targetCredits,
-    });
+    if (!input.preserveVersionMetadata) {
+      await updateCurriculumProgramVersion(queryable, ownerId, versionRow.id, {
+        name: document.programVersion.name,
+        version: document.programVersion.version,
+        gradeYear: document.programVersion.gradeYear,
+        description: document.programVersion.description,
+        status: document.programVersion.status,
+        targetCredits: document.programVersion.targetCredits,
+      });
+    }
     await queryable.query(
       'DELETE FROM curriculum_course_indicator_support WHERE owner_id = $1 AND program_version_id = $2',
       [ownerId, versionRow.id],

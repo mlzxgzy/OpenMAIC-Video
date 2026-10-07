@@ -9,6 +9,7 @@ import { BatchQueuePanel } from '@/components/curriculum/batch-queue-panel';
 import { BatchExportPanel } from '@/components/curriculum/batch-export-panel';
 import { CourseAssemblerPanel } from '@/components/curriculum/course-assembler-panel';
 import { KnowledgeRelationsPanel } from '@/components/curriculum/knowledge-relations-panel';
+import { ProgramDiffPanel } from '@/components/curriculum/program-diff-panel';
 import { ProgramPlanPanel } from '@/components/curriculum/program-plan-panel';
 import { Controls } from '@/components/ai-elements/controls';
 import { Button } from '@/components/ui/button';
@@ -675,6 +676,7 @@ export function CurriculumWorkspace() {
           </Card>
 
           <ProgramPlanPanel snapshot={snapshot} onChanged={load} />
+          <ProgramDiffPanel snapshot={snapshot} onChanged={load} />
 
           <KnowledgePointsPanel
             seriesId={selectedSeriesId}

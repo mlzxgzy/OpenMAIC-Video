@@ -240,6 +240,22 @@
   非法导入体返回 400，`/curriculum` SSR 200 且包含“培养方案导入 / 导出”。
 
 
+- **培养方案版本对比与同步**：新增纯函数 `lib/curriculum/program-diff.ts`，按
+  `courseId → 课程编号 → 标题` 匹配计划课程、按指标点编号匹配毕业要求，返回
+  指标点、计划课程、课程-指标点支撑和版本元数据的结构化差异（新增/删除/修改
+  及字段级 before/after）。新增 `GET /api/curriculum/program-versions/compare`
+  对比接口和 `POST /api/curriculum/program-versions/sync` 同步接口；同步复用
+  JSON `replace` 写入器，在 owner write fence 单事务内把基准版指标点、计划课程
+  和支撑矩阵重写到目标版，同时保留目标版自己的名称、版号、年级、状态和目标学分。
+  `/curriculum` 新增“培养方案版本对比与同步”面板，可选择基准版/目标版、交换
+  方向、查看差异并按基准版同步，也支持刷新快照。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；新增
+  `tests/curriculum/program-diff.test.ts`（4 例，含同步入参校验），
+  program-diff、program-io、coverage 等 curriculum 测试通过；`/curriculum`
+  SSR 200 且包含“培养方案版本对比与同步”。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 
