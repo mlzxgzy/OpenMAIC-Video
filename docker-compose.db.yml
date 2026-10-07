@@ -40,10 +40,19 @@ services:
       # producer worker, one render, and one extraction. Select low-memory to
       # force screenshot instead of relying on producer auto-selection.
       - RENDER_RESOURCE_PROFILE=${RENDER_RESOURCE_PROFILE:-standard}
-      - RENDER_CHUNK_EXECUTION=${RENDER_CHUNK_EXECUTION:-false}
-      - RENDER_CHUNK_COUNT=${RENDER_CHUNK_COUNT:-1}
+      # Opt into the plan -> chunk -> assemble path and fan out up to the
+      # standard profile's ceiling of 4 concurrent chunks. Each chunk renders in
+      # its own forked process (chunk-worker.ts), so this buys real parallelism
+      # on a many-core host instead of intra-chunk producer workers, which the
+      # profile pins to 1. Chunks are closed-GOP and re-assembled in order, so
+      # the muxed result still matches the single-process path.
+      - RENDER_CHUNK_EXECUTION=${RENDER_CHUNK_EXECUTION:-true}
+      - RENDER_CHUNK_COUNT=${RENDER_CHUNK_COUNT:-4}
+      # Stays 1: the standard profile hard-fails startup above this
+      # (resource-profile.ts maxChunkWorkers), and fan-out is already handled
+      # by MAX_PARALLEL_CHUNKS.
       - RENDER_CHUNK_WORKERS=${RENDER_CHUNK_WORKERS:-1}
-      - RENDER_MAX_PARALLEL_CHUNKS=${RENDER_MAX_PARALLEL_CHUNKS:-1}
+      - RENDER_MAX_PARALLEL_CHUNKS=${RENDER_MAX_PARALLEL_CHUNKS:-4}
       - RENDER_CHUNK_SIZE_FRAMES=${RENDER_CHUNK_SIZE_FRAMES:-0}
       - RENDER_TARGET_CHUNK_FRAMES=${RENDER_TARGET_CHUNK_FRAMES:-0}
       - PRODUCER_HEADLESS_SHELL_PATH=/usr/bin/chromium-headless-shell
@@ -69,9 +78,13 @@ services:
       # call /preview without an owner identity.
       - RENDER_PREVIEW_MAX_PER_USER=${RENDER_PREVIEW_MAX_PER_USER:-2}
     # Bound RAM: each render (Chromium + FFmpeg + archive expansion) is memory-heavy.
-    # The standard profile requires 8 GiB. For the explicit low-memory profile,
-    # set RENDER_RESOURCE_PROFILE=low-memory and RENDER_SERVICE_MEMORY_LIMIT=4g.
-    mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-8g}
+    # The standard profile requires 8 GiB *of available memory* (8 GiB is the
+    # minimumMemoryBytes floor, not this container cap). With RENDER_MAX_PARALLEL_CHUNKS=4
+    # this container holds up to 4 forked Chromium+FFmpeg chunk renderers at once,
+    # so the cap must sit well above the 8 GiB profile floor or the workers get
+    # OOM-killed mid-export. For the explicit low-memory profile, set
+    # RENDER_RESOURCE_PROFILE=low-memory and RENDER_SERVICE_MEMORY_LIMIT=4g.
+    mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-16g}
     # Chromium media/frame work can exceed Docker's 64 MiB default shared-memory
     # mount. This is a ceiling inside the selected profile cgroup, not eager allocation.
     shm_size: 2gb

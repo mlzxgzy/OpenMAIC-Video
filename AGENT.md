@@ -26,7 +26,7 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 18 个提交并发布了 `v1.2.0-video.1`、
+  - **用 merge，不要用 rebase**：二开已有 19 个提交并发布了 `v1.2.0-video.1`、
     `v1.2.0-video.2`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`

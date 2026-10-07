@@ -26,7 +26,38 @@
 
 ## [Unreleased]
 
-（暂无）
+### Changed
+
+- **导出改走分块并行渲染**：两份 Compose 栈（`docker-compose.yml` 生产、
+  `docker-compose.db.yml` 本地开发）默认开启 `RENDER_CHUNK_EXECUTION=true`、
+  `RENDER_CHUNK_COUNT=4`、`RENDER_MAX_PARALLEL_CHUNKS=4`，容器内存上限
+  `8g` → `16g`。长视频导出的抓帧阶段由单进程串行改为 4 块并行。
+
+  **加速来自进程级分块，而非 chunk 内多 worker**：`maxChunkWorkers` 被
+  standard profile 硬钉为 1（写大于 1 会让[配置加载直接抛错]），每块由
+  `fork` 出独立进程跑完整 producer 流程，因此并行度上限就是 profile 允许的
+  4 块。每块独立拉起 Chromium，冷启动开销不参与并行、照付 4 份——工程越长，
+  这部分占比越小。
+
+  **实测（同机、同工程，串行对照容器 vs 4 块并行）**：6.4s/192 帧 26.5s → 22.1s
+  （1.20×）；40s/1200 帧 114.0s → 80.6s（1.41×）。此前 536s 的实测基线按此比例
+  约降至 380s 量级，不是 4 倍：4 块严格串行等长（`mapBounded` 一次派发 4 块，
+  跑完再派下一批），慢的那块决定整体时长，加速天然低于块数。
+
+  **正确性**：两份产物 ffprobe 均为 `h264 1920x1080 / 1200 帧 / 40.0s`，帧数零
+  丢失；逐帧 SSIM 0.976，额外做 ±3 帧偏移探测，SSIM 峰值精确落在 offset 0，
+  证明差异只是编码码率噪声（并行版 46.7MB、串行版 35.8MB）而非丢帧或错位；
+  带音轨工程导出后 `aac /2ch / 12.0s` 正常 mux 进 MP4。
+
+  **内存代价**：4 块并行时容器同时存活 4 个 Chromium+FFmpeg 渲染进程，因此
+  内存上限必须显著高于 8 GiB 的 profile 下限（该下限是 `minimumMemoryBytes`
+  门槛，不是容器上限本身）。内存吃紧时把 `RENDER_MAX_PARALLEL_CHUNKS` 降到 2
+  即可回退，无需改动代码。
+
+  **验证**：`docker compose config` 两份文件均通过；render-service 的
+  `container-config` / `resource-profile` / `config` 共 24 例全绿——其中
+  `container-config` 断言了 `mem_limit` 默认值，本次随改动更新，并新增一例覆盖
+  两份 Compose 的分块默认值（此前只有生产栈被断言覆盖）。
 
 ## [1.2.0-video.2] - 2026-10-06
 

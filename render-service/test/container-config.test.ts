@@ -27,7 +27,22 @@ describe('render-service container contract', () => {
     expect(compose).toContain('RENDER_PREVIEW_TIMEOUT_MS=${RENDER_PREVIEW_TIMEOUT_MS:-20000}');
     expect(compose).toContain('RENDER_PREVIEW_MAX_IN_FLIGHT=${RENDER_PREVIEW_MAX_IN_FLIGHT:-8}');
     expect(compose).toContain('RENDER_PREVIEW_MAX_PER_USER=${RENDER_PREVIEW_MAX_PER_USER:-2}');
-    expect(compose).toContain('mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-8g}');
+    expect(compose).toContain('mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-16g}');
+  });
+
+  it('enables chunk fan-out up to the profile ceiling in both Compose files', () => {
+    // Chunk execution is opt-in per deployment; both the production stack and
+    // the local dev stack ship it on, fanning out to the standard profile's
+    // ceiling of 4 concurrent chunks. RENDER_CHUNK_WORKERS must stay 1 because
+    // the profile hard-fails startup above it.
+    for (const path of ['../docker-compose.yml', '../docker-compose.db.yml']) {
+      const compose = read(path);
+      expect(compose).toContain('RENDER_CHUNK_EXECUTION=${RENDER_CHUNK_EXECUTION:-true}');
+      expect(compose).toContain('RENDER_CHUNK_COUNT=${RENDER_CHUNK_COUNT:-4}');
+      expect(compose).toContain('RENDER_CHUNK_WORKERS=${RENDER_CHUNK_WORKERS:-1}');
+      expect(compose).toContain('RENDER_MAX_PARALLEL_CHUNKS=${RENDER_MAX_PARALLEL_CHUNKS:-4}');
+      expect(compose).toContain('mem_limit: ${RENDER_SERVICE_MEMORY_LIMIT:-16g}');
+    }
   });
 
   it('configures a beginFrame-capable capture profile in the image', () => {
