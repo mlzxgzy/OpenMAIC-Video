@@ -557,26 +557,29 @@ export function CurriculumWorkspace() {
               </div>
             </div>
             <Progress value={workflow.percent} className="h-2" />
-            <TabsList className="grid h-auto w-full grid-cols-2 justify-stretch gap-2 bg-transparent p-0 sm:grid-cols-3 xl:grid-cols-6">
-              {workflow.steps.map((step) => {
+            <TabsList className="grid! h-auto! min-h-0 w-full! grid-cols-1 justify-stretch! gap-2 overflow-visible bg-transparent! p-0! sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+              {workflow.steps.map((step, index) => {
                 const Icon = step.icon;
                 return (
                   <TabsTrigger
                     key={step.id}
                     value={step.id}
                     title={step.hint}
-                    className={`h-auto flex-col items-start gap-1 rounded-lg border bg-muted/30 px-3 py-2 text-left whitespace-normal data-active:border-primary data-active:bg-primary/5 data-active:shadow-none ${
+                    className={`h-auto! min-h-20 min-w-0 flex-col items-start! justify-start! gap-1.5 rounded-xl border bg-muted/30 px-3 py-3 text-left whitespace-normal! data-active:border-primary data-active:bg-primary/5 data-active:shadow-none ${
                       step.done ? 'border-emerald-500/30' : ''
                     }`}
                   >
-                    <span className="flex w-full items-center gap-1.5">
+                    <span className="flex w-full min-w-0 items-center gap-1.5">
+                      <span className="bg-background/80 text-muted-foreground flex size-4 shrink-0 items-center justify-center rounded-full text-[10px] font-semibold tabular-nums">
+                        {index + 1}
+                      </span>
                       <Icon className="size-3.5 shrink-0" />
-                      <span className="truncate font-medium">{step.label}</span>
+                      <span className="min-w-0 truncate font-medium">{step.label}</span>
                       {step.done ? (
                         <CheckCircle2 className="ml-auto size-3.5 shrink-0 text-emerald-600" />
                       ) : null}
                     </span>
-                    <span className="text-muted-foreground line-clamp-2 text-[10px] leading-4">
+                    <span className="text-muted-foreground line-clamp-2 w-full min-w-0 text-xs leading-4">
                       {step.meta}
                     </span>
                   </TabsTrigger>
