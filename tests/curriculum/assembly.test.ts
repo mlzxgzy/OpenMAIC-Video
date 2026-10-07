@@ -68,6 +68,7 @@ function snapshot(
     knowledgePoints,
     courseKnowledgePoints: [],
     knowledgePointRelations,
+    generationJobs: [],
   };
 }
 

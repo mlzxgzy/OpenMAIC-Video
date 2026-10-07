@@ -77,6 +77,17 @@ export async function register(): Promise<void> {
   const { validateServerConfig } = await import('@/lib/server/config-validation');
   validateServerConfig();
 
+  // The curriculum product listens to committed generation-run transitions,
+  // so a one-click assembled course writes its produced stage back into the
+  // curriculum ledger. Registered before the generation runner starts.
+  const { configureGenerationRunHooks } = await import('@/lib/server/generation-run-hooks');
+  const { onCurriculumGenerationRunEvent } =
+    await import('@/lib/server/curriculum/generation-hooks');
+  configureGenerationRunHooks({
+    name: 'curriculum',
+    onRunEvent: onCurriculumGenerationRunEvent,
+  });
+
   let runner: import('@/lib/server/agent-runtime/runner').AgentRunnerHandle | undefined;
   let extractionRunner:
     | import('@/lib/server/material-extraction/runner').MaterialExtractionRunnerHandle

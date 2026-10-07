@@ -91,6 +91,7 @@ export function CurriculumWorkspace() {
     knowledgePoints: [],
     courseKnowledgePoints: [],
     knowledgePointRelations: [],
+    generationJobs: [],
   });
   const [stages, setStages] = useState<StageOption[]>([]);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
@@ -684,6 +685,7 @@ export function CurriculumWorkspace() {
             courses={snapshot.courses}
             knowledgePoints={snapshot.knowledgePoints}
             courseKnowledgePoints={snapshot.courseKnowledgePoints}
+            generationJobs={snapshot.generationJobs}
             onChanged={load}
           />
 

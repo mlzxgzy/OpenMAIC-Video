@@ -1,7 +1,7 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
-import { Boxes, Download, Loader2, Save, Sparkles } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Boxes, Download, Loader2, Rocket, Save, Sparkles } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import {
   type CourseKnowledgeCoverageLevel,
   type CourseKnowledgePointRecord,
   type CurriculumCourseRecord,
+  type CurriculumGenerationJobRecord,
   type KnowledgePointRecord,
 } from '@/lib/curriculum/types';
 
@@ -21,6 +22,7 @@ interface CourseAssemblerPanelProps {
   courses: CurriculumCourseRecord[];
   knowledgePoints: KnowledgePointRecord[];
   courseKnowledgePoints: CourseKnowledgePointRecord[];
+  generationJobs: CurriculumGenerationJobRecord[];
   onChanged: () => Promise<void> | void;
 }
 
@@ -99,6 +101,7 @@ export function CourseAssemblerPanel({
   courses,
   knowledgePoints,
   courseKnowledgePoints,
+  generationJobs,
   onChanged,
 }: CourseAssemblerPanelProps) {
   const [form, setForm] = useState<AssemblyFormState>(EMPTY_FORM);
@@ -106,6 +109,7 @@ export function CourseAssemblerPanel({
   const [sourceCourseId, setSourceCourseId] = useState('');
   const [plan, setPlan] = useState<CourseAssemblyPlan | null>(null);
   const [savedCourseId, setSavedCourseId] = useState<string | null>(null);
+  const [startedJob, setStartedJob] = useState<CurriculumGenerationJobRecord | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -147,6 +151,33 @@ export function CourseAssemblerPanel({
     for (const point of visiblePoints) walk(point, 0);
     return rows;
   }, [visiblePoints]);
+
+  const trackedJobs = useMemo(() => {
+    const visibleCourseIds = new Set(visibleCourses.map((course) => course.id));
+    return generationJobs
+      .filter((job) => visibleCourseIds.has(job.courseId))
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .slice(0, 3);
+  }, [generationJobs, visibleCourses]);
+
+  const latestJob = useMemo(() => {
+    if (startedJob) {
+      const refreshed = generationJobs.find((job) => job.id === startedJob.id);
+      if (refreshed) return refreshed;
+    }
+    return trackedJobs[0] ?? startedJob ?? null;
+  }, [generationJobs, startedJob, trackedJobs]);
+  const activeGeneration =
+    latestJob !== null &&
+    ['queued', 'running', 'awaiting_outline', 'paused'].includes(latestJob.status);
+
+  useEffect(() => {
+    if (!activeGeneration) return;
+    const timer = window.setInterval(() => {
+      void onChanged();
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [activeGeneration, onChanged]);
 
   const selectedPointIds = useMemo(() => Object.keys(selection), [selection]);
   const estimatedHours = useMemo(() => {
@@ -271,6 +302,48 @@ export function CourseAssemblerPanel({
         }),
       });
       setSavedCourseId(courseId);
+      await onChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const startGeneration = async () => {
+    const currentPlan = plan ?? (await buildPlan());
+    if (!currentPlan) return;
+    setBusy('generate');
+    setError(null);
+    try {
+      const payload = await requestJson<{
+        job: CurriculumGenerationJobRecord;
+        run: { id: string; state: string };
+        courseId: string;
+        createdCourse: boolean;
+      }>('/api/curriculum/generation-jobs', {
+        method: 'POST',
+        body: JSON.stringify({
+          assembly: {
+            seriesId: currentPlan.seriesId,
+            title: currentPlan.title,
+            code: currentPlan.code,
+            chapter: currentPlan.chapter,
+            section: currentPlan.section,
+            type: currentPlan.type,
+            hours: currentPlan.hours,
+            knowledgePoints: currentPlan.knowledgePoints.map((point) => ({
+              knowledgePointId: point.knowledgePointId,
+              coverageLevel: point.coverageLevel,
+            })),
+          },
+          courseId: savedCourseId,
+          outlineReview: 'auto',
+        }),
+      });
+      setStartedJob(payload.job);
+      setSavedCourseId(payload.courseId);
+      setError(`一键生成已启动：run ${payload.run.id}，stage 生成后会自动回写到课程台账。`);
       await onChanged();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -429,7 +502,38 @@ export function CourseAssemblerPanel({
             <Button variant="outline" onClick={() => void copyRunCommand()} disabled={!plan}>
               复制启动命令
             </Button>
+            <Button
+              onClick={() => void startGeneration()}
+              disabled={
+                busy !== null ||
+                !form.title.trim() ||
+                selectedPointIds.length === 0 ||
+                activeGeneration
+              }
+            >
+              {busy === 'generate' ? <Loader2 className="animate-spin" /> : <Rocket />}
+              一键生成
+            </Button>
           </div>
+
+          {latestJob ? (
+            <div className="border-border bg-muted/30 flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md border px-3 py-2 text-xs">
+              <span className="font-medium">生成任务</span>
+              <span className="text-muted-foreground">
+                {latestJob.status}
+                {latestJob.runId ? ` · ${latestJob.runId}` : ''}
+              </span>
+              {latestJob.stageId ? (
+                <span className="text-muted-foreground">stage {latestJob.stageId}</span>
+              ) : null}
+              {latestJob.error ? (
+                <span className="text-amber-700">
+                  {latestJob.error.code}
+                  {latestJob.error.message ? `：${latestJob.error.message}` : ''}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
 
           {error ? (
             <div className="border-primary/30 bg-primary/5 text-primary rounded-md border px-3 py-2 text-sm">

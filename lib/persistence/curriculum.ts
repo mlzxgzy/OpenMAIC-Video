@@ -160,6 +160,44 @@ CREATE INDEX IF NOT EXISTS curriculum_kp_relation_owner_target_idx
   ON curriculum_knowledge_point_relation (owner_id, target_knowledge_point_id);
 `;
 
+/**
+ * One-click assembly runs. A job binds a curriculum course to a server-side
+ * generation run so the runner's committed events can write the produced
+ * `stage_id` back into the course ledger. `run_id` is filled after the run is
+ * created; the unique index keeps one run from belonging to two courses.
+ */
+const CURRICULUM_GENERATION_JOBS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_generation_job (
+  id             TEXT PRIMARY KEY,
+  owner_id       TEXT NOT NULL,
+  course_id      TEXT NOT NULL REFERENCES curriculum_course(id) ON DELETE CASCADE,
+  run_id         TEXT,
+  stage_id       TEXT,
+  status         TEXT NOT NULL DEFAULT 'queued',
+  outline_review TEXT NOT NULL DEFAULT 'auto',
+  request        JSONB NOT NULL DEFAULT '{}'::jsonb,
+  error          JSONB,
+  started_at     TIMESTAMPTZ,
+  completed_at   TIMESTAMPTZ,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_generation_job_status_known CHECK
+    (status IN ('queued','running','awaiting_outline','paused','completed','failed','ended')),
+  CONSTRAINT curriculum_generation_job_review_known CHECK
+    (outline_review IN ('wait','countdown','auto'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_generation_job_owner_status_idx
+  ON curriculum_generation_job (owner_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS curriculum_generation_job_course_idx
+  ON curriculum_generation_job (owner_id, course_id, created_at);
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_generation_job_owner_run_idx
+  ON curriculum_generation_job (owner_id, run_id)
+  WHERE run_id IS NOT NULL;
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -174,6 +212,12 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 3,
       name: 'knowledge_point_relations',
       up: CURRICULUM_KNOWLEDGE_POINT_RELATIONS_SCHEMA,
+      transaction: true,
+    },
+    {
+      version: 4,
+      name: 'generation_jobs',
+      up: CURRICULUM_GENERATION_JOBS_SCHEMA,
       transaction: true,
     },
   ],

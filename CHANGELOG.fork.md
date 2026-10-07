@@ -133,6 +133,24 @@
   `/curriculum` 页面 SSR 200。
 
 
+- **一键生成 + stage 自动回写**：新增 `curriculum_generation_job` 表（v4
+  migration）与 `POST /api/curriculum/generation-jobs` 接口，把“课程组装器”
+  和现有服务端 generation run 接死。接口在服务端重新组装课程包，创建/更新
+  课程台账与课程知识点绑定，创建 owner 隔离的 generation job，然后通过
+  `startGenerationRun` 启动服务端生成运行。`instrumentation.ts` 注册
+  generation-run 的 `onRunEvent` 钩子：`outline-ready`、`scene-appended`、
+  `paused`、`completed`、`ended` 等已提交事件会更新 job 状态；首个 scene 的
+  `stageId` 会自动写回 `curriculum_course.stage_id`，并把草稿课程置为 active。
+  课程组装器面板新增“一键生成”按钮，默认 `outlineReview=auto`，启动后显示
+  run/job/stage 状态并轮询回写结果。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；新增
+  `tests/curriculum/generation.test.ts`（4 例）覆盖请求解析和 run 事件映射；
+  迁移 checksum 测试更新并通过；本地 PostgreSQL 已应用 v4 migration；
+  `POST /api/curriculum/generation-jobs` 对无效知识点选择返回 400；
+  `/api/curriculum` 已返回 `generationJobs` 字段；`/curriculum` 页面 SSR 200。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 

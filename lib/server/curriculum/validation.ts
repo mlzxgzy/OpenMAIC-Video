@@ -1,12 +1,14 @@
 import {
   COURSE_KNOWLEDGE_COVERAGE_LEVELS,
   CURRICULUM_COURSE_STATUSES,
+  CURRICULUM_GENERATION_OUTLINE_REVIEWS,
   CURRICULUM_RELATION_TYPES,
   KNOWLEDGE_POINT_DIFFICULTIES,
   KNOWLEDGE_POINT_RELATION_TYPES,
   KNOWLEDGE_POINT_TYPES,
   type CourseKnowledgeCoverageLevel,
   type CurriculumCourseStatus,
+  type CurriculumGenerationOutlineReview,
   type CurriculumRelationType,
   type KnowledgePointDifficulty,
   type KnowledgePointRelationType,
@@ -408,6 +410,109 @@ export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCours
     return { ok: false, message: 'knowledgePoints must contain at least one item' };
   }
   value.knowledgePoints = links.value;
+
+  return { ok: true, value };
+}
+
+export interface ParsedGenerationJobVoice {
+  providerId: string;
+  voiceId: string;
+  speed?: number;
+}
+
+export interface ParsedGenerationJobInput {
+  assembly: ParsedCourseAssemblyInput;
+  courseId?: string | null;
+  outlineReview: CurriculumGenerationOutlineReview;
+  interactive: boolean;
+  taskEngine: boolean;
+  voice?: ParsedGenerationJobVoice;
+}
+
+function parseGenerationJobVoice(value: unknown): ParseResult<ParsedGenerationJobVoice> {
+  const record = asRecord(value);
+  if (!record) return { ok: false, message: 'voice must be an object' };
+  const providerId = record.providerId;
+  if (typeof providerId !== 'string' || providerId.trim().length === 0) {
+    return { ok: false, message: 'voice.providerId is required' };
+  }
+  const voiceId = record.voiceId;
+  if (typeof voiceId !== 'string' || voiceId.trim().length === 0) {
+    return { ok: false, message: 'voice.voiceId is required' };
+  }
+  if (voiceId.length > 256) return { ok: false, message: 'voice.voiceId is too long' };
+  if (
+    record.speed !== undefined &&
+    (typeof record.speed !== 'number' || !(record.speed > 0) || record.speed > 4)
+  ) {
+    return { ok: false, message: 'voice.speed must be a number above 0 and at most 4' };
+  }
+  return {
+    ok: true,
+    value: {
+      providerId: providerId.trim(),
+      voiceId: voiceId.trim(),
+      ...(record.speed !== undefined ? { speed: record.speed as number } : {}),
+    },
+  };
+}
+
+/**
+ * The one-click generation body: the assembly input, plus the classic run
+ * options a course product needs. Unknown run input options stay out; the
+ * route composes the requirement from the server-built assembly.
+ */
+export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenerationJobInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+
+  const assembly = parseCourseAssemblyInput(record.assembly);
+  if (!assembly.ok) return assembly;
+
+  const value: ParsedGenerationJobInput = {
+    assembly: assembly.value,
+    outlineReview: 'auto',
+    interactive: false,
+    taskEngine: false,
+  };
+
+  if ('courseId' in record && record.courseId !== undefined) {
+    if (record.courseId === null) {
+      value.courseId = null;
+    } else if (typeof record.courseId === 'string' && record.courseId.trim().length > 0) {
+      value.courseId = record.courseId.trim();
+    } else {
+      return { ok: false, message: 'courseId must be a non-empty string or null' };
+    }
+  }
+
+  if ('outlineReview' in record && record.outlineReview !== undefined) {
+    if (
+      !CURRICULUM_GENERATION_OUTLINE_REVIEWS.includes(
+        record.outlineReview as CurriculumGenerationOutlineReview,
+      )
+    ) {
+      return {
+        ok: false,
+        message: `outlineReview must be one of ${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
+      };
+    }
+    value.outlineReview = record.outlineReview as CurriculumGenerationOutlineReview;
+  }
+
+  for (const key of ['interactive', 'taskEngine'] as const) {
+    const field = record[key];
+    if (field !== undefined) {
+      if (typeof field !== 'boolean') return { ok: false, message: `${key} must be a boolean` };
+      value[key] = field;
+    }
+  }
+
+  if (record.voice !== undefined) {
+    const voice = parseGenerationJobVoice(record.voice);
+    if (!voice.ok) return voice;
+    value.voice = voice.value;
+  }
 
   return { ok: true, value };
 }

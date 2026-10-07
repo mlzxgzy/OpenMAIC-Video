@@ -20,6 +20,10 @@ import type {
   CourseKnowledgePointRecord,
   CurriculumCourseRecord,
   CurriculumCourseStatus,
+  CurriculumGenerationJobError,
+  CurriculumGenerationJobRecord,
+  CurriculumGenerationJobStatus,
+  CurriculumGenerationOutlineReview,
   CurriculumRelationRecord,
   CurriculumRelationType,
   CurriculumSeriesRecord,
@@ -85,6 +89,12 @@ export interface KnowledgePointRelationInput {
   targetKnowledgePointId: string;
   relationType: KnowledgePointRelationType;
   note?: string | null;
+}
+
+export interface CurriculumGenerationJobInput {
+  courseId: string;
+  outlineReview: CurriculumGenerationOutlineReview;
+  request?: Record<string, unknown>;
 }
 
 export class CurriculumNotFoundError extends Error {
@@ -178,6 +188,20 @@ interface KnowledgePointRelationRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
+interface GenerationJobRow extends Record<string, unknown> {
+  id: string;
+  course_id: string;
+  run_id: string | null;
+  stage_id: string | null;
+  status: string;
+  outline_review: string;
+  error: Record<string, unknown> | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
 
@@ -192,6 +216,9 @@ const COURSE_KNOWLEDGE_POINT_COLUMNS = `course_id, knowledge_point_id, coverage_
 
 const KNOWLEDGE_POINT_RELATION_COLUMNS = `id, source_knowledge_point_id, target_knowledge_point_id,
        relation_type, note, created_at, updated_at`;
+
+const GENERATION_JOB_COLUMNS = `id, course_id, run_id, stage_id, status, outline_review,
+       error, started_at, completed_at, created_at, updated_at`;
 
 const SCHEMA_STATE_KEY = Symbol.for('openmaic.curriculum.schema');
 const schemaState = globalThis as typeof globalThis & {
@@ -319,6 +346,36 @@ function mapKnowledgePointRelation(row: KnowledgePointRelationRow): KnowledgePoi
     targetKnowledgePointId: row.target_knowledge_point_id,
     relationType: row.relation_type as KnowledgePointRelationType,
     note: row.note,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function nullableIso(value: Date | string | null): string | null {
+  return value === null ? null : iso(value);
+}
+
+function mapGenerationJob(row: GenerationJobRow): CurriculumGenerationJobRecord {
+  const error = row.error;
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    runId: row.run_id,
+    stageId: row.stage_id,
+    status: row.status as CurriculumGenerationJobStatus,
+    outlineReview: row.outline_review as CurriculumGenerationOutlineReview,
+    error:
+      error && typeof error.code === 'string'
+        ? {
+            code: error.code,
+            ...(typeof error.message === 'string' ? { message: error.message } : {}),
+            ...(typeof error.step === 'string' || error.step === null
+              ? { step: error.step as string | null }
+              : {}),
+          }
+        : null,
+    startedAt: nullableIso(row.started_at),
+    completedAt: nullableIso(row.completed_at),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -479,6 +536,7 @@ export async function listCurriculum(
     knowledgeResult,
     courseKnowledgeResult,
     knowledgeRelationResult,
+    generationJobResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
       `SELECT id, name, description, created_at, updated_at
@@ -522,6 +580,13 @@ export async function listCurriculum(
         ORDER BY created_at`,
       [ownerId],
     ),
+    queryable.query<GenerationJobRow>(
+      `SELECT ${GENERATION_JOB_COLUMNS}
+         FROM curriculum_generation_job
+        WHERE owner_id = $1
+        ORDER BY created_at DESC`,
+      [ownerId],
+    ),
   ]);
 
   const courses = courseResult.rows.map(mapCourse);
@@ -538,6 +603,7 @@ export async function listCurriculum(
     knowledgePoints: knowledgeResult.rows.map(mapKnowledgePoint),
     courseKnowledgePoints: courseKnowledgeResult.rows.map(mapCourseKnowledgePoint),
     knowledgePointRelations: knowledgeRelationResult.rows.map(mapKnowledgePointRelation),
+    generationJobs: generationJobResult.rows.map(mapGenerationJob),
   };
 }
 
@@ -931,4 +997,131 @@ export async function deleteKnowledgePointRelation(
     [ownerId, relationId],
   );
   if (!result.rows[0]) throw new CurriculumNotFoundError('knowledge point relation not found');
+}
+
+export async function createCurriculumGenerationJob(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumGenerationJobInput,
+): Promise<CurriculumGenerationJobRecord> {
+  await assertCourseOwned(queryable, ownerId, input.courseId);
+  const result = await queryable.query<GenerationJobRow>(
+    `INSERT INTO curriculum_generation_job
+       (id, owner_id, course_id, status, outline_review, request)
+     VALUES ($1, $2, $3, 'queued', $4, $5::jsonb)
+     RETURNING ${GENERATION_JOB_COLUMNS}`,
+    [
+      createId('cjob'),
+      ownerId,
+      input.courseId,
+      input.outlineReview,
+      JSON.stringify(input.request ?? {}),
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumValidationError('generation job could not be created');
+  return mapGenerationJob(row);
+}
+
+/** Attach the server-side generation run created for a curriculum job. */
+export async function attachGenerationRunToCurriculumJob(
+  queryable: Queryable,
+  ownerId: string,
+  jobId: string,
+  runId: string,
+): Promise<CurriculumGenerationJobRecord> {
+  const result = await queryable.query<GenerationJobRow>(
+    `UPDATE curriculum_generation_job
+        SET run_id = $3,
+            status = 'running',
+            error = NULL,
+            started_at = COALESCE(started_at, now()),
+            updated_at = now()
+      WHERE owner_id = $1 AND id = $2
+      RETURNING ${GENERATION_JOB_COLUMNS}`,
+    [ownerId, jobId, runId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('generation job not found');
+  return mapGenerationJob(row);
+}
+
+export interface CurriculumGenerationRunUpdate {
+  stageId?: string | null;
+  status: CurriculumGenerationJobStatus;
+  error?: CurriculumGenerationJobError | null;
+}
+
+/**
+ * Apply one committed generation-run event to its curriculum job. Best
+ * effort by design: the hook that calls this must not fail the run. A stage
+ * already claimed by another course leaves the job unlinked and records the
+ * conflict instead of failing the hook.
+ */
+export async function bindCurriculumGenerationRunStage(
+  queryable: Queryable,
+  ownerId: string,
+  runId: string,
+  update: CurriculumGenerationRunUpdate,
+): Promise<CurriculumGenerationJobRecord | null> {
+  const jobResult = await queryable.query<GenerationJobRow>(
+    `SELECT ${GENERATION_JOB_COLUMNS}
+       FROM curriculum_generation_job
+      WHERE owner_id = $1 AND run_id = $2
+      FOR UPDATE`,
+    [ownerId, runId],
+  );
+  const job = jobResult.rows[0];
+  if (!job) return null;
+
+  let stageId = update.stageId ?? null;
+  let error = update.error ?? null;
+
+  if (stageId) {
+    const existing = await queryable.query<{ id: string } & Record<string, unknown>>(
+      `SELECT id
+         FROM curriculum_course
+        WHERE owner_id = $1 AND stage_id = $2 AND id <> $3
+        LIMIT 1`,
+      [ownerId, stageId, job.course_id],
+    );
+    if (existing.rows[0]) {
+      stageId = null;
+      error = {
+        code: 'STAGE_ALREADY_LINKED',
+        message: 'this stage is already linked to another curriculum course',
+      };
+    } else {
+      await queryable.query(
+        `UPDATE curriculum_course
+            SET stage_id = $3,
+                status = CASE WHEN status = 'draft' THEN 'active' ELSE status END,
+                updated_at = now()
+          WHERE owner_id = $1 AND id = $2`,
+        [ownerId, job.course_id, stageId],
+      );
+    }
+  }
+
+  const result = await queryable.query<GenerationJobRow>(
+    `UPDATE curriculum_generation_job
+        SET run_id = COALESCE(run_id, $3),
+            stage_id = COALESCE($4, stage_id),
+            status = $5,
+            error = COALESCE($6::jsonb, error),
+            started_at = CASE
+              WHEN started_at IS NULL AND ($4 IS NOT NULL OR $5 = 'running') THEN now()
+              ELSE started_at
+            END,
+            completed_at = CASE
+              WHEN $5 IN ('completed', 'failed', 'ended') THEN COALESCE(completed_at, now())
+              ELSE completed_at
+            END,
+            updated_at = now()
+      WHERE owner_id = $1 AND run_id = $2
+      RETURNING ${GENERATION_JOB_COLUMNS}`,
+    [ownerId, runId, runId, stageId, update.status, error === null ? null : JSON.stringify(error)],
+  );
+  const row = result.rows[0];
+  return row ? mapGenerationJob(row) : null;
 }

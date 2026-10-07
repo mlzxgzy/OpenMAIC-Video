@@ -106,6 +106,46 @@ export interface KnowledgePointRelationRecord {
   updatedAt: string;
 }
 
+export const CURRICULUM_GENERATION_JOB_STATUSES = [
+  'queued',
+  'running',
+  'awaiting_outline',
+  'paused',
+  'completed',
+  'failed',
+  'ended',
+] as const;
+export type CurriculumGenerationJobStatus = (typeof CURRICULUM_GENERATION_JOB_STATUSES)[number];
+
+/**
+ * How the curriculum assembler's one-click run confirms its outline. `auto`
+ * keeps the run one-click; `wait` and `countdown` behave like the classic
+ * generation-run modes.
+ */
+export const CURRICULUM_GENERATION_OUTLINE_REVIEWS = ['wait', 'countdown', 'auto'] as const;
+export type CurriculumGenerationOutlineReview =
+  (typeof CURRICULUM_GENERATION_OUTLINE_REVIEWS)[number];
+
+export interface CurriculumGenerationJobError {
+  code: string;
+  message?: string;
+  step?: string | null;
+}
+
+export interface CurriculumGenerationJobRecord {
+  id: string;
+  courseId: string;
+  runId: string | null;
+  stageId: string | null;
+  status: CurriculumGenerationJobStatus;
+  outlineReview: CurriculumGenerationOutlineReview;
+  error: CurriculumGenerationJobError | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CurriculumSnapshot {
   series: CurriculumSeriesRecord[];
   courses: CurriculumCourseRecord[];
@@ -113,4 +153,5 @@ export interface CurriculumSnapshot {
   knowledgePoints: KnowledgePointRecord[];
   courseKnowledgePoints: CourseKnowledgePointRecord[];
   knowledgePointRelations: KnowledgePointRelationRecord[];
+  generationJobs: CurriculumGenerationJobRecord[];
 }
