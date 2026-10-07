@@ -86,6 +86,21 @@
   建立 `1-1-1 → 1-1-2 → 1-1-3` 的先修关系；`/api/curriculum` 返回 1 个系列、
   3 门课程、2 条关系，`/curriculum` 页面 SSR 200。
 
+- **知识点层（知识点库 + 课程知识点绑定）**：新增 `curriculum_knowledge_point`
+  与 `curriculum_course_knowledge_point` 表、`/api/curriculum/knowledge-points`
+  CRUD API、`PUT /api/curriculum/courses/[id]/knowledge-points` 绑定接口，以及
+  `/curriculum` 页面里的“知识点库与课程绑定”面板。知识点支持 owner/系列隔离、
+  树形父子层级、知识/技能/素养类型、入门/基础/进阶/高级难度和排序；课程绑定
+  支持引入/练习/掌握三个覆盖层级。父子关系会校验所属 owner 并通过递归查询
+  拒绝成环。课程 schemas 新增 v2 migration，并已更新迁移 checksum 金标。
+
+  验证：`tsc --noEmit`、ESLint 通过；迁移 checksum 测试通过；
+  `POST/PATCH/DELETE /api/curriculum/knowledge-points` 冒烟通过；
+  知识点成环的 PATCH 返回 400；已为 `CTF综合实战` 灌入 15 个知识点、
+  为 3 门课程建立 13 条知识点覆盖关系，`/api/curriculum` 返回
+  `knowledgePoints=15`、`courseKnowledgePoints=13`。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 

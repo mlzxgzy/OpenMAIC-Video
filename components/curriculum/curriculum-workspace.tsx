@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 
 import { Canvas } from '@/components/ai-elements/canvas';
+import { KnowledgePointsPanel } from '@/components/curriculum/knowledge-points-panel';
 import { Controls } from '@/components/ai-elements/controls';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +16,6 @@ import {
   type CurriculumCourseRecord,
   type CurriculumRelationRecord,
   type CurriculumRelationType,
-  type CurriculumSeriesRecord,
   type CurriculumSnapshot,
 } from '@/lib/curriculum/types';
 
@@ -86,6 +86,8 @@ export function CurriculumWorkspace() {
     series: [],
     courses: [],
     relations: [],
+    knowledgePoints: [],
+    courseKnowledgePoints: [],
   });
   const [stages, setStages] = useState<StageOption[]>([]);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
@@ -656,6 +658,14 @@ export function CurriculumWorkspace() {
               </div>
             </CardContent>
           </Card>
+
+          <KnowledgePointsPanel
+            seriesId={selectedSeriesId}
+            courses={visibleCourses}
+            knowledgePoints={snapshot.knowledgePoints}
+            courseKnowledgePoints={snapshot.courseKnowledgePoints}
+            onChanged={load}
+          />
 
           <Card size="sm">
             <CardHeader>

@@ -193,6 +193,13 @@ const SHIPPED: readonly (readonly [
     false,
     '0d0c90255c406df08de37e005274303bd8efdeed9a27ba630f22a0a1f9db1fbe',
   ],
+  [
+    'curriculum',
+    2,
+    'knowledge_points',
+    true,
+    'ed25fdcc1124b07fbd34a645d43835f8f756dccefbda1ba4f6978851412cbad5',
+  ],
 ];
 
 /**

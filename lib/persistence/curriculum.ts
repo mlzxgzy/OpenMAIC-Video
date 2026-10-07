@@ -75,9 +75,70 @@ CREATE INDEX IF NOT EXISTS curriculum_relation_owner_target_idx
   ON curriculum_course_relation (owner_id, target_course_id);
 `;
 
+/**
+ * Knowledge-point layer: points are owner-scoped and may belong to one
+ * series, have an optional parent for a tree, and be bound to many courses.
+ * The course link table carries a coverage level because the same point can
+ * be introduced in one course and practiced/mastered in another.
+ */
+const CURRICULUM_KNOWLEDGE_POINTS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_knowledge_point (
+  id          TEXT PRIMARY KEY,
+  owner_id    TEXT NOT NULL,
+  series_id   TEXT REFERENCES curriculum_series(id) ON DELETE SET NULL,
+  parent_id   TEXT REFERENCES curriculum_knowledge_point(id) ON DELETE SET NULL,
+  name        TEXT NOT NULL,
+  code        TEXT,
+  type        TEXT NOT NULL DEFAULT 'knowledge',
+  difficulty  TEXT,
+  summary     TEXT,
+  sort_order  INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_kp_type_known CHECK
+    (type IN ('knowledge','skill','competency')),
+  CONSTRAINT curriculum_kp_difficulty_known CHECK
+    (difficulty IS NULL OR difficulty IN ('intro','basic','intermediate','advanced'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_kp_owner_series_idx
+  ON curriculum_knowledge_point (owner_id, series_id, sort_order, created_at);
+
+CREATE INDEX IF NOT EXISTS curriculum_kp_owner_parent_idx
+  ON curriculum_knowledge_point (owner_id, parent_id, sort_order);
+
+CREATE TABLE IF NOT EXISTS curriculum_course_knowledge_point (
+  course_id          TEXT NOT NULL REFERENCES curriculum_course(id) ON DELETE CASCADE,
+  knowledge_point_id TEXT NOT NULL REFERENCES curriculum_knowledge_point(id) ON DELETE CASCADE,
+  owner_id           TEXT NOT NULL,
+  coverage_level     TEXT NOT NULL DEFAULT 'introduced',
+  sort_order         INTEGER NOT NULL DEFAULT 0,
+  note               TEXT,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (course_id, knowledge_point_id),
+  CONSTRAINT curriculum_course_kp_coverage_known CHECK
+    (coverage_level IN ('introduced','practiced','mastered'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_course_kp_owner_point_idx
+  ON curriculum_course_knowledge_point (owner_id, knowledge_point_id);
+
+CREATE INDEX IF NOT EXISTS curriculum_course_kp_owner_course_idx
+  ON curriculum_course_knowledge_point (owner_id, course_id, sort_order);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
-  migrations: [{ version: 1, name: 'baseline', up: CURRICULUM_SCHEMA, transaction: false }],
+  migrations: [
+    { version: 1, name: 'baseline', up: CURRICULUM_SCHEMA, transaction: false },
+    {
+      version: 2,
+      name: 'knowledge_points',
+      up: CURRICULUM_KNOWLEDGE_POINTS_SCHEMA,
+      transaction: true,
+    },
+  ],
 };
 
 export async function ensureCurriculumSchema(queryable: Queryable): Promise<void> {
