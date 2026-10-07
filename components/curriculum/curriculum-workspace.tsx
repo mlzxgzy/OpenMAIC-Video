@@ -6,6 +6,7 @@ import { Loader2, Plus, RefreshCw, Save, Trash2 } from 'lucide-react';
 import { Canvas } from '@/components/ai-elements/canvas';
 import { KnowledgePointsPanel } from '@/components/curriculum/knowledge-points-panel';
 import { BatchQueuePanel } from '@/components/curriculum/batch-queue-panel';
+import { BatchExportPanel } from '@/components/curriculum/batch-export-panel';
 import { CourseAssemblerPanel } from '@/components/curriculum/course-assembler-panel';
 import { KnowledgeRelationsPanel } from '@/components/curriculum/knowledge-relations-panel';
 import { Controls } from '@/components/ai-elements/controls';
@@ -95,6 +96,7 @@ export function CurriculumWorkspace() {
     generationJobs: [],
     batches: [],
     batchItems: [],
+    exportJobs: [],
   });
   const [stages, setStages] = useState<StageOption[]>([]);
   const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
@@ -698,6 +700,14 @@ export function CurriculumWorkspace() {
             courseKnowledgePoints={snapshot.courseKnowledgePoints}
             batches={snapshot.batches}
             batchItems={snapshot.batchItems}
+            onChanged={load}
+          />
+
+          <BatchExportPanel
+            seriesId={selectedSeriesId}
+            courses={snapshot.courses}
+            batchItems={snapshot.batchItems}
+            exportJobs={snapshot.exportJobs}
             onChanged={load}
           />
 

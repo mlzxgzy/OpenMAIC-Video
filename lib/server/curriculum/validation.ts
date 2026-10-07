@@ -14,6 +14,11 @@ import {
   type KnowledgePointRelationType,
   type KnowledgePointType,
 } from '@/lib/curriculum/types';
+import {
+  VIDEO_FPS,
+  VIDEO_QUALITIES,
+  VIDEO_RESOLUTIONS,
+} from '@/lib/video-export-app/export-options';
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
@@ -643,4 +648,162 @@ export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurr
   }
 
   return { ok: true, value: { name, items } };
+}
+
+export interface ParsedCurriculumExportJobsInput {
+  batchId?: string;
+  batchItemIds: string[];
+  resolution: '720p' | '1080p' | '4k';
+  fps: number;
+  quality: 'draft' | 'standard' | 'high';
+  burnInSubtitles: boolean;
+}
+
+/**
+ * Enqueue body for MP4 export. The request either names one batch (all its
+ * completed, staged items) or an explicit list of completed batch-item ids.
+ * Render options are validated against the same constants the browser UI
+ * offers, so the worker always starts from a known archive shape.
+ */
+export function parseCurriculumExportJobsInput(
+  body: unknown,
+): ParseResult<ParsedCurriculumExportJobsInput> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+
+  const value: ParsedCurriculumExportJobsInput = {
+    batchItemIds: [],
+    resolution: '1080p',
+    fps: 30,
+    quality: 'standard',
+    burnInSubtitles: false,
+  };
+
+  if ('batchId' in record && record.batchId !== undefined) {
+    if (typeof record.batchId !== 'string' || record.batchId.trim().length === 0) {
+      return { ok: false, message: 'batchId must be a non-empty string' };
+    }
+    value.batchId = record.batchId.trim();
+  }
+
+  if ('batchItemIds' in record && record.batchItemIds !== undefined) {
+    if (!Array.isArray(record.batchItemIds)) {
+      return { ok: false, message: 'batchItemIds must be an array' };
+    }
+    for (const [index, item] of record.batchItemIds.entries()) {
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        return { ok: false, message: `batchItemIds[${index}] must be a non-empty string` };
+      }
+      value.batchItemIds.push(item.trim());
+    }
+  }
+
+  if (!value.batchId && value.batchItemIds.length === 0) {
+    return { ok: false, message: 'batchId or batchItemIds is required' };
+  }
+  if (value.batchItemIds.length > 50) {
+    return { ok: false, message: 'batchItemIds is too large' };
+  }
+
+  if ('resolution' in record && record.resolution !== undefined) {
+    if (
+      typeof record.resolution !== 'string' ||
+      !Object.prototype.hasOwnProperty.call(VIDEO_RESOLUTIONS, record.resolution)
+    ) {
+      return {
+        ok: false,
+        message: `resolution must be one of ${Object.keys(VIDEO_RESOLUTIONS).join(', ')}`,
+      };
+    }
+    value.resolution = record.resolution as ParsedCurriculumExportJobsInput['resolution'];
+  }
+  if ('fps' in record && record.fps !== undefined) {
+    if (
+      typeof record.fps !== 'number' ||
+      !VIDEO_FPS.includes(record.fps as (typeof VIDEO_FPS)[number])
+    ) {
+      return { ok: false, message: `fps must be one of ${VIDEO_FPS.join(', ')}` };
+    }
+    value.fps = record.fps;
+  }
+  if ('quality' in record && record.quality !== undefined) {
+    if (
+      typeof record.quality !== 'string' ||
+      !VIDEO_QUALITIES.includes(record.quality as (typeof VIDEO_QUALITIES)[number])
+    ) {
+      return { ok: false, message: `quality must be one of ${VIDEO_QUALITIES.join(', ')}` };
+    }
+    value.quality = record.quality as ParsedCurriculumExportJobsInput['quality'];
+  }
+  if ('burnInSubtitles' in record && record.burnInSubtitles !== undefined) {
+    if (typeof record.burnInSubtitles !== 'boolean') {
+      return { ok: false, message: 'burnInSubtitles must be a boolean' };
+    }
+    value.burnInSubtitles = record.burnInSubtitles;
+  }
+
+  return { ok: true, value };
+}
+
+export type ParsedCurriculumExportJobAction =
+  | { action: 'attach-render'; renderJobId: string }
+  | { action: 'progress'; progress: number }
+  | { action: 'complete' }
+  | { action: 'fail'; error: { code: string; message?: string } }
+  | { action: 'retry' }
+  | { action: 'cancel' };
+
+/** Browser-worker updates for one export job. */
+export function parseCurriculumExportJobAction(
+  body: unknown,
+): ParseResult<ParsedCurriculumExportJobAction> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  const action = record.action;
+  if (action === 'attach-render') {
+    if (typeof record.renderJobId !== 'string' || record.renderJobId.trim().length === 0) {
+      return { ok: false, message: 'renderJobId is required' };
+    }
+    return { ok: true, value: { action, renderJobId: record.renderJobId.trim() } };
+  }
+  if (action === 'progress') {
+    const progress = record.progress;
+    if (
+      typeof progress !== 'number' ||
+      !Number.isFinite(progress) ||
+      progress < 0 ||
+      progress > 1
+    ) {
+      return { ok: false, message: 'progress must be a number between 0 and 1' };
+    }
+    return { ok: true, value: { action, progress } };
+  }
+  if (action === 'complete' || action === 'retry' || action === 'cancel') {
+    return { ok: true, value: { action } };
+  }
+  if (action === 'fail') {
+    const error = asRecord(record.error);
+    if (!error || typeof error.code !== 'string' || error.code.trim().length === 0) {
+      return { ok: false, message: 'error.code is required' };
+    }
+    if (error.message !== undefined && typeof error.message !== 'string') {
+      return { ok: false, message: 'error.message must be a string' };
+    }
+    return {
+      ok: true,
+      value: {
+        action,
+        error: {
+          code: error.code.trim(),
+          ...(typeof error.message === 'string' && error.message.trim().length > 0
+            ? { message: error.message.trim() }
+            : {}),
+        },
+      },
+    };
+  }
+  return {
+    ok: false,
+    message: 'action must be one of attach-render, progress, complete, fail, retry, cancel',
+  };
 }

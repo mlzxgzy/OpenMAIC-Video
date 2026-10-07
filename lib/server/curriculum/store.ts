@@ -24,6 +24,9 @@ import type {
   CurriculumBatchStatus,
   CurriculumCourseRecord,
   CurriculumCourseStatus,
+  CurriculumExportJobError,
+  CurriculumExportJobRecord,
+  CurriculumExportJobStatus,
   CurriculumGenerationJobError,
   CurriculumGenerationJobRecord,
   CurriculumGenerationJobStatus,
@@ -112,6 +115,26 @@ export interface CurriculumBatchInput {
   name: string;
   items: CurriculumBatchItemInput[];
 }
+
+export interface CurriculumExportJobOptions {
+  resolution: '720p' | '1080p' | '4k';
+  fps: number;
+  quality: 'draft' | 'standard' | 'high';
+  burnInSubtitles: boolean;
+}
+
+export interface CurriculumExportJobsInput extends CurriculumExportJobOptions {
+  batchId?: string;
+  batchItemIds: string[];
+}
+
+export type CurriculumExportJobAction =
+  | { action: 'attach-render'; renderJobId: string }
+  | { action: 'progress'; progress: number }
+  | { action: 'complete' }
+  | { action: 'fail'; error: CurriculumExportJobError }
+  | { action: 'retry' }
+  | { action: 'cancel' };
 
 export class CurriculumNotFoundError extends Error {
   constructor(message: string) {
@@ -248,6 +271,35 @@ interface BatchItemRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
+interface ExportCandidateRow extends Record<string, unknown> {
+  batch_item_id: string;
+  course_id: string | null;
+  title: string;
+  stage_id: string;
+  course_title: string | null;
+}
+
+interface ExportJobRow extends Record<string, unknown> {
+  id: string;
+  course_id: string | null;
+  batch_item_id: string | null;
+  stage_id: string;
+  title: string;
+  status: string;
+  resolution: string;
+  fps: number | string;
+  quality: string;
+  burn_in_subtitles: boolean;
+  progress: number | string;
+  render_job_id: string | null;
+  attempts: number | string;
+  error: Record<string, unknown> | null;
+  started_at: Date | string | null;
+  completed_at: Date | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
 
@@ -271,6 +323,15 @@ const BATCH_COLUMNS = `id, name, status, started_at, completed_at, created_at, u
 const BATCH_ITEM_COLUMNS = `id, batch_id, position, course_id, title, status, attempts, max_attempts,
        request, generation_job_id, run_id, stage_id, error, started_at, completed_at,
        created_at, updated_at`;
+
+const EXPORT_JOB_COLUMNS = `id, course_id, batch_item_id, stage_id, title, status, resolution,
+       fps, quality, burn_in_subtitles, progress, render_job_id, attempts, error,
+       started_at, completed_at, created_at, updated_at`;
+
+const EXPORT_JOB_RETURNING = `job.id, job.course_id, job.batch_item_id, job.stage_id, job.title,
+       job.status, job.resolution, job.fps, job.quality, job.burn_in_subtitles, job.progress,
+       job.render_job_id, job.attempts, job.error, job.started_at, job.completed_at,
+       job.created_at, job.updated_at`;
 
 const SCHEMA_STATE_KEY = Symbol.for('openmaic.curriculum.schema');
 const schemaState = globalThis as typeof globalThis & {
@@ -476,6 +537,36 @@ function mapBatchItem(row: BatchItemRow): CurriculumBatchItemRecord {
   };
 }
 
+function mapExportJob(row: ExportJobRow): CurriculumExportJobRecord {
+  const error = row.error;
+  return {
+    id: row.id,
+    courseId: row.course_id,
+    batchItemId: row.batch_item_id,
+    stageId: row.stage_id,
+    title: row.title,
+    status: row.status as CurriculumExportJobStatus,
+    resolution: row.resolution,
+    fps: numeric(row.fps),
+    quality: row.quality,
+    burnInSubtitles: row.burn_in_subtitles === true,
+    progress: Number(row.progress) || 0,
+    renderJobId: row.render_job_id,
+    attempts: numeric(row.attempts),
+    error:
+      error && typeof error.code === 'string'
+        ? {
+            code: error.code,
+            ...(typeof error.message === 'string' ? { message: error.message } : {}),
+          }
+        : null,
+    startedAt: nullableIso(row.started_at),
+    completedAt: nullableIso(row.completed_at),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
 function optionalText(value: string | null | undefined): string | null {
   if (value === undefined || value === null) return null;
   const trimmed = value.trim();
@@ -634,6 +725,7 @@ export async function listCurriculum(
     generationJobResult,
     batchResult,
     batchItemResult,
+    exportJobResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
       `SELECT id, name, description, created_at, updated_at
@@ -698,6 +790,13 @@ export async function listCurriculum(
         ORDER BY batch_id, position`,
       [ownerId],
     ),
+    queryable.query<ExportJobRow>(
+      `SELECT ${EXPORT_JOB_COLUMNS}
+         FROM curriculum_export_job
+        WHERE owner_id = $1
+        ORDER BY created_at DESC`,
+      [ownerId],
+    ),
   ]);
 
   const courses = courseResult.rows.map(mapCourse);
@@ -717,6 +816,7 @@ export async function listCurriculum(
     generationJobs: generationJobResult.rows.map(mapGenerationJob),
     batches: batchResult.rows.map(mapBatch),
     batchItems: batchItemResult.rows.map(mapBatchItem),
+    exportJobs: exportJobResult.rows.map(mapExportJob),
   };
 }
 
@@ -1649,4 +1749,280 @@ export async function applyCurriculumBatchAction(
   const row = result.rows[0];
   if (!row) throw new CurriculumNotFoundError('batch not found');
   return mapBatch(row);
+}
+
+/**
+ * Read one export job with the owner's write lock, for an action update.
+ */
+async function readExportJobRowForUpdate(
+  queryable: Queryable,
+  ownerId: string,
+  exportJobId: string,
+): Promise<ExportJobRow | null> {
+  const result = await queryable.query<ExportJobRow>(
+    `SELECT ${EXPORT_JOB_COLUMNS}
+       FROM curriculum_export_job
+      WHERE owner_id = $1 AND id = $2
+      FOR UPDATE`,
+    [ownerId, exportJobId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Enqueue MP4 exports for completed, staged batch items. The request names
+ * either one batch or explicit completed item ids. Jobs already present for an
+ * item are returned as-is, so clicking "export" twice is idempotent; failed or
+ * cancelled jobs are replaced by a fresh queued row.
+ */
+export async function createCurriculumExportJobs(
+  queryable: Queryable,
+  ownerId: string,
+  input: CurriculumExportJobsInput,
+): Promise<CurriculumExportJobRecord[]> {
+  const candidateResult = await queryable.query<ExportCandidateRow>(
+    `SELECT item.id AS batch_item_id,
+            item.course_id,
+            item.title,
+            item.stage_id,
+            course.title AS course_title
+       FROM curriculum_batch_item item
+       JOIN curriculum_batch batch ON batch.id = item.batch_id
+       LEFT JOIN curriculum_course course ON course.id = item.course_id
+      WHERE item.owner_id = $1
+        AND item.status = 'completed'
+        AND item.stage_id IS NOT NULL
+        AND ($2::text IS NULL OR item.batch_id = $2)
+        AND (COALESCE(array_length($3::text[], 1), 0) = 0 OR item.id = ANY($3::text[]))
+        AND NOT EXISTS (
+          SELECT 1
+            FROM curriculum_export_job existing
+           WHERE existing.owner_id = item.owner_id
+             AND existing.batch_item_id = item.id
+             AND existing.status NOT IN ('failed','cancelled')
+        )
+      ORDER BY batch.created_at, item.position
+      LIMIT 50`,
+    [ownerId, input.batchId ?? null, input.batchItemIds.length > 0 ? input.batchItemIds : null],
+  );
+
+  const candidates = candidateResult.rows;
+  if (candidates.length === 0) {
+    if (input.batchItemIds.length > 0) {
+      const existing = await queryable.query<ExportJobRow>(
+        `SELECT ${EXPORT_JOB_COLUMNS}
+           FROM curriculum_export_job
+          WHERE owner_id = $1 AND batch_item_id = ANY($2::text[])
+          ORDER BY created_at`,
+        [ownerId, input.batchItemIds],
+      );
+      if (existing.rows.length > 0) return existing.rows.map(mapExportJob);
+    }
+    throw new CurriculumValidationError('no completed, staged batch items are eligible for export');
+  }
+
+  const created: CurriculumExportJobRecord[] = [];
+  for (const candidate of candidates) {
+    const title = optionalText(candidate.course_title) ?? optionalText(candidate.title) ?? '课堂';
+    const result = await queryable.query<ExportJobRow>(
+      `INSERT INTO curriculum_export_job
+         (id, owner_id, course_id, batch_item_id, stage_id, title,
+          resolution, fps, quality, burn_in_subtitles)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+       RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [
+        createId('export'),
+        ownerId,
+        candidate.course_id,
+        candidate.batch_item_id,
+        candidate.stage_id,
+        title,
+        input.resolution,
+        input.fps,
+        input.quality,
+        input.burnInSubtitles,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('export job could not be created');
+    created.push(mapExportJob(row));
+  }
+
+  const ids = candidates.map((candidate) => candidate.batch_item_id);
+  const allResult = await queryable.query<ExportJobRow>(
+    `SELECT ${EXPORT_JOB_COLUMNS}
+       FROM curriculum_export_job
+      WHERE owner_id = $1 AND batch_item_id = ANY($2::text[])
+      ORDER BY created_at`,
+    [ownerId, ids],
+  );
+  const byId = new Map(created.map((job) => [job.id, job]));
+  for (const row of allResult.rows) {
+    const job = mapExportJob(row);
+    byId.set(job.id, job);
+  }
+  return [...byId.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+/**
+ * Claim the oldest queued export for one owner. A `building`/`submitting` job
+ * untouched for 15 minutes is treated as an interrupted browser worker and
+ * queued again, so closing the laptop mid-build does not wedge the queue.
+ */
+export async function claimNextCurriculumExportJob(
+  queryable: Queryable,
+  ownerId: string,
+): Promise<CurriculumExportJobRecord | null> {
+  await queryable.query(
+    `UPDATE curriculum_export_job
+        SET status = 'queued',
+            error = $2::jsonb,
+            updated_at = now()
+      WHERE owner_id = $1
+        AND status IN ('building','submitting')
+        AND updated_at < now() - interval '15 minutes'`,
+    [
+      ownerId,
+      JSON.stringify({
+        code: 'EXPORT_WORKER_INTERRUPTED',
+        message: 'the previous browser export attempt was interrupted and has been queued again',
+      }),
+    ],
+  );
+
+  const result = await queryable.query<ExportJobRow>(
+    `WITH next AS (
+       SELECT id
+         FROM curriculum_export_job
+        WHERE owner_id = $1 AND status = 'queued'
+        ORDER BY created_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT 1
+     )
+     UPDATE curriculum_export_job job
+        SET status = 'building',
+            attempts = job.attempts + 1,
+            started_at = COALESCE(job.started_at, now()),
+            error = NULL,
+            updated_at = now()
+       FROM next
+      WHERE job.id = next.id
+      RETURNING ${EXPORT_JOB_RETURNING}`,
+    [ownerId],
+  );
+  const row = result.rows[0];
+  return row ? mapExportJob(row) : null;
+}
+
+/**
+ * Apply one browser-worker update. Every action is owner-scoped and guarded by
+ * the current state so a stale tab cannot complete or cancel a job another
+ * worker has already advanced.
+ */
+export async function applyCurriculumExportJobAction(
+  queryable: Queryable,
+  ownerId: string,
+  exportJobId: string,
+  action: CurriculumExportJobAction,
+): Promise<CurriculumExportJobRecord> {
+  const current = await readExportJobRowForUpdate(queryable, ownerId, exportJobId);
+  if (!current) throw new CurriculumNotFoundError('export job not found');
+  const status = current.status as CurriculumExportJobStatus;
+
+  if (action.action === 'attach-render') {
+    if (status !== 'building' && status !== 'submitting') {
+      throw new CurriculumConflictError('only a building export can attach a render job');
+    }
+    const result = await queryable.query<ExportJobRow>(
+      `UPDATE curriculum_export_job
+          SET status = 'rendering',
+              render_job_id = $3,
+              error = NULL,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [ownerId, exportJobId, action.renderJobId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('export job not found');
+    return mapExportJob(row);
+  }
+
+  if (action.action === 'progress') {
+    const result = await queryable.query<ExportJobRow>(
+      `UPDATE curriculum_export_job
+          SET progress = GREATEST(progress, $3),
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [ownerId, exportJobId, action.progress],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('export job not found');
+    return mapExportJob(row);
+  }
+
+  if (action.action === 'complete') {
+    const result = await queryable.query<ExportJobRow>(
+      `UPDATE curriculum_export_job
+          SET status = 'succeeded',
+              progress = 1,
+              error = NULL,
+              completed_at = COALESCE(completed_at, now()),
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [ownerId, exportJobId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('export job not found');
+    return mapExportJob(row);
+  }
+
+  if (action.action === 'fail') {
+    const result = await queryable.query<ExportJobRow>(
+      `UPDATE curriculum_export_job
+          SET status = 'failed',
+              error = $3::jsonb,
+              completed_at = COALESCE(completed_at, now()),
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [ownerId, exportJobId, JSON.stringify(action.error)],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('export job not found');
+    return mapExportJob(row);
+  }
+
+  if (action.action === 'retry') {
+    const result = await queryable.query<ExportJobRow>(
+      `UPDATE curriculum_export_job
+          SET status = 'queued',
+              progress = 0,
+              render_job_id = NULL,
+              error = NULL,
+              completed_at = NULL,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [ownerId, exportJobId],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('export job not found');
+    return mapExportJob(row);
+  }
+
+  const result = await queryable.query<ExportJobRow>(
+    `UPDATE curriculum_export_job
+        SET status = 'cancelled',
+            completed_at = COALESCE(completed_at, now()),
+            updated_at = now()
+      WHERE owner_id = $1 AND id = $2
+      RETURNING ${EXPORT_JOB_COLUMNS}`,
+    [ownerId, exportJobId],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('export job not found');
+  return mapExportJob(row);
 }

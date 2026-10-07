@@ -200,6 +200,44 @@ export interface CurriculumBatchItemRecord {
   updatedAt: string;
 }
 
+/** Owner-scoped MP4 export jobs produced from completed batch items. */
+export const CURRICULUM_EXPORT_JOB_STATUSES = [
+  'queued',
+  'building',
+  'submitting',
+  'rendering',
+  'succeeded',
+  'failed',
+  'cancelled',
+] as const;
+export type CurriculumExportJobStatus = (typeof CURRICULUM_EXPORT_JOB_STATUSES)[number];
+
+export interface CurriculumExportJobError {
+  code: string;
+  message?: string;
+}
+
+export interface CurriculumExportJobRecord {
+  id: string;
+  courseId: string | null;
+  batchItemId: string | null;
+  stageId: string;
+  title: string;
+  status: CurriculumExportJobStatus;
+  resolution: string;
+  fps: number;
+  quality: string;
+  burnInSubtitles: boolean;
+  progress: number;
+  renderJobId: string | null;
+  attempts: number;
+  error: CurriculumExportJobError | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface CurriculumSnapshot {
   series: CurriculumSeriesRecord[];
   courses: CurriculumCourseRecord[];
@@ -210,4 +248,5 @@ export interface CurriculumSnapshot {
   generationJobs: CurriculumGenerationJobRecord[];
   batches: CurriculumBatchRecord[];
   batchItems: CurriculumBatchItemRecord[];
+  exportJobs: CurriculumExportJobRecord[];
 }

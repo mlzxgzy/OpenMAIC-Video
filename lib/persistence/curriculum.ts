@@ -258,6 +258,55 @@ CREATE UNIQUE INDEX IF NOT EXISTS curriculum_batch_item_owner_run_idx
   WHERE run_id IS NOT NULL;
 `;
 
+/**
+ * Durable MP4 export queue. The browser is the only place that can build the
+ * Hyperframes ZIP (off-screen DOM snapshots + the local asset view), so the
+ * server owns the ledger and admission; a page-side worker claims one queued
+ * job, builds/uploads it through the existing render route, and reports the
+ * render job id and progress back. The render service still owns the actual
+ * queueing, concurrency limit and artifact lifecycle.
+ */
+const CURRICULUM_EXPORT_JOBS_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_export_job (
+  id                TEXT PRIMARY KEY,
+  owner_id          TEXT NOT NULL,
+  course_id         TEXT REFERENCES curriculum_course(id) ON DELETE SET NULL,
+  batch_item_id     TEXT REFERENCES curriculum_batch_item(id) ON DELETE SET NULL,
+  stage_id          TEXT NOT NULL,
+  title             TEXT NOT NULL DEFAULT '',
+  status            TEXT NOT NULL DEFAULT 'queued',
+  resolution        TEXT NOT NULL DEFAULT '1080p',
+  fps               INTEGER NOT NULL DEFAULT 30,
+  quality           TEXT NOT NULL DEFAULT 'standard',
+  burn_in_subtitles BOOLEAN NOT NULL DEFAULT false,
+  progress          DOUBLE PRECISION NOT NULL DEFAULT 0,
+  render_job_id     TEXT,
+  attempts          INTEGER NOT NULL DEFAULT 0,
+  error             JSONB,
+  started_at        TIMESTAMPTZ,
+  completed_at      TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_export_job_status_known CHECK
+    (status IN ('queued','building','submitting','rendering',
+                'succeeded','failed','cancelled')),
+  CONSTRAINT curriculum_export_job_resolution_known CHECK
+    (resolution IN ('720p','1080p','4k')),
+  CONSTRAINT curriculum_export_job_fps_known CHECK (fps IN (24,30,60)),
+  CONSTRAINT curriculum_export_job_quality_known CHECK
+    (quality IN ('draft','standard','high'))
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_export_job_owner_status_idx
+  ON curriculum_export_job (owner_id, status, created_at);
+
+CREATE INDEX IF NOT EXISTS curriculum_export_job_batch_item_idx
+  ON curriculum_export_job (owner_id, batch_item_id, created_at);
+
+CREATE INDEX IF NOT EXISTS curriculum_export_job_stage_idx
+  ON curriculum_export_job (owner_id, stage_id, created_at);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -284,6 +333,12 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 5,
       name: 'batches',
       up: CURRICULUM_BATCHES_SCHEMA,
+      transaction: true,
+    },
+    {
+      version: 6,
+      name: 'export_jobs',
+      up: CURRICULUM_EXPORT_JOBS_SCHEMA,
       transaction: true,
     },
   ],

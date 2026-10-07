@@ -71,6 +71,7 @@ function snapshot(
     generationJobs: [],
     batches: [],
     batchItems: [],
+    exportJobs: [],
   };
 }
 

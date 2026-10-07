@@ -17,6 +17,7 @@
 import { compileVideoTimeline, emitHyperframes, toSrt, toVtt } from '@/lib/video-export';
 import { useStageStore } from '@/lib/store';
 import type { Locale } from '@/lib/i18n';
+import type { Scene, Stage } from '@/lib/types/stage';
 import { resolveExportStageName } from './resolve-stage-name';
 import { createVideoTimelineDeps } from './timeline-deps';
 import { collectVideoAssets } from './collect';
@@ -77,13 +78,17 @@ async function compileStageIr(options: {
   labels: ReturnType<typeof getVideoExportCoverLabels>;
   skipGeometry?: boolean;
   skipInteractiveHtml?: boolean;
+  /** Explicit document snapshot, for batch exports that do not touch the live store. */
+  source?: { stage: Stage; scenes: Scene[] };
 }): Promise<{
   ir: ReturnType<typeof compileVideoTimeline>;
   stageName: string;
-  scenes: ReturnType<typeof useStageStore.getState>['scenes'];
+  scenes: Scene[];
   deps: Awaited<ReturnType<typeof createVideoTimelineDeps>>;
 }> {
-  const { stage, scenes } = useStageStore.getState();
+  const current = useStageStore.getState();
+  const stage = options.source?.stage ?? current.stage;
+  const scenes = options.source?.scenes ?? current.scenes;
   if (!stage?.id || scenes.length === 0) {
     throw new NoScenesError('No scenes to export');
   }
@@ -127,6 +132,12 @@ export interface BuildExportZipOptions {
   burnInSubtitles?: boolean;
   /** Locale the card chrome and the emitted document are written in. */
   locale: Locale;
+  /**
+   * Build from an explicit document snapshot instead of the live stage store.
+   * Batch export uses this so rendering many queued courses never has to swap
+   * the editor state or overwrite unsaved work.
+   */
+  source?: { stage: Stage; scenes: Scene[] };
 }
 
 /**
@@ -151,6 +162,7 @@ export async function buildExportZip(
     resolution,
     locale,
     labels,
+    source: options.source,
   });
 
   // 3. emit the Hyperframes project text.

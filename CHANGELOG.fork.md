@@ -171,6 +171,40 @@
   留给验收时点击队列触发，避免在验证阶段消耗模型额度。
 
 
+- **批量导出 MP4（持久队列 + 浏览器导出工作器）**：新增
+  `curriculum_export_job` 表（v6 migration）、`POST /api/curriculum/export-jobs`
+  入队接口、`POST /api/curriculum/export-jobs/claim` 原子认领接口和
+  `PATCH /api/curriculum/export-jobs/[id]` 生命周期接口，以及 `/curriculum`
+  页面的“批量导出 MP4”面板。已完成且有 stage 的 batch item 可以一键加入导出
+  队列；服务端负责 owner 隔离的持久队列、15 分钟中断认领回收、重复入队幂等
+  和 `FOR UPDATE SKIP LOCKED` 认领，网页端 worker 逐项：
+
+  ```text
+  claim export job
+    → accessDocument(stageId) 读取服务端权威 stage/scenes
+    → buildExportZip({ source }) 在浏览器构建 Hyperframes ZIP
+    → POST /api/export-video/render 提交现有渲染服务
+    → PATCH attach-render 记录 renderJobId
+    → 轮询 /api/export-video/render/[jobId] 并回写进度
+    → 成功 PATCH complete / 失败 PATCH fail
+  ```
+
+  `buildExportZip` 新增 `source` 快照入口，批量导出不再需要切换全局
+  `useStageStore`，也不会覆盖用户未保存的编辑。为适配服务端生成的课堂（媒体以
+  分配的 `ast_*` 资源 id 存在），ZIP 帧捕获沿用现有 `isMediaPlaceholder` 分支，
+  由共享 pool-first 的 `resolveStoredBytes` / `resolveAudioBlob` 按 id 取回服务端
+  资产字节。面板支持重试、取消、下载单个/全部已完成 MP4。
+
+  验证：`tsc --noEmit`、ESLint、Prettier 通过；curriculum + video-export +
+  迁移 checksum tests 82 例通过；本地 PostgreSQL 已应用 v6 migration；
+  `POST /api/curriculum/export-jobs` 对 `batchItemIds` 正确入队并幂等返回现有
+  job；`claim` 返回 `building`；`attach-render` / `progress` / `complete` 分别把
+  job 推进到 `rendering` 和 `succeeded`；非法入队体和非法 action 返回 400；
+  `/api/curriculum` 返回 `exportJobs`；`/curriculum` SSR 200 且包含“批量导出
+  MP4”。为避免验证阶段消耗真实渲染额度，未触发完整 MP4 渲染；浏览器 worker
+  的真实构建/上传/轮询路径留给验收时点击“导出”触发。
+
+
 
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
