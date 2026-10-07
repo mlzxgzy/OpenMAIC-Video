@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
   BookOpen,
@@ -118,6 +118,15 @@ const COURSE_TABS = [
   icon: typeof BookOpen;
 }>;
 
+function parseCourseTab(value: string | null): CourseTabId {
+  return COURSE_TABS.some((tab) => tab.id === value) ? (value as CourseTabId) : 'profile';
+}
+
+function currentCourseTab(): CourseTabId {
+  if (typeof window === 'undefined') return 'profile';
+  return parseCourseTab(new URLSearchParams(window.location.search).get('tab'));
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -174,6 +183,7 @@ function relationText(
 
 export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<CurriculumSnapshot>(EMPTY_SNAPSHOT);
   const [stages, setStages] = useState<StageOption[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -191,7 +201,7 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     setError(null);
     try {
       const [curriculum, stagePayload] = await Promise.all([
-        requestJson<CurriculumSnapshot>('/api/curriculum'),
+        requestJson<CurriculumSnapshot>(`/api/curriculum/courses/${courseId}`),
         requestJson<{ stages: Array<{ id: string; name: string }> }>('/api/stages'),
       ]);
       setSnapshot(curriculum);
@@ -201,11 +211,18 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     } finally {
       setLoaded(true);
     }
-  }, []);
+  }, [courseId]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const syncFromUrl = () => setActiveTab(currentCourseTab());
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
 
   const course = useMemo(
     () => snapshot.courses.find((candidate) => candidate.id === courseId) ?? null,
@@ -269,6 +286,19 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
 
   const tabContentClass = (value: CourseTabId) =>
     `flex-col gap-6 outline-none ${activeTab === value ? 'flex' : 'hidden'}`;
+
+  const handleTabChange = useCallback(
+    (value: string) => {
+      const nextTab = parseCourseTab(value);
+      setActiveTab(nextTab);
+      const params = new URLSearchParams(window.location.search);
+      if (nextTab === 'profile') params.delete('tab');
+      else params.set('tab', nextTab);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router],
+  );
 
   const submitProfile = async () => {
     if (!form.title.trim()) return;
@@ -484,11 +514,7 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
         </Card>
       </div>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(value as CourseTabId)}
-        className="gap-6"
-      >
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-6">
         <TabsList className="grid! h-auto! min-h-0 w-full! grid-cols-1 justify-stretch! gap-2 overflow-visible bg-transparent! p-0! sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-5">
           {COURSE_TABS.map((tab, index) => {
             const Icon = tab.icon;

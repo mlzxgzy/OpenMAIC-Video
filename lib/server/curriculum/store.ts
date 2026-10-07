@@ -873,6 +873,142 @@ export async function listCurriculum(
   };
 }
 
+/**
+ * Focused snapshot for one course product page.
+ *
+ * The page still needs every series and course for its selects and relation
+ * editor, plus all knowledge points of the course's series for binding. It does
+ * not need other courses' links, other owners' data, the program-plan layer or
+ * the full batch/export history, so this query set keeps the payload small and
+ * the detail route from scanning the whole ledger.
+ */
+export async function getCurriculumCourseDetail(
+  queryable: Queryable,
+  ownerId: string,
+  courseId: string,
+): Promise<CurriculumSnapshot> {
+  const courseResult = await queryable.query<CourseRow>(
+    `SELECT ${COURSE_COLUMNS}
+       FROM curriculum_course
+      WHERE owner_id = $1
+        AND id = $2`,
+    [ownerId, courseId],
+  );
+  const courseRow = courseResult.rows[0];
+  if (!courseRow) throw new CurriculumNotFoundError('course not found');
+  const course = mapCourse(courseRow);
+
+  const knowledgePointQuery = course.seriesId
+    ? queryable.query<KnowledgePointRow>(
+        `SELECT ${KNOWLEDGE_POINT_COLUMNS}
+           FROM curriculum_knowledge_point
+          WHERE owner_id = $1
+            AND series_id = $2
+          ORDER BY sort_order, lower(name), created_at`,
+        [ownerId, course.seriesId],
+      )
+    : queryable.query<KnowledgePointRow>(
+        `SELECT ${KNOWLEDGE_POINT_COLUMNS}
+           FROM curriculum_knowledge_point
+          WHERE owner_id = $1
+          ORDER BY COALESCE(series_id, ''), sort_order, lower(name), created_at`,
+        [ownerId],
+      );
+
+  const [
+    seriesResult,
+    allCoursesResult,
+    relationResult,
+    knowledgeResult,
+    courseKnowledgeResult,
+    generationJobResult,
+    batchItemResult,
+    exportJobResult,
+  ] = await Promise.all([
+    queryable.query<SeriesRow>(
+      `SELECT id, name, description, created_at, updated_at
+         FROM curriculum_series
+        WHERE owner_id = $1
+        ORDER BY lower(name), created_at`,
+      [ownerId],
+    ),
+    queryable.query<CourseRow>(
+      `SELECT ${COURSE_COLUMNS}
+         FROM curriculum_course
+        WHERE owner_id = $1
+        ORDER BY COALESCE(series_id, ''), lesson_order, lower(title), created_at`,
+      [ownerId],
+    ),
+    queryable.query<RelationRow>(
+      `SELECT ${RELATION_COLUMNS}
+         FROM curriculum_course_relation
+        WHERE owner_id = $1
+          AND (source_course_id = $2 OR target_course_id = $2)
+        ORDER BY created_at`,
+      [ownerId, courseId],
+    ),
+    knowledgePointQuery,
+    queryable.query<CourseKnowledgePointRow>(
+      `SELECT ${COURSE_KNOWLEDGE_POINT_COLUMNS}
+         FROM curriculum_course_knowledge_point
+        WHERE owner_id = $1
+          AND course_id = $2
+        ORDER BY sort_order, created_at`,
+      [ownerId, courseId],
+    ),
+    queryable.query<GenerationJobRow>(
+      `SELECT ${GENERATION_JOB_COLUMNS}
+         FROM curriculum_generation_job
+        WHERE owner_id = $1
+          AND course_id = $2
+        ORDER BY created_at DESC`,
+      [ownerId, courseId],
+    ),
+    queryable.query<BatchItemRow>(
+      `SELECT ${BATCH_ITEM_COLUMNS}
+         FROM curriculum_batch_item
+        WHERE owner_id = $1
+          AND course_id = $2
+        ORDER BY created_at DESC`,
+      [ownerId, courseId],
+    ),
+    queryable.query<ExportJobRow>(
+      `SELECT ${EXPORT_JOB_COLUMNS}
+         FROM curriculum_export_job
+        WHERE owner_id = $1
+          AND course_id = $2
+        ORDER BY created_at DESC`,
+      [ownerId, courseId],
+    ),
+  ]);
+
+  const courses = allCoursesResult.rows.map(mapCourse);
+  const courseCounts = new Map<string, number>();
+  for (const candidate of courses) {
+    if (candidate.seriesId) {
+      courseCounts.set(candidate.seriesId, (courseCounts.get(candidate.seriesId) ?? 0) + 1);
+    }
+  }
+
+  return {
+    series: seriesResult.rows.map((row) => mapSeries(row, courseCounts.get(row.id) ?? 0)),
+    courses,
+    relations: relationResult.rows.map(mapRelation),
+    knowledgePoints: knowledgeResult.rows.map(mapKnowledgePoint),
+    courseKnowledgePoints: courseKnowledgeResult.rows.map(mapCourseKnowledgePoint),
+    knowledgePointRelations: [],
+    generationJobs: generationJobResult.rows.map(mapGenerationJob),
+    batches: [],
+    batchItems: batchItemResult.rows.map(mapBatchItem),
+    exportJobs: exportJobResult.rows.map(mapExportJob),
+    programs: [],
+    programVersions: [],
+    graduationIndicators: [],
+    programCourses: [],
+    courseIndicatorSupports: [],
+  };
+}
+
 /** Create a series, or update its description when the owner already has one by that name. */
 export async function createCurriculumSeries(
   queryable: Queryable,
