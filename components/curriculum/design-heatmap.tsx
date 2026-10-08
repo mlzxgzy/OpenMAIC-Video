@@ -162,7 +162,30 @@ function missingKinds(row: DesignCoverageReport['objectives'][number]): string[]
   return missing;
 }
 
-export function DesignHeatmap({ taskId }: { taskId: string }) {
+/**
+ * The read-and-review half of the design screen.
+ *
+ * `onPhaseChange` is how the phase reaches the workbench: this component is the
+ * only one that reads it, so the editor is re-gated by whatever the matrix last
+ * saw rather than by a second, independently-fetched copy. Two copies would
+ * disagree for exactly as long as a phase advance takes to propagate, and the
+ * disagreement shows up as a 409 the author did not cause.
+ *
+ * `version` is a bump counter rather than a reload callback, so an edit in the
+ * editor refreshes this half through the same path as its own save — one
+ * mechanism, not two that can be wired to different things.
+ */
+export function DesignHeatmap({
+  taskId,
+  version,
+  onPhaseChange,
+  onChanged,
+}: {
+  taskId: string;
+  version: number;
+  onPhaseChange: (phase: CurriculumDesignPhase) => void;
+  onChanged: () => Promise<void> | void;
+}) {
   const [title, setTitle] = useState('');
   const [phase, setPhase] = useState<CurriculumDesignPhase | null>(null);
   const [coverage, setCoverage] = useState<CoveragePayload | null>(null);
@@ -193,16 +216,21 @@ export function DesignHeatmap({ taskId }: { taskId: string }) {
       // What the last review recorded, which is not the same as what the
       // design currently is — see the file header.
       setFindings(snapshot.auditFindings);
+      onPhaseChange(snapshot.task.designPhase);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '加载失败');
     } finally {
       setLoading(false);
     }
+    // `onPhaseChange` is intentionally not a dependency: it is the shell's
+    // setter, and including it would make `load` a new function on every render
+    // of the parent, re-running this effect for no change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, version]);
 
   /**
    * Advance one phase.
@@ -234,12 +262,16 @@ export function DesignHeatmap({ taskId }: { taskId: string }) {
       setFindings(payload.findings);
       // The gate is derived from the same design, so re-read it too.
       setGate(await requestJson<ExportGatePayload>(`${base}/export-gate`));
+      // A review does not change the design, but it does change the shell's
+      // version, and the editor's create buttons are gated on the same snapshot
+      // this read came from. Bumping keeps one refresh path for every write.
+      await onChanged();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '审核失败');
     } finally {
       setBusy(null);
     }
-  }, [base]);
+  }, [base, onChanged]);
 
   /**
    * Mark a finding resolved or waived. The next review replaces open findings,
@@ -257,13 +289,14 @@ export function DesignHeatmap({ taskId }: { taskId: string }) {
         setFindings((current) =>
           current.map((finding) => (finding.id === payload.finding.id ? payload.finding : finding)),
         );
+        await onChanged();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : '更新失败');
       } finally {
         setBusy(null);
       }
     },
-    [base],
+    [base, onChanged],
   );
 
   /** Outcome id → which items cover it, and in which of the three ways. */
