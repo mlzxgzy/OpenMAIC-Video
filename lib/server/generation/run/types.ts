@@ -11,7 +11,7 @@
 import type { AgentInfo } from '@openmaic/generation';
 
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
-import type { SceneOutline, SceneType } from '@/lib/types/generation';
+import type { DeckDesign, SceneOutline, SceneType } from '@/lib/types/generation';
 import type { GeneratedAgentConfig } from '@/lib/types/stage';
 
 /**
@@ -87,6 +87,24 @@ export interface GenerationRunInput {
    * outline step drops any scene that arrives with a type outside this list.
    */
   sceneTypes?: SceneType[];
+  /**
+   * The page plan course design produced, carried verbatim to the outline step.
+   *
+   * It is separate from `requirement` because the two answer different
+   * questions and neither can substitute for the other: `requirement` says what
+   * the course is about, `deckDesign` says what each page has to achieve. When
+   * a design supplied a plan, the plan is authoritative over the prose — see
+   * `buildDeckDesignBlock`, which is what turns it into instructions.
+   */
+  deckDesign?: DeckDesign;
+  /**
+   * The design task this run belongs to, and the item within it that this run
+   * realizes. They ride the run so a finished stage can be traced back to the
+   * outcome it serves — the claim the whole reverse-design model rests on, and
+   * one that a stage cannot make about itself after the fact.
+   */
+  curriculumTaskId?: string;
+  curriculumUnitId?: string;
   agents: GenerationRunAgents;
   learnerProfile?: { nickname?: string; bio?: string };
   /**

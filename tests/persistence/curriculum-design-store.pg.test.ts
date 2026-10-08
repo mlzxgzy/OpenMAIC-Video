@@ -11,6 +11,7 @@
  */
 import { Pool } from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
@@ -28,18 +29,18 @@ const OWNER = 'owner:pg-design-store';
 const OTHER = 'owner:pg-design-store-other';
 const TASK = 'task-pg-store';
 
-/** The store's `Queryable` is exactly `query`; `pg.Pool`'s overloads are not. */
-class PgQueryable {
-  constructor(readonly pool: Pool) {}
-
-  async query<TRow>(text: string, params?: unknown[]) {
-    return (await this.pool.query(text, params)) as { rows: TRow[] };
-  }
-}
+/**
+ * `pg.Pool#query` returns a wider `QueryResult` than `Queryable#query` promises,
+ * and TypeScript will not narrow one to the other on its own. The repo's other
+ * PostgreSQL suites cast the pool directly rather than wrapping it, which is
+ * what this does too — a hand-rolled adapter would add a second shape for the
+ * driver to drift from.
+ */
+const asQueryable = (pool: Pool): Queryable => pool as unknown as Queryable;
 
 describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
   let pool: Pool;
-  let queryable: PgQueryable;
+  let queryable: Queryable;
 
   beforeAll(async () => {
     const admin = new Pool({ connectionString: contractUrl });
@@ -48,7 +49,7 @@ describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
     await admin.end();
 
     pool = new Pool({ connectionString: contractUrl, options: `-c search_path=${TEST_SCHEMA}` });
-    queryable = new PgQueryable(pool);
+    queryable = asQueryable(pool);
     await ensureCurriculumSchema(pool);
 
     // A complete brief, so only the phase under test is what stops the advance.

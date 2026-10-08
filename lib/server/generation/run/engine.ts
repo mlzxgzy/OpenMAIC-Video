@@ -230,6 +230,12 @@ export function runRequirements(input: GenerationRunInput, webSearch: boolean): 
     ...(input.interactive ? { interactiveMode: true } : {}),
     ...(input.taskEngine ? { taskEngineMode: true } : {}),
     ...(input.sceneTypes ? { sceneTypes: input.sceneTypes } : {}),
+    // The page plan, carried through untouched. Turning it into instructions is
+    // `buildDeckDesignBlock`'s job and not this function's: the run hands the
+    // outline step data, and the step decides how to present it.
+    ...(input.deckDesign ? { deckDesign: input.deckDesign } : {}),
+    ...(input.curriculumTaskId ? { curriculumTaskId: input.curriculumTaskId } : {}),
+    ...(input.curriculumUnitId ? { curriculumUnitId: input.curriculumUnitId } : {}),
   };
 }
 

@@ -34,6 +34,7 @@ const mocks = vi.hoisted(() => ({
       withTransaction: (body: (queryable: unknown) => Promise<unknown>) => Promise<unknown>;
     },
   },
+  startGenerationRun: vi.fn(),
 }));
 
 vi.mock('@/lib/server/identity/resolve', async () =>
@@ -45,6 +46,15 @@ vi.mock('@/lib/server/curriculum/design-store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/curriculum/design-store')>();
   return { ...actual, getCurriculumDesignProvider: async () => mocks.provider.current };
 });
+
+// The run starter is the only substituted piece behind the produce route,
+// because it reaches for the model slots and wakes the runner. What is under
+// test is the route's own contribution: that the gate runs before the start,
+// that the run input comes from the design rather than a template, and that a
+// refusal leaves no run behind.
+vi.mock('@/lib/server/generation/run/start', () => ({
+  startGenerationRun: mocks.startGenerationRun,
+}));
 
 import { GET as listTasks, POST as createTask } from '@/app/api/curriculum/design/tasks/route';
 import {
@@ -69,6 +79,7 @@ import { POST as createUnitDependency } from '@/app/api/curriculum/design/tasks/
 import { DELETE as deleteUnitDependency } from '@/app/api/curriculum/design/tasks/[id]/unit-dependencies/[unitDependencyId]/route';
 import { POST as createUnit } from '@/app/api/curriculum/design/tasks/[id]/units/route';
 import { PATCH as patchUnit } from '@/app/api/curriculum/design/tasks/[id]/units/[unitId]/route';
+import { POST as generateUnit } from '@/app/api/curriculum/design/tasks/[id]/units/[unitId]/generate/route';
 import {
   POST as createCoverage,
   PUT as putCoverage,
@@ -88,6 +99,7 @@ import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
   advanceCurriculumTaskPhase,
   createCurriculumEvidence,
+  createCurriculumLabTask,
   createCurriculumLearningNode,
   createCurriculumObjective,
   createCurriculumTask,
@@ -1073,6 +1085,281 @@ describe('design routes (PGlite)', () => {
         taskParams(task.id),
       );
       expect(response.status).toBe(404);
+    });
+  });
+
+  describe('producing a designed item', () => {
+    /** A stored-run stand-in; the route only re-reads its id and input. */
+    const startedRun = (ownerId: string, input: unknown) => ({
+      id: 'run-generated-item',
+      ownerId,
+      state: 'preparing',
+      step: null,
+      seq: 1,
+      input,
+      outline: null,
+      agents: null,
+      stageId: null,
+      progress: { scenesTotal: 0, scenesCompleted: 0 },
+      error: null,
+      mediaPending: false,
+      narrationUnvoiced: 0,
+      mediaSummary: null,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      leaseWorkerId: null,
+      leaseHeartbeatAt: null,
+      leaseGeneration: 0,
+      takeovers: 0,
+    });
+
+    beforeEach(() => {
+      // Reset, not just re-implement. This file has no global `clearMocks`, so
+      // calls accumulate across tests and `mock.calls[0]` would silently be the
+      // *previous* test's run — which reads as a real product failure rather
+      // than as a dirty mock.
+      mocks.startGenerationRun.mockReset();
+      mocks.startGenerationRun.mockImplementation((ownerId: string, input: unknown) =>
+        Promise.resolve(startedRun(ownerId, input)),
+      );
+    });
+
+    /** Build a design that passes the export gate, plus its items. */
+    async function closableDesign() {
+      // `advanceTo('teaching')` is the furthest point that builds an item: it
+      // creates the outcome, its evidence, the node, one lecture item and its
+      // teach coverage, then advances. Starting from 'outline' would stop one
+      // line earlier and leave no item at all.
+      await advanceTo('teaching');
+      const objectiveId = (
+        await read<{ objectives: { id: string }[] }>(
+          await getTask(fetch_(`/api/curriculum/design/tasks/${task.id}`), taskParams(task.id)),
+        )
+      ).objectives[0]!.id;
+
+      // The lecture the helper made is already the teaching coverage; read it
+      // back rather than adding a second one for the same outcome.
+      const teach = (
+        await read<{ units: { id: string; unitRole: string | null }[] }>(
+          await getTask(fetch_(`/api/curriculum/design/tasks/${task.id}`), taskParams(task.id)),
+        )
+      ).units.find((unit) => unit.unitRole === 'lecture')!;
+
+      // The teaching design must name the outcome's primary support node.
+      // `objective_missing_prereq` is the rule that stops an outcome being
+      // taught by nothing that mentions the knowledge it rests on, so the
+      // fixture has to author one rather than wave it through — the gate is
+      // right to refuse an item whose teaching design is still empty.
+      const nodeId = (
+        await read<{ nodes: { id: string }[] }>(
+          await getTask(fetch_(`/api/curriculum/design/tasks/${task.id}`), taskParams(task.id)),
+        )
+      ).nodes[0]!.id;
+      await patchUnit(
+        patch(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}`, {
+          teachingDesign: { nodes: [nodeId], core: ['SQL 查询与参数化'] },
+        }),
+        childParams(task.id, 'unitId', teach.id),
+      );
+
+      const practise = await createCurriculumUnit(pool, OWNER, task.id, {
+        unitType: 'item',
+        title: '1.2 SQL 注入练习',
+        unitRole: 'practice',
+      });
+      await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+        unitId: practise.id,
+        objectiveId,
+        coverageKind: 'practice',
+      });
+      const assess = await createCurriculumUnit(pool, OWNER, task.id, {
+        unitType: 'item',
+        title: '1.3 SQL 注入考核',
+        unitRole: 'exam',
+      });
+      await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+        unitId: assess.id,
+        objectiveId,
+        coverageKind: 'assess',
+      });
+      // `advanceTo` declared lab evidence for this outcome, so a lab task must
+      // exist to honour it. `evidence_no_artifact` is the rule that makes the
+      // loop closable in practice rather than only on paper: an outcome that
+      // promises a lab and has none is not assessable.
+      // The lab is written *after* the advance: the phase machine refuses
+      // assessment work while the task is still in `teaching`, and that refusal
+      // is the machine working — this fixture follows it rather than reaching
+      // around it.
+      await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → assessment
+      await createCurriculumLabTask(pool, OWNER, task.id, {
+        unitId: assess.id,
+        objectiveId,
+        assessmentMode: 'exam',
+        taskGoal: '读取 /flag',
+        dockerImage: 'openmaic/ctf-web:latest',
+        // An exam lab is held to the strict contract: no hints, no retry, a
+        // time limit. The `curriculum_lab_exam_strict` CHECK enforces it in the
+        // database, so a fixture that omits these cannot be written at all.
+        hintPolicy: 'forbidden',
+        allowRetry: false,
+        timeLimitSec: 900,
+        verifyRules: [{ kind: 'flag', value: 'flag{ok}' }],
+      });
+      await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → review
+      return { objectiveId, teach, practise, assess };
+    }
+
+    it('starts a run whose scene types come from the item’s role', async () => {
+      const { teach, practise, assess } = await closableDesign();
+
+      const lecture = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      expect(lecture.status).toBe(202);
+
+      const drill = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${practise.id}/generate`),
+        childParams(task.id, 'unitId', practise.id),
+      );
+      expect(drill.status).toBe(202);
+
+      const test = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${assess.id}/generate`),
+        childParams(task.id, 'unitId', assess.id),
+      );
+      expect(test.status).toBe(202);
+
+      const inputs = mocks.startGenerationRun.mock.calls.map(
+        (call) =>
+          call[1] as {
+            sceneTypes: string[];
+            interactive: boolean;
+            taskEngine: boolean;
+          },
+      );
+      // The defect being replaced was `['slide']` for all three.
+      expect(inputs[0]!.sceneTypes).toEqual(['slide']);
+      expect(inputs[1]!.sceneTypes).toEqual(['slide', 'quiz', 'interactive']);
+      expect(inputs[2]!.sceneTypes).toEqual(['slide', 'quiz']);
+      expect(inputs[2]!.sceneTypes).not.toContain('interactive');
+      expect(inputs[1]!.taskEngine).toBe(true);
+    });
+
+    it('builds the requirement from the outcome the item serves', async () => {
+      const { teach } = await closableDesign();
+      await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      const input = mocks.startGenerationRun.mock.calls[0]![1] as { requirement: string };
+      // Not "本节我们学习X": the stage is named after this text, and a title
+      // there teaches nothing about what the course promised.
+      expect(input.requirement).toContain('在靶场中构造 payload 读取 flag');
+      expect(input.requirement).not.toMatch(/本节我们学习/);
+    });
+
+    it('carries the page plan of a lecture and not of a drill', async () => {
+      const { teach, practise } = await closableDesign();
+      const applied = await patchUnit(
+        patch(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}`, {
+          deckDesign: {
+            pages: [
+              {
+                order: 1,
+                title: '注入为何成立',
+                goal: '能说出参数拼接的后果',
+                coreInfo: '值被直接拼进查询',
+                mode: 'explain',
+              },
+            ],
+          },
+        }),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      // Asserted, not assumed: a silently-refused patch would make this test
+      // pass for the wrong reason on the `drill` half and fail confusingly here.
+      expect(applied.status).toBe(200);
+      const appliedBody = await read<{ unit: { deckDesign: { pages: unknown[] } } }>(applied);
+      expect(appliedBody.unit.deckDesign.pages).toHaveLength(1);
+
+      await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${practise.id}/generate`),
+        childParams(task.id, 'unitId', practise.id),
+      );
+
+      const lecture = mocks.startGenerationRun.mock.calls[0]![1] as { deckDesign?: unknown };
+      const drill = mocks.startGenerationRun.mock.calls[1]![1] as { deckDesign?: unknown };
+      expect(lecture.deckDesign).toMatchObject({ pages: [{ goal: '能说出参数拼接的后果' }] });
+      expect(drill.deckDesign).toBeUndefined();
+    });
+
+    it('carries the design ids so the produced stage is traceable', async () => {
+      const { teach } = await closableDesign();
+      await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      const input = mocks.startGenerationRun.mock.calls[0]![1] as {
+        curriculumTaskId?: string;
+        curriculumUnitId?: string;
+      };
+      expect(input.curriculumTaskId).toBe(task.id);
+      expect(input.curriculumUnitId).toBe(teach.id);
+    });
+
+    it('refuses an unclosed design and starts nothing', async () => {
+      // The `advanceTo('teaching')` design teaches one outcome and neither
+      // practises nor assesses it: the loop is open, so producing the lecture
+      // would create content for a promise nothing checks.
+      await advanceTo('teaching');
+      const teach = (
+        await read<{ units: { id: string; unitRole: string | null }[] }>(
+          await getTask(fetch_(`/api/curriculum/design/tasks/${task.id}`), taskParams(task.id)),
+        )
+      ).units.find((unit) => unit.unitRole === 'lecture')!;
+
+      const response = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      expect(response.status).toBe(400);
+      // The ordering that matters: the gate runs before the start, so a refusal
+      // leaves no orphaned, paid-for run behind.
+      expect(mocks.startGenerationRun).not.toHaveBeenCalled();
+    });
+
+    it('404s an item belonging to someone else', async () => {
+      const { teach } = await closableDesign();
+      mocks.resolveOwnerId.mockReturnValue(OTHER);
+      const response = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      // The same answer as an unknown id: a 409 about the design would confirm
+      // that this id exists.
+      expect(response.status).toBe(404);
+      expect(mocks.startGenerationRun).not.toHaveBeenCalled();
+    });
+
+    it('refuses a chapter, which carries no role and cannot be produced', async () => {
+      const { teach } = await closableDesign();
+      const chapter = await pool.query<{ id: string }>(
+        `INSERT INTO curriculum_unit (id, owner_id, task_id, unit_type, title, unit_role)
+         VALUES ('unit-chapter', $1, $2, 'chapter', '第一章 基础', NULL) RETURNING id`,
+        [OWNER, task.id],
+      );
+      const response = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${chapter.rows[0]!.id}/generate`),
+        childParams(task.id, 'unitId', chapter.rows[0]!.id),
+      );
+      expect(response.status).toBe(400);
+      expect(mocks.startGenerationRun).not.toHaveBeenCalled();
+      expect(teach.id).toBeTruthy();
     });
   });
 });

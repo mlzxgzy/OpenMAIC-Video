@@ -8,7 +8,13 @@ import { normalizeSceneOutlines } from '@/lib/server/generation/outline-schema';
 import { MAX_CLASSROOM_MATERIALS } from '@/lib/server/classroom-materials';
 import { isMaterialId } from '@/lib/server/materials/material-id';
 import { QWEN_INSTRUCT_MAX_CHARS } from '@/lib/audio/qwen-instruct-control';
-import { ALL_SCENE_TYPES, type SceneType, type SceneOutline } from '@/lib/types/generation';
+import {
+  ALL_SCENE_TYPES,
+  type DeckDesign,
+  type DeckDesignPage,
+  type SceneType,
+  type SceneOutline,
+} from '@/lib/types/generation';
 import type { OutlineRevisionTurn } from '@/lib/types/generation';
 
 import type { GenerationRunInput } from './types';
@@ -119,6 +125,132 @@ function sceneTypeList(value: unknown, name: string): Parsed<SceneType[] | undef
   }
   // Keep the canonical order so equal selections compare equal.
   return { ok: true, value: ALL_SCENE_TYPES.filter((type) => seen.has(type)) };
+}
+
+// ── The course-design page plan ──────────────────────────────────────────────
+
+/**
+ * How many pages a start body may carry, and how much text one may hold.
+ *
+ * A lecture plan runs to a few dozen pages, and each page's goal, core message
+ * and optional code snippet are the content that actually matters. The caps are
+ * set where a legitimately designed lecture still fits inside the 64 KB start
+ * body while a runaway or an injection cannot: a run whose plan is refused is
+ * recoverable, one whose prompt is silently truncated is not — the outline would
+ * generate from half a plan and report success.
+ */
+export const MAX_DECK_PAGES = 60;
+const MAX_DECK_PAGE_CHARS = 4_000;
+
+const DECK_PAGE_MODES = ['case', 'explain', 'demo', 'compare', 'summary', 'diagram'] as const;
+
+/**
+ * A page plan, read under those caps.
+ *
+ * The three fields that make a page a design rather than a heading — `goal`,
+ * `coreInfo` and `mode` — are required here, not defaulted. The same contract
+ * marks a stored page missing one as ⚠ MISSING when rendering, but a plan that
+ * reaches this point is arriving from an HTTP caller rather than from course
+ * design, and a page with no goal is a defect to report rather than to pass on
+ * to a generator that would invent content for it.
+ */
+function deckDesignOf(value: unknown): Parsed<DeckDesign | undefined> {
+  if (value === undefined) return { ok: true, value: undefined };
+  const invalid: Parsed<DeckDesign> = {
+    ok: false,
+    message: `deckDesign must be an object with a pages array of at most ${MAX_DECK_PAGES} pages`,
+  };
+  const body = record(value);
+  if (!body) return invalid;
+  if (!Array.isArray(body.pages) || body.pages.length === 0) return invalid;
+  if (body.pages.length > MAX_DECK_PAGES) return invalid;
+
+  const pages: DeckDesignPage[] = [];
+  for (const [index, entry] of body.pages.entries()) {
+    const page = record(entry);
+    if (!page) return invalid;
+    // Each field is named in its own refusal. One generic message for the whole
+    // plan sends the caller hunting through a forty-page design to find the one
+    // page that is a heading — and that page is the one they must fix.
+    const title = pageText(page.title);
+    if (title === undefined) return missingField(`deckDesign.pages[${index}].title`);
+    const goal = pageText(page.goal);
+    if (goal === undefined) return missingField(`deckDesign.pages[${index}].goal`);
+    const coreInfo = pageText(page.coreInfo);
+    if (coreInfo === undefined) return missingField(`deckDesign.pages[${index}].coreInfo`);
+    const mode = page.mode;
+    if (typeof mode !== 'string' || !(DECK_PAGE_MODES as readonly string[]).includes(mode)) {
+      return {
+        ok: false,
+        message: `deckDesign.pages[${index}].mode must be one of: ${DECK_PAGE_MODES.join(', ')}`,
+      };
+    }
+    // `order` is optional because its absence is unambiguous: a plan is a
+    // sequence, so the array position is the order. Course design sets it
+    // explicitly, and a plan stored out of order still reads correctly.
+    const order = page.order;
+    if (order !== undefined && (!Number.isInteger(order) || (order as number) < 1)) {
+      return { ok: false, message: `deckDesign.pages[${index}].order must be a positive integer` };
+    }
+    pages.push({
+      order: (order as number | undefined) ?? index + 1,
+      title,
+      goal,
+      coreInfo,
+      mode: mode as DeckDesignPage['mode'],
+      ...(stringListOf(page.emphasis) ? { emphasis: stringListOf(page.emphasis)! } : {}),
+      ...(typeof page.visual === 'string' && page.visual.trim()
+        ? { visual: page.visual.trim() }
+        : {}),
+      ...(typeof page.code === 'string' && page.code.trim() ? { code: page.code } : {}),
+    });
+  }
+
+  const estPages = body.estPages;
+  if (estPages !== undefined && (!Number.isInteger(estPages) || (estPages as number) < 1)) {
+    return { ok: false, message: 'deckDesign.estPages must be a positive integer' };
+  }
+  return {
+    ok: true,
+    value: {
+      pages,
+      ...(estPages !== undefined ? { estPages: estPages as number } : {}),
+    },
+  };
+}
+
+/** A trimmed, non-empty, length-capped page string, or undefined when unusable. */
+function pageText(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (trimmed === '' || trimmed.length > MAX_DECK_PAGE_CHARS) return undefined;
+  return trimmed;
+}
+
+/**
+ * The refusal for one missing page field.
+ *
+ * It says what a page must carry and why, because the alternative — accepting a
+ * heading and letting the renderer mark it — produces a deck that looks
+ * finished and traces back to no teaching decision.
+ */
+function missingField(name: string): Parsed<DeckDesign> {
+  return {
+    ok: false,
+    message:
+      `${name} is required and must be a non-empty string of at most ${MAX_DECK_PAGE_CHARS} characters; ` +
+      'a page is its goal, so a title alone is a heading rather than a designed page',
+  };
+}
+
+function stringListOf(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const out = value
+    .filter((entry): entry is string => typeof entry === 'string')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .slice(0, 20);
+  return out.length > 0 ? out : undefined;
 }
 
 export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
@@ -250,6 +382,17 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
   );
   if (!qwenInstructText.ok) return qwenInstructText;
 
+  const deckDesign = deckDesignOf(body.deckDesign);
+  if (!deckDesign.ok) return deckDesign;
+
+  // The design ids ride the run for traceability. They are opaque, so only
+  // shape is checked here; whether they name a design this owner can generate
+  // is the caller's gate, not this parser's.
+  const curriculumTaskId = optionalText(body.curriculumTaskId, 'curriculumTaskId', 128);
+  if (!curriculumTaskId.ok) return curriculumTaskId;
+  const curriculumUnitId = optionalText(body.curriculumUnitId, 'curriculumUnitId', 128);
+  if (!curriculumUnitId.ok) return curriculumUnitId;
+
   return {
     ok: true,
     value: {
@@ -258,6 +401,9 @@ export function parseRunInput(raw: unknown): Parsed<GenerationRunInput> {
       interactive: interactive.value,
       taskEngine: taskEngine.value,
       ...(sceneTypes.value ? { sceneTypes: sceneTypes.value } : {}),
+      ...(deckDesign.value ? { deckDesign: deckDesign.value } : {}),
+      ...(curriculumTaskId.value ? { curriculumTaskId: curriculumTaskId.value } : {}),
+      ...(curriculumUnitId.value ? { curriculumUnitId: curriculumUnitId.value } : {}),
       agents,
       ...(learnerProfile ? { learnerProfile } : {}),
       outlineReview,

@@ -1240,6 +1240,53 @@ export async function listCurriculumTasks(
   return result.rows.map(mapTask);
 }
 
+/**
+ * One item, owner-scoped.
+ *
+ * Exists because producing an item needs to read its `unitRole`, its page plan
+ * and the task it belongs to, and every caller was reaching for the private
+ * `readUnitRow` instead. The role is what decides what kind of run this is, so
+ * a route that cannot read it cannot honour the design.
+ *
+ * A unit whose `taskId` does not match is still returned: deciding whether it
+ * belongs to the task in the path is the caller's, because it is the caller's
+ * URL that made the claim.
+ */
+export async function getCurriculumUnit(
+  queryable: Queryable,
+  ownerId: string,
+  unitId: string,
+): Promise<CurriculumUnitRecord | null> {
+  const row = await readUnitRow(queryable, ownerId, unitId);
+  return row ? mapUnit(row) : null;
+}
+
+/**
+ * The outcomes one item teaches, practises or assesses.
+ *
+ * The expected behavior is returned rather than the title on purpose: a title
+ * names a topic and a behavior names what the learner must be able to do, and
+ * only the second is something a generator can build a page towards. Ordering is
+ * the outcome's own, so a run's requirement lists a course's promises in the
+ * order the course promised them.
+ */
+export async function listCurriculumUnitOutcomeBehaviors(
+  queryable: Queryable,
+  ownerId: string,
+  unitId: string,
+): Promise<string[]> {
+  const result = await queryable.query<{ expected_behavior: string }>(
+    `SELECT o.expected_behavior
+       FROM curriculum_unit_coverage c
+       JOIN curriculum_objective o
+         ON o.id = c.objective_id AND o.owner_id = c.owner_id
+      WHERE c.owner_id = $1 AND c.unit_id = $2
+      ORDER BY o.sort_order, o.id`,
+    [ownerId, unitId],
+  );
+  return result.rows.map((row) => row.expected_behavior);
+}
+
 export async function deleteCurriculumTask(
   queryable: Queryable,
   ownerId: string,
