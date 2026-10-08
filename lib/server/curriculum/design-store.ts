@@ -89,7 +89,15 @@ export class CurriculumDesignValidationError extends Error {
   }
 }
 
-/** Raised when a write belongs to a phase the task has not reached. */
+/**
+ * Raised when the design phase refuses an operation — either a write that
+ * belongs to a phase the task has not reached, or an attempt to leave the
+ * current phase while it is still incomplete.
+ *
+ * `current` is where the task is, `required` is the phase whose threshold was
+ * not met. Both refusals carry the pair, so a client has one shape to read
+ * rather than having to tell "you are too early" from "you are not done yet".
+ */
 export class CurriculumPhaseError extends Error {
   constructor(
     readonly current: CurriculumDesignPhase,
@@ -1060,6 +1068,12 @@ export async function updateCurriculumTask(
  * choosing the content" becomes non-optional: `outcomes` cannot be entered
  * until the brief is filled in, `outline` cannot be entered until every
  * outcome has evidence, and so on.
+ *
+ * An incomplete boundary is refused with {@link CurriculumPhaseError} — the
+ * same refusal as a write that ran ahead of the phase — so the caller always
+ * receives the same pair of phases. Returning the gaps is what makes the
+ * refusal actionable; returning a different error type for it is what made a
+ * client treat "not finished yet" as "malformed request".
  */
 export async function advanceCurriculumTaskPhase(
   queryable: Queryable,
@@ -1072,7 +1086,9 @@ export async function advanceCurriculumTaskPhase(
 
   const blocking = await phaseCompletionGaps(queryable, ownerId, taskId, next);
   if (blocking.length > 0) {
-    throw new CurriculumDesignValidationError(
+    throw new CurriculumPhaseError(
+      current,
+      next,
       `cannot enter phase "${next}": ${blocking.join('; ')}`,
     );
   }
@@ -1172,6 +1188,12 @@ export async function phaseCompletionGaps(
     }
   }
 
+  // Deliberately the same predicate as the `teaching` boundary above — not a
+  // copy-paste. An outcome may still be authored while the task sits in
+  // `teaching` (creating one needs `outcomes`, which is at-or-past), and such
+  // an outcome has no teaching yet. Re-checking here is what stops the task
+  // entering `assessment` — where questions and lab tasks get authored — on top
+  // of an outcome the course never teaches.
   if (next === 'assessment') {
     const untaught = await queryable.query<{ count: number | string }>(
       `SELECT count(*)::int AS count
@@ -1984,6 +2006,33 @@ export async function createCurriculumUnitDependency(
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('unit dependency could not be created');
   return mapUnitDependency(row);
+}
+
+/**
+ * Remove one teaching-order claim. The write counterpart is
+ * {@link createCurriculumUnitDependency}, which cannot express removal: an
+ * edge is an independent row, not a field, so getting the order wrong during
+ * the outline phase was previously unfixable without deleting the whole task.
+ *
+ * Worth knowing what this edge is *not*: nothing reads `unitDependencies` yet.
+ * The audit's `dependency_out_of_order` derives delivery order from
+ * `unit.order_index` and the `teach` coverage, then compares that against the
+ * *objective* dependency graph — never against this table. So an edge here is
+ * recorded metadata, and deleting one changes no report or gate. That is why
+ * this is a store and route concern only, with no agent tool: the model can
+ * still author an edge it cannot remove, and a fuller fix is a decision about
+ * whether the claim is ever going to be enforced.
+ */
+export async function deleteCurriculumUnitDependency(
+  queryable: Queryable,
+  ownerId: string,
+  unitDependencyId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string }>(
+    'DELETE FROM curriculum_unit_dependency WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, unitDependencyId],
+  );
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('unit dependency not found');
 }
 
 // ── Question CRUD ───────────────────────────────────────────────────────────

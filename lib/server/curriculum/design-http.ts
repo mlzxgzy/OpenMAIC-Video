@@ -8,11 +8,14 @@
  * where a 409 belongs, so it lives here once.
  *
  * The phase refusal is the one worth reading carefully. The store raises
- * {@link CurriculumPhaseError} when a write belongs to a design phase the task
- * has not reached — the enforcement of "outcomes before knowledge, knowledge
- * before outline". The route answers 409 and carries both phases in the body,
- * because "you cannot do this yet" is only actionable when it also says which
- * phase would allow it.
+ * {@link CurriculumPhaseError} for both halves of the phase machine: a write
+ * that belongs to a design phase the task has not reached, and a move out of
+ * the current phase while that phase is still incomplete — the enforcement of
+ * "outcomes before knowledge, knowledge before outline". The route answers 409
+ * and carries both phases in the body, because "you cannot do this yet" is only
+ * actionable when it also says which phase would allow it. One error type for
+ * both removes the question of whether a refusal that is really "not finished
+ * yet" arrives as a 400 or a 409.
  */
 import { NextResponse, type NextRequest } from 'next/server';
 

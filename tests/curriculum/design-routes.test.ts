@@ -65,6 +65,8 @@ import { POST as createEvidence } from '@/app/api/curriculum/design/tasks/[id]/e
 import { POST as createNode } from '@/app/api/curriculum/design/tasks/[id]/nodes/route';
 import { PUT as putNodeObjectives } from '@/app/api/curriculum/design/tasks/[id]/node-objectives/route';
 import { POST as createDependency } from '@/app/api/curriculum/design/tasks/[id]/dependencies/route';
+import { POST as createUnitDependency } from '@/app/api/curriculum/design/tasks/[id]/unit-dependencies/route';
+import { DELETE as deleteUnitDependency } from '@/app/api/curriculum/design/tasks/[id]/unit-dependencies/[unitDependencyId]/route';
 import { POST as createUnit } from '@/app/api/curriculum/design/tasks/[id]/units/route';
 import { PATCH as patchUnit } from '@/app/api/curriculum/design/tasks/[id]/units/[unitId]/route';
 import {
@@ -278,6 +280,14 @@ describe('design routes (PGlite)', () => {
               taskParams(task.id),
             ),
         ],
+        [
+          'DELETE unit dependency',
+          () =>
+            deleteUnitDependency(
+              remove(`/api/curriculum/design/tasks/${task.id}/unit-dependencies/udep_x`),
+              childParams(task.id, 'unitDependencyId', 'udep_x'),
+            ),
+        ],
       ];
       for (const [name, call] of calls) {
         const response = await call();
@@ -364,6 +374,25 @@ describe('design routes (PGlite)', () => {
       expect(response.status).toBe(200);
       const body = await read<{ task: CurriculumTaskRecord }>(response);
       expect(body.task.designPhase).toBe('outcomes');
+    });
+
+    it('refuses an advance with 409 and both phases, not as a malformed request', async () => {
+      const bare = await createCurriculumTask(pool, OWNER, { title: '未澄清的课程' });
+      const response = await advancePhase(
+        post(`/api/curriculum/design/tasks/${bare.id}/phase`),
+        taskParams(bare.id),
+      );
+      // A boundary that is not satisfied yet is the same refusal as a write that
+      // ran ahead of the phase. Answering it as a 400 "invalid request" told the
+      // caller its request was malformed when it was merely early.
+      expect(response.status).toBe(409);
+      const body = await read<{
+        error: { code: string; message: string; details: { current: string; required: string } };
+      }>(response);
+      expect(body.error.code).toBe('CURRICULUM_DESIGN_PHASE_LOCKED');
+      expect(body.error.details).toEqual({ current: 'task', required: 'outcomes' });
+      // The pair says where it is stuck; the message still names what is missing.
+      expect(body.error.message).toContain('audience');
     });
 
     it('refuses a write from a later phase with 409 and both phases in the body', async () => {
@@ -659,6 +688,56 @@ describe('design routes (PGlite)', () => {
         taskParams(task.id),
       );
       expect(good.status).toBe(201);
+    });
+
+    it('records a teaching order and can withdraw it again', async () => {
+      await advanceTo('outline');
+      const item = async (title: string, unitRole: string) =>
+        (
+          await read<{ unit: { id: string } }>(
+            await createUnit(
+              post(`/api/curriculum/design/tasks/${task.id}/units`, {
+                unitType: 'item',
+                title,
+                unitRole,
+              }),
+              taskParams(task.id),
+            ),
+          )
+        ).unit.id;
+      const first = await item('1.2 SQL 注入练习', 'practice');
+      const second = await item('1.3 SQL 注入考核', 'exam');
+
+      const recorded = await createUnitDependency(
+        post(`/api/curriculum/design/tasks/${task.id}/unit-dependencies`, {
+          sourceUnitId: first,
+          targetUnitId: second,
+          edgeType: 'prerequisite',
+        }),
+        taskParams(task.id),
+      );
+      expect(recorded.status).toBe(201);
+      const dependencyId = (await read<{ dependency: { id: string } }>(recorded)).dependency.id;
+
+      const withdrawn = await deleteUnitDependency(
+        remove(`/api/curriculum/design/tasks/${task.id}/unit-dependencies/${dependencyId}`),
+        childParams(task.id, 'unitDependencyId', dependencyId),
+      );
+      expect(withdrawn.status).toBe(200);
+      expect(await read<{ deleted: boolean }>(withdrawn)).toEqual({ deleted: true });
+
+      const snapshot = await read<{ unitDependencies: unknown[] }>(
+        await getTask(fetch_(`/api/curriculum/design/tasks/${task.id}`), taskParams(task.id)),
+      );
+      expect(snapshot.unitDependencies).toEqual([]);
+
+      // Withdrawing it twice is a 404: another owner's edge and a missing one
+      // are the same answer, and neither may read as a successful removal.
+      const again = await deleteUnitDependency(
+        remove(`/api/curriculum/design/tasks/${task.id}/unit-dependencies/${dependencyId}`),
+        childParams(task.id, 'unitDependencyId', dependencyId),
+      );
+      expect(again.status).toBe(404);
     });
   });
 

@@ -23,6 +23,8 @@ import {
   createCurriculumTask,
   createCurriculumUnit,
   createCurriculumUnitCoverage,
+  createCurriculumUnitDependency,
+  deleteCurriculumUnitDependency,
   CurriculumDesignNotFoundError,
   CurriculumDesignValidationError,
   CurriculumPhaseError,
@@ -143,11 +145,17 @@ describe('reverse-design store (PGlite)', () => {
     expect(await listCurriculumTasks(pool, OTHER)).toEqual([]);
   });
 
-  it('refuses to leave the brief phase while it is still incomplete', async () => {
+  it('refuses to leave the brief phase with the same phase pair as a premature write', async () => {
     const bare = await createCurriculumTask(pool, OWNER, { title: '未澄清的课程' });
-    await expect(advanceCurriculumTaskPhase(pool, OWNER, bare.id)).rejects.toBeInstanceOf(
-      CurriculumDesignValidationError,
+    // Leaving early and writing ahead of the phase are the same refusal, so a
+    // client reads one shape: which phase it is in, and which one it wanted.
+    const failure = await advanceCurriculumTaskPhase(pool, OWNER, bare.id).catch(
+      (error: unknown) => error,
     );
+    expect(failure).toBeInstanceOf(CurriculumPhaseError);
+    expect(failure).toMatchObject({ current: 'task', required: 'outcomes' });
+    // The pair says where; the message has to say what is missing.
+    expect((failure as Error).message).toContain('audience');
   });
 
   it('refuses to author an outcome before the task has left the brief phase', async () => {
@@ -346,6 +354,48 @@ describe('reverse-design store (PGlite)', () => {
         coverageKind: 'teach',
       }),
     ).rejects.toThrow();
+  });
+
+  it('withdraws a recorded teaching order instead of only being able to add one', async () => {
+    await advanceTo('outline');
+    const first = await createCurriculumUnit(pool, OWNER, task.id, {
+      unitType: 'item',
+      title: '1.1 SQL 注入原理',
+      unitRole: 'lecture',
+    });
+    const second = await createCurriculumUnit(pool, OWNER, task.id, {
+      unitType: 'item',
+      title: '1.2 联合查询',
+      unitRole: 'lecture',
+    });
+    const recorded = await createCurriculumUnitDependency(pool, OWNER, task.id, {
+      sourceUnitId: first.id,
+      targetUnitId: second.id,
+      edgeType: 'prerequisite',
+    });
+    // The write path is an upsert on the edge, not an append, which is the
+    // whole reason a wrong claim could not be withdrawn by re-recording it.
+    await createCurriculumUnitDependency(pool, OWNER, task.id, {
+      sourceUnitId: first.id,
+      targetUnitId: second.id,
+      edgeType: 'prerequisite',
+      strength: 0.5,
+    });
+    const before = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    expect(before.unitDependencies).toHaveLength(1);
+    expect(before.unitDependencies[0]).toMatchObject({ id: recorded.id, strength: 0.5 });
+
+    // Another owner's id is not addressable, so the owner fence holds on delete.
+    await expect(deleteCurriculumUnitDependency(pool, OTHER, recorded.id)).rejects.toBeInstanceOf(
+      CurriculumDesignNotFoundError,
+    );
+    await deleteCurriculumUnitDependency(pool, OWNER, recorded.id);
+    expect((await getCurriculumDesignSnapshot(pool, OWNER, task.id)).unitDependencies).toEqual([]);
+    // Deleting it twice is a refusal rather than a silent success, so a caller
+    // cannot read "already gone" as "I just removed it".
+    await expect(deleteCurriculumUnitDependency(pool, OWNER, recorded.id)).rejects.toBeInstanceOf(
+      CurriculumDesignNotFoundError,
+    );
   });
 
   it('refuses a question whose answer names a missing option', async () => {
