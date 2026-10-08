@@ -235,6 +235,41 @@ const SHIPPED: readonly (readonly [
     true,
     'ab73309d438b62690f534d760fc1d387b5da2f1a8b030cfd0b3fc81ab3e67851',
   ],
+  [
+    'curriculum',
+    8,
+    'design_foundation',
+    true,
+    'f9320595ea00733593b08b8a0a43a5a2b145e3e903eb28b1d31ef9dfb27c1d8b',
+  ],
+  [
+    'curriculum',
+    9,
+    'design_graph',
+    true,
+    'c23302a8fcc632b80703f6a992acde2a911d40c49a65f7dabaef8f7c3f9985c4',
+  ],
+  [
+    'curriculum',
+    10,
+    'design_outline',
+    true,
+    'ad2fc32f5fdf5c3be1bfa997ff474087a59987c268f4043233a88ca472b86435',
+  ],
+  [
+    'curriculum',
+    11,
+    'design_assessment',
+    true,
+    '17c63e8d9a8c46affbd87ad10a47ba109dbe09994ecadb2704a61a738fd1121a',
+  ],
+  [
+    'curriculum',
+    12,
+    'design_audit',
+    true,
+    'f9426d94b945a75f00dfeb6a8d569db7d85c41b508ecc40c0b632f4b1569ca4a',
+  ],
 ];
 
 /**
