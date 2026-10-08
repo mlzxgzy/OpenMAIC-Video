@@ -5,9 +5,11 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
+  ArrowRight,
   BookOpen,
   Boxes,
   CheckCircle2,
+  Download,
   ExternalLink,
   Link2,
   Loader2,
@@ -20,6 +22,7 @@ import {
 } from 'lucide-react';
 
 import { CourseAssemblerPanel } from '@/components/curriculum/course-assembler-panel';
+import { CourseProductionFlow } from '@/components/curriculum/course-production-flow';
 import { KnowledgePointsPanel } from '@/components/curriculum/knowledge-points-panel';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -104,6 +107,14 @@ const GENERATION_ACTIVE_STATUSES = ['queued', 'running', 'awaiting_outline', 'pa
 const EXPORT_ACTIVE_STATUSES = ['queued', 'building', 'submitting', 'rendering'] as const;
 
 type CourseTabId = 'profile' | 'knowledge' | 'relations' | 'assembly' | 'classroom';
+type ProductionStepId = 'design' | 'outline' | 'classroom' | 'video';
+
+const PRODUCTION_STEP_TABS: Record<ProductionStepId, CourseTabId> = {
+  design: 'profile',
+  outline: 'assembly',
+  classroom: 'classroom',
+  video: 'classroom',
+};
 
 const COURSE_TABS = [
   { id: 'profile', label: '基本信息', hint: '课程台账字段', icon: BookOpen },
@@ -229,6 +240,8 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     [courseId, snapshot.courses],
   );
 
+  const courseStageId = course?.stageId ?? null;
+
   useEffect(() => {
     if (!course || hydratedCourseRef.current === course.id) return;
     hydratedCourseRef.current = course.id;
@@ -278,6 +291,46 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     [courseExportJobs, courseJobs],
   );
 
+  const productionSteps = useMemo(() => {
+    const outlineStarted = courseJobs.length > 0;
+    const classroomReady = !!courseStageId || courseJobs.some((job) => !!job.stageId);
+    const succeededExports = courseExportJobs.filter((job) => job.status === 'succeeded').length;
+
+    return [
+      {
+        id: 'design' satisfies ProductionStepId,
+        label: '设计课程',
+        hint:
+          courseKnowledgeLinks.length > 0
+            ? `已绑定 ${courseKnowledgeLinks.length} 个知识点`
+            : '课程信息、知识点与关系',
+        done: true,
+        icon: BookOpen,
+      },
+      {
+        id: 'outline' satisfies ProductionStepId,
+        label: '生成大纲',
+        hint: outlineStarted ? `${courseJobs.length} 次生成任务` : '从知识点组装并生成',
+        done: outlineStarted,
+        icon: Boxes,
+      },
+      {
+        id: 'classroom' satisfies ProductionStepId,
+        label: '生成课堂',
+        hint: classroomReady ? `课堂 ${courseStageId ?? ''}`.trim() : '等待生成完成',
+        done: classroomReady,
+        icon: Video,
+      },
+      {
+        id: 'video' satisfies ProductionStepId,
+        label: '导出视频',
+        hint: `${succeededExports}/${courseExportJobs.length} 个视频已导出`,
+        done: succeededExports > 0,
+        icon: Download,
+      },
+    ] as const;
+  }, [courseExportJobs, courseJobs, courseKnowledgeLinks.length, courseStageId]);
+
   useEffect(() => {
     if (!hasActiveWork) return;
     const timer = window.setInterval(() => void load(), 5000);
@@ -298,6 +351,22 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
     [pathname, router],
+  );
+
+  const activeProductionStep = useMemo<ProductionStepId>(() => {
+    if (activeTab === 'assembly') return 'outline';
+    if (activeTab === 'classroom') {
+      return courseExportJobs.some((job) => job.status === 'succeeded') ? 'video' : 'classroom';
+    }
+    return 'design';
+  }, [activeTab, courseExportJobs]);
+
+  const handleProductionStep = useCallback(
+    (stepId: string) => {
+      const tab = PRODUCTION_STEP_TABS[stepId as ProductionStepId];
+      if (tab) handleTabChange(tab);
+    },
+    [handleTabChange],
   );
 
   const submitProfile = async () => {
@@ -461,6 +530,12 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
           ) : null}
         </div>
       </header>
+
+      <CourseProductionFlow
+        steps={productionSteps}
+        activeId={activeProductionStep}
+        onSelect={handleProductionStep}
+      />
 
       {error ? (
         <div className="border-destructive/30 bg-destructive/10 text-destructive rounded-md border px-4 py-3 text-sm">
@@ -639,6 +714,14 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
                   {busy === 'profile' ? <Loader2 className="animate-spin" /> : <Save />}
                   保存基本信息
                 </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => handleTabChange('knowledge')}
+                  disabled={busy !== null || !form.title.trim()}
+                >
+                  下一步：维护知识点
+                  <ArrowRight />
+                </Button>
               </div>
             </CardContent>
           </Card>
@@ -670,6 +753,16 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
             defaultCourseId={course.id}
             onChanged={load}
           />
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => handleTabChange('assembly')}
+              disabled={busy !== null || courseKnowledgeLinks.length === 0}
+            >
+              下一步：组装与生成
+              <ArrowRight />
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="relations" className={tabContentClass('relations')} forceMount>
@@ -771,6 +864,12 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
               </div>
             </CardContent>
           </Card>
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => handleTabChange('assembly')}>
+              下一步：组装与生成
+              <ArrowRight />
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="assembly" className={tabContentClass('assembly')} forceMount>
@@ -784,6 +883,15 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
             targetCourseId={course.id}
             onChanged={load}
           />
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-muted-foreground text-xs">
+              一键生成启动后，课堂进度和视频导出会显示在“课堂与视频”。
+            </p>
+            <Button variant="outline" onClick={() => handleTabChange('classroom')}>
+              下一步：查看课堂与视频
+              <ArrowRight />
+            </Button>
+          </div>
         </TabsContent>
 
         <TabsContent value="classroom" className={tabContentClass('classroom')} forceMount>

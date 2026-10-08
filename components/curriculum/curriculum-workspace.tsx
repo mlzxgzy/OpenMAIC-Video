@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import {
   ArrowLeft,
+  ArrowRight,
   BookOpen,
   Boxes,
   CheckCircle2,
@@ -125,6 +126,38 @@ const WORKFLOW_STEPS = [
   },
 ] as const;
 
+/** URL aliases keep refresh / share links short while the internal ids stay explicit. */
+const WORKFLOW_TAB_PARAM: Record<WorkflowStepId, string> = {
+  'curriculum-ledger': 'ledger',
+  'curriculum-knowledge': 'knowledge',
+  'curriculum-program': 'program',
+  'curriculum-assembly': 'assembly',
+  'curriculum-batch': 'batch',
+  'curriculum-export': 'export',
+};
+
+const WORKFLOW_TAB_ALIASES: Record<string, WorkflowStepId> = {
+  ...(Object.fromEntries(
+    Object.entries(WORKFLOW_TAB_PARAM).map(([id, alias]) => [alias, id as WorkflowStepId]),
+  ) as Record<string, WorkflowStepId>),
+  'curriculum-ledger': 'curriculum-ledger',
+  'curriculum-knowledge': 'curriculum-knowledge',
+  'curriculum-program': 'curriculum-program',
+  'curriculum-assembly': 'curriculum-assembly',
+  'curriculum-batch': 'curriculum-batch',
+  'curriculum-export': 'curriculum-export',
+};
+
+function parseWorkflowTab(value: string | null): WorkflowStepId {
+  if (!value) return 'curriculum-ledger';
+  return WORKFLOW_TAB_ALIASES[value] ?? 'curriculum-ledger';
+}
+
+function currentWorkflowTab(): WorkflowStepId {
+  if (typeof window === 'undefined') return 'curriculum-ledger';
+  return parseWorkflowTab(new URLSearchParams(window.location.search).get('tab'));
+}
+
 const RELATION_LABELS: Record<CurriculumRelationType, string> = {
   prerequisite: '先修',
   'follow-up': '后续',
@@ -154,6 +187,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 
 export function CurriculumWorkspace() {
   const router = useRouter();
+  const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<CurriculumSnapshot>({
     series: [],
     courses: [],
@@ -210,6 +244,26 @@ export function CurriculumWorkspace() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const syncFromUrl = () => setActiveTab(currentWorkflowTab());
+    syncFromUrl();
+    window.addEventListener('popstate', syncFromUrl);
+    return () => window.removeEventListener('popstate', syncFromUrl);
+  }, []);
+
+  const handleTabChange = useCallback(
+    (value: string) => {
+      const nextTab = parseWorkflowTab(value);
+      setActiveTab(nextTab);
+      const params = new URLSearchParams(window.location.search);
+      if (nextTab === 'curriculum-ledger') params.delete('tab');
+      else params.set('tab', WORKFLOW_TAB_PARAM[nextTab]);
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router],
+  );
 
   const visibleCourses = useMemo(() => {
     if (!selectedSeriesId) return snapshot.courses;
@@ -418,12 +472,15 @@ export function CurriculumWorkspace() {
     setBusy('course');
     setError(null);
     try {
-      await requestJson('/api/curriculum/courses', {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
+      const payload = await requestJson<{ course: CurriculumCourseRecord }>(
+        '/api/curriculum/courses',
+        {
+          method: 'POST',
+          body: JSON.stringify(body),
+        },
+      );
       resetCourseForm();
-      await load();
+      router.push(`/curriculum/courses/${payload.course.id}`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -515,11 +572,7 @@ export function CurriculumWorkspace() {
         </div>
       </header>
 
-      <Tabs
-        value={activeTab}
-        onValueChange={(value) => setActiveTab(value as WorkflowStepId)}
-        className="gap-6"
-      >
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-6">
         <Card size="sm">
           <CardContent className="flex flex-col gap-4">
             <div className="flex flex-wrap items-end justify-between gap-3">
@@ -647,7 +700,8 @@ export function CurriculumWorkspace() {
                 <CardHeader>
                   <CardTitle>新建课程产品</CardTitle>
                   <CardDescription>
-                    在这里创建课程产品；点击列表里的课程进入独立详情页，维护知识点、关系和生成课堂。
+                    创建后会直接打开课程产品页，把「基本信息 → 知识点 → 组装生成 →
+                    导出视频」一路做完。
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -763,7 +817,8 @@ export function CurriculumWorkspace() {
                       disabled={busy !== null || !courseForm.title.trim()}
                     >
                       {busy === 'course' ? <Loader2 className="animate-spin" /> : <Save />}
-                      新建课程产品
+                      创建并打开课程
+                      <ArrowRight />
                     </Button>
                   </div>
                 </CardContent>

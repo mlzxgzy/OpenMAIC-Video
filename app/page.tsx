@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
+  ArrowRight,
   ArrowUp,
   Check,
   ChevronDown,
@@ -950,6 +951,51 @@ function HomePage() {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ── Two ways in: one-off lesson vs. a managed course system ── */}
+        <div
+          className={cn(
+            'mt-4 grid w-full gap-3 sm:grid-cols-2',
+            heroEnter('fade-in duration-300 delay-500'),
+          )}
+        >
+          <button
+            type="button"
+            onClick={() => textareaRef.current?.focus()}
+            className="group border-border/70 bg-white/70 hover:border-primary/40 hover:bg-white dark:bg-slate-900/70 dark:hover:bg-slate-900 flex items-start gap-3 rounded-xl border p-3 text-left shadow-sm transition-all hover:shadow-md"
+          >
+            <span className="bg-primary/10 text-primary flex size-8 shrink-0 items-center justify-center rounded-lg">
+              <Sparkles className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                快速生成单课
+                <ArrowRight className="size-3.5 opacity-40 transition-transform group-hover:translate-x-0.5" />
+              </span>
+              <span className="text-muted-foreground mt-0.5 block text-xs leading-4">
+                已有明确主题，直接生成一门课并导出视频
+              </span>
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => router.push('/curriculum')}
+            className="group border-border/70 bg-white/70 hover:border-primary/40 hover:bg-white dark:bg-slate-900/70 dark:hover:bg-slate-900 flex items-start gap-3 rounded-xl border p-3 text-left shadow-sm transition-all hover:shadow-md"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-300">
+              <BookOpen className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-sm font-medium">
+                设计课程体系
+                <ArrowRight className="size-3.5 opacity-40 transition-transform group-hover:translate-x-0.5" />
+              </span>
+              <span className="text-muted-foreground mt-0.5 block text-xs leading-4">
+                先建课程、知识点和培养方案，再批量生产系列课
+              </span>
+            </span>
+          </button>
         </div>
 
         {showVocationalTestUi && (
