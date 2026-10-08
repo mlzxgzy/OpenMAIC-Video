@@ -55,6 +55,11 @@ export interface CurriculumSeriesInput {
   description?: string | null;
 }
 
+export interface CurriculumSeriesPatch {
+  name?: string;
+  description?: string | null;
+}
+
 export interface CurriculumCourseInput {
   seriesId?: string | null;
   stageId?: string | null;
@@ -609,6 +614,20 @@ async function readKnowledgePointRow(
   return result.rows[0] ?? null;
 }
 
+async function readSeriesRow(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+): Promise<SeriesRow | null> {
+  const result = await queryable.query<SeriesRow>(
+    `SELECT id, name, description, created_at, updated_at
+       FROM curriculum_series
+      WHERE owner_id = $1 AND id = $2`,
+    [ownerId, seriesId],
+  );
+  return result.rows[0] ?? null;
+}
+
 async function assertSeriesOwned(
   queryable: Queryable,
   ownerId: string,
@@ -1030,6 +1049,59 @@ export async function createCurriculumSeries(
   const row = result.rows[0];
   if (!row) throw new CurriculumValidationError('series could not be created');
   return mapSeries(row, 0);
+}
+
+/** Patch a series. Omitted fields stay as they are; explicit null clears the description. */
+export async function updateCurriculumSeries(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  patch: CurriculumSeriesPatch,
+): Promise<CurriculumSeriesRecord> {
+  const existing = await readSeriesRow(queryable, ownerId, seriesId);
+  if (!existing) throw new CurriculumNotFoundError('series not found');
+
+  const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
+  if (!nextName) throw new CurriculumValidationError('name is required');
+  if (nextName.length > 120) throw new CurriculumValidationError('name is too long');
+
+  try {
+    const result = await queryable.query<SeriesRow>(
+      `UPDATE curriculum_series
+          SET name = $3,
+              description = $4,
+              updated_at = now()
+        WHERE owner_id = $1 AND id = $2
+        RETURNING id, name, description, created_at, updated_at`,
+      [
+        ownerId,
+        seriesId,
+        nextName,
+        patch.description !== undefined ? optionalText(patch.description) : existing.description,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumNotFoundError('series not found');
+    return mapSeries(row, 0);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('a series with this name already exists');
+    }
+    throw error;
+  }
+}
+
+/** Delete one owned series. Courses and knowledge points keep existing with series_id set to null. */
+export async function deleteCurriculumSeries(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    'DELETE FROM curriculum_series WHERE owner_id = $1 AND id = $2 RETURNING id',
+    [ownerId, seriesId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('series not found');
 }
 
 /** Create a course. `seriesId` and `stageId` are validated against the owner. */

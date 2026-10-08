@@ -81,6 +81,37 @@ export function parseSeriesInput(body: unknown): ParseResult<ParsedSeriesInput> 
   return { ok: true, value: { name: name.trim(), description: description ?? undefined } };
 }
 
+export interface ParsedSeriesPatch {
+  name?: string;
+  description?: string | null;
+}
+
+export function parseSeriesPatch(body: unknown): ParseResult<ParsedSeriesPatch> {
+  const record = asRecord(body);
+  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+
+  const value: ParsedSeriesPatch = {};
+  if ('name' in record) {
+    const name = record.name;
+    if (typeof name !== 'string' || name.trim().length === 0) {
+      return { ok: false, message: 'name must be a non-empty string' };
+    }
+    value.name = name.trim();
+  }
+
+  if ('description' in record) {
+    const description = readOptionalText(record, 'description');
+    if (isParseFailure(description)) return description;
+    if (description !== undefined) value.description = description;
+  }
+
+  if (Object.keys(value).length === 0) {
+    return { ok: false, message: 'at least one field is required' };
+  }
+
+  return { ok: true, value };
+}
+
 export interface ParsedCourseInput {
   seriesId?: string | null;
   stageId?: string | null;

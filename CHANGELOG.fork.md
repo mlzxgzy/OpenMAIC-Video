@@ -28,6 +28,21 @@
 
 ### Added
 
+- **独立课程序列页**：新增 `/curriculum/series`，用卡片展示每个系列的名称、描述、
+  课程数、学时、知识点/绑定数、已生成课堂数、已导出视频数，以及“课程 → 知识点
+  → 生成课堂 → 导出视频”四步进度。支持在页面内新建系列、行内重命名 / 改描述、
+  删除系列，并可直接“进入系列”跳到 `/curriculum?tab=ledger&series=<id>`。同时
+  为 `/curriculum` 增加 `series` 查询参数同步与当前系列提示条，从系列页进入后
+  会自动过滤该系列。删除系列不会删除课程或知识点，`ON DELETE SET NULL` 会把它
+  们变成未归属系列。
+
+  配套新增 `PATCH/DELETE /api/curriculum/series/[id]` 与
+  `updateCurriculumSeries` / `deleteCurriculumSeries`。
+
+  验证：`pnpm build` 通过，`/curriculum/series` SSR 200；HTTP smoke 覆盖
+  创建系列 → 建课程 → 重命名 → 删除系列 → 课程 `seriesId` 变为 `null`；
+  重名 PATCH 返回 409，跨 owner PATCH 返回 404，空 PATCH 返回 400；Playwright
+  验证系列卡片渲染、行内编辑保存、进入过滤后的课程体系页。
 - **目级课程包与生成脚本**：新增 `course-packages/`（课程包格式与 `1-1-1` 样例）、
   `scripts/start-lesson-generation.mjs`，把《CTF 综合实战》的“目”转成一次
   OpenMAIC 生成运行。脚本固定传 `sceneTypes: ["slide"]`、`interactive: false`、

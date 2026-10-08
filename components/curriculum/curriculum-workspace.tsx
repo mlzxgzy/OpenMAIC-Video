@@ -10,6 +10,7 @@ import {
   Boxes,
   CheckCircle2,
   GraduationCap,
+  Library,
   ListChecks,
   Loader2,
   Network,
@@ -158,6 +159,11 @@ function currentWorkflowTab(): WorkflowStepId {
   return parseWorkflowTab(new URLSearchParams(window.location.search).get('tab'));
 }
 
+function currentSeriesId(): string {
+  if (typeof window === 'undefined') return '';
+  return new URLSearchParams(window.location.search).get('series') ?? '';
+}
+
 const RELATION_LABELS: Record<CurriculumRelationType, string> = {
   prerequisite: '先修',
   'follow-up': '后续',
@@ -231,26 +237,46 @@ export function CurriculumWorkspace() {
       ]);
       setSnapshot(curriculum);
       setStages((stagePayload.stages ?? []).map((stage) => ({ id: stage.id, name: stage.name })));
-      if (!selectedSeriesId && curriculum.series[0]) {
-        setSelectedSeriesId(curriculum.series[0].id);
-      }
+      setSelectedSeriesId((current) => {
+        if (current) return current;
+        const requested = currentSeriesId();
+        if (requested && curriculum.series.some((series) => series.id === requested)) {
+          return requested;
+        }
+        return curriculum.series[0]?.id ?? '';
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy(null);
     }
-  }, [selectedSeriesId]);
+  }, []);
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    const syncFromUrl = () => setActiveTab(currentWorkflowTab());
+    const syncFromUrl = () => {
+      setActiveTab(currentWorkflowTab());
+      setSelectedSeriesId(currentSeriesId());
+    };
     syncFromUrl();
     window.addEventListener('popstate', syncFromUrl);
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
+
+  const handleSeriesChange = useCallback(
+    (value: string) => {
+      setSelectedSeriesId(value);
+      const params = new URLSearchParams(window.location.search);
+      if (value) params.set('series', value);
+      else params.delete('series');
+      const query = params.toString();
+      router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
+    },
+    [pathname, router],
+  );
 
   const handleTabChange = useCallback(
     (value: string) => {
@@ -561,6 +587,12 @@ export function CurriculumWorkspace() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" asChild>
+            <Link href="/curriculum/series">
+              <Library />
+              课程序列
+            </Link>
+          </Button>
           <Button variant="outline" onClick={() => router.push('/')}>
             <BookOpen />
             去单课生成
@@ -657,11 +689,12 @@ export function CurriculumWorkspace() {
             <Card size="sm">
               <CardHeader>
                 <CardTitle>系列列表</CardTitle>
+                <CardDescription>选择系列后，下面所有步骤都会按这个系列统计。</CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-2">
                 <button
                   type="button"
-                  onClick={() => setSelectedSeriesId('')}
+                  onClick={() => handleSeriesChange('')}
                   className={`rounded-md border px-3 py-2 text-left text-sm ${
                     selectedSeriesId === '' ? 'border-primary bg-primary/5' : 'border-border'
                   }`}
@@ -672,7 +705,7 @@ export function CurriculumWorkspace() {
                   <button
                     key={series.id}
                     type="button"
-                    onClick={() => setSelectedSeriesId(series.id)}
+                    onClick={() => handleSeriesChange(series.id)}
                     className={`rounded-md border px-3 py-2 text-left text-sm ${
                       selectedSeriesId === series.id
                         ? 'border-primary bg-primary/5'
@@ -685,11 +718,36 @@ export function CurriculumWorkspace() {
                     </span>
                   </button>
                 ))}
+                <Button asChild variant="outline" size="sm" className="mt-1">
+                  <Link href="/curriculum/series">
+                    <Library />
+                    管理课程序列
+                  </Link>
+                </Button>
               </CardContent>
             </Card>
           </aside>
 
           <main className="flex flex-col gap-6">
+            {selectedSeriesId ? (
+              <div className="border-border bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
+                <span>
+                  当前系列：
+                  <strong>
+                    {snapshot.series.find((series) => series.id === selectedSeriesId)?.name ??
+                      selectedSeriesId}
+                  </strong>
+                </span>
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() => handleSeriesChange('')}
+                  className="h-auto p-0"
+                >
+                  查看全部系列
+                </Button>
+              </div>
+            ) : null}
             <TabsContent
               value="curriculum-ledger"
               id="curriculum-ledger"
