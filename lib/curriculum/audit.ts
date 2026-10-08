@@ -18,6 +18,7 @@ import type {
   CurriculumDependencyEdgeType,
   CurriculumDesignSnapshot,
   CurriculumObjectiveRecord,
+  CurriculumUnitDependencyEdgeType,
 } from './design-types';
 
 /**
@@ -47,6 +48,8 @@ export const CURRICULUM_AUDIT_RULES = [
   'lab_verify_grades_by_path',
   'dependency_cycle',
   'dependency_out_of_order',
+  'unit_dependency_cycle',
+  'unit_dependency_out_of_order',
   'unit_without_role',
   'chapter_with_content',
   'unit_orphan',
@@ -547,12 +550,13 @@ const ORDERING_EDGES: ReadonlySet<CurriculumDependencyEdgeType> = new Set([
   'practices',
 ]);
 
-function buildAdjacency(
-  edges: { sourceId: string; targetId: string; edgeType: CurriculumDependencyEdgeType }[],
+function buildAdjacency<E extends string>(
+  edges: { sourceId: string; targetId: string; edgeType: E }[],
+  ordering: ReadonlySet<E>,
 ): Map<string, string[]> {
   const adjacency = new Map<string, string[]>();
   for (const edge of edges) {
-    if (!ORDERING_EDGES.has(edge.edgeType)) continue;
+    if (!ordering.has(edge.edgeType)) continue;
     const list = adjacency.get(edge.sourceId) ?? [];
     list.push(edge.targetId);
     adjacency.set(edge.sourceId, list);
@@ -561,11 +565,13 @@ function buildAdjacency(
 }
 
 /**
- * Cycles in the ordering edges. A course whose prerequisites form a loop has
- * no entry point: there is no first thing to learn.
+ * Every cycle in a directed graph, as the list of nodes walked to reach it.
+ * Shared by the outcome graph and the item-ordering graph: both ask the same
+ * question of different node sets, and a course whose teaching order loops has
+ * no first item for exactly the reason a looping prerequisite graph has no
+ * first thing to learn.
  */
-function ruleDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
-  const adjacency = buildAdjacency(snapshot.dependencies);
+function findCycles(adjacency: Map<string, string[]>): string[][] {
   const WHITE = 0;
   const GRAY = 1;
   const BLACK = 2;
@@ -592,6 +598,16 @@ function ruleDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAudi
   for (const nodeId of adjacency.keys()) {
     if ((color.get(nodeId) ?? WHITE) === WHITE) visit(nodeId);
   }
+  return cycles;
+}
+
+/**
+ * Cycles in the ordering edges. A course whose prerequisites form a loop has
+ * no entry point: there is no first thing to learn.
+ */
+function ruleDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
+  const adjacency = buildAdjacency(snapshot.dependencies, ORDERING_EDGES);
+  const cycles = findCycles(adjacency);
 
   const seen = new Set<string>();
   const findings: CurriculumAuditFinding[] = [];
@@ -670,6 +686,101 @@ function ruleDependencyOutOfOrder(snapshot: CurriculumDesignSnapshot): Curriculu
       refKind: 'dependency',
       refId: edge.id,
       refIds: [edge.sourceId, edge.targetId],
+      layer: 'dependency_valid',
+    });
+  }
+  return findings;
+}
+
+/**
+ * Edges in the *item* ordering graph. `prerequisite` is the one that constrains
+ * delivery order; `follow-up` and `related` are annotations about the author's
+ * intent and would fire constantly if read as ordering constraints.
+ */
+const UNIT_ORDERING_EDGES: ReadonlySet<CurriculumUnitDependencyEdgeType> = new Set([
+  'prerequisite',
+]);
+
+/**
+ * Two claims disagree about the sequence. The author declared "A is a
+ * prerequisite of B" and also placed B before A in the outline.
+ *
+ * This is deliberately separate from `dependency_out_of_order`, which compares
+ * the *objective* graph against delivery order. That rule can stay silent while
+ * this one fires, and correctly so: the objective graph says what a learner must
+ * know first, while this edge is an explicit claim about the order the course
+ * itself presents. The two can be satisfied by different orders, and the author
+ * is the only one who can say which sequence was meant.
+ *
+ * Only `prerequisite` edges are read as ordering claims — see
+ * {@link UNIT_ORDERING_EDGES}. A `related` edge carries no order, so demanding
+ * one from it would be the audit inventing a constraint the author never made.
+ */
+function ruleUnitDependencyOutOfOrder(
+  snapshot: CurriculumDesignSnapshot,
+): CurriculumAuditFinding[] {
+  const orderByUnit = new Map<string, number>();
+  for (const unit of snapshot.units) {
+    // Only items have a delivery position. A chapter is a grouping label; it is
+    // not taught at a moment, so an edge touching one states no order.
+    if (unit.unitType !== 'item') continue;
+    orderByUnit.set(unit.id, unit.orderIndex);
+  }
+  const unitById = new Map(snapshot.units.map((unit) => [unit.id, unit]));
+  const findings: CurriculumAuditFinding[] = [];
+  for (const edge of snapshot.unitDependencies) {
+    if (!UNIT_ORDERING_EDGES.has(edge.edgeType)) continue;
+    const sourceOrder = orderByUnit.get(edge.sourceUnitId);
+    const targetOrder = orderByUnit.get(edge.targetUnitId);
+    if (sourceOrder === undefined || targetOrder === undefined) continue;
+    if (sourceOrder <= targetOrder) continue;
+    const source = unitById.get(edge.sourceUnitId);
+    const target = unitById.get(edge.targetUnitId);
+    findings.push({
+      rule: 'unit_dependency_out_of_order',
+      severity: 'error',
+      message:
+        `Item "${target?.title ?? edge.targetUnitId}" is scheduled at position ` +
+        `${targetOrder + 1}, before its declared prerequisite ` +
+        `"${source?.title ?? edge.sourceUnitId}" at position ${sourceOrder + 1}`,
+      refKind: 'unitDependency',
+      refId: edge.id,
+      refIds: [edge.sourceUnitId, edge.targetUnitId],
+      layer: 'dependency_valid',
+    });
+  }
+  return findings;
+}
+
+/**
+ * The declared teaching order loops. A → B → A has no first item, so the course
+ * cannot be entered; the learner is asked to start where they already are.
+ */
+function ruleUnitDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
+  const adjacency = buildAdjacency(
+    snapshot.unitDependencies.map((edge) => ({
+      sourceId: edge.sourceUnitId,
+      targetId: edge.targetUnitId,
+      edgeType: edge.edgeType,
+    })),
+    UNIT_ORDERING_EDGES,
+  );
+  const unitById = new Map(snapshot.units.map((unit) => [unit.id, unit]));
+
+  const seen = new Set<string>();
+  const findings: CurriculumAuditFinding[] = [];
+  for (const cycle of findCycles(adjacency)) {
+    const key = [...cycle].sort().join(':');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const labels = cycle.map((id) => unitById.get(id)?.title ?? id);
+    findings.push({
+      rule: 'unit_dependency_cycle',
+      severity: 'error',
+      message: `Item order cycle: ${labels.join(' → ')}. There is no first item to teach.`,
+      refKind: 'unitDependency',
+      refId: cycle[0],
+      refIds: [...new Set(cycle)],
       layer: 'dependency_valid',
     });
   }
@@ -790,6 +901,8 @@ export function auditCurriculumDesign(
     ...ruleLabVerifyGradesByPath(snapshot),
     ...ruleDependencyCycle(snapshot),
     ...ruleDependencyOutOfOrder(snapshot),
+    ...ruleUnitDependencyCycle(snapshot),
+    ...ruleUnitDependencyOutOfOrder(snapshot),
     ...ruleUnitWithoutRole(snapshot),
     ...ruleChapterWithContent(snapshot),
     ...ruleUnitOrphan(snapshot),

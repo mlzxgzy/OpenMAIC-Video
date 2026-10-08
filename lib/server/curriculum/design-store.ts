@@ -2061,14 +2061,20 @@ export async function createCurriculumUnitDependency(
  * edge is an independent row, not a field, so getting the order wrong during
  * the outline phase was previously unfixable without deleting the whole task.
  *
- * Worth knowing what this edge is *not*: nothing reads `unitDependencies` yet.
- * The audit's `dependency_out_of_order` derives delivery order from
- * `unit.order_index` and the `teach` coverage, then compares that against the
- * *objective* dependency graph — never against this table. So an edge here is
- * recorded metadata, and deleting one changes no report or gate. That is why
- * this is a store and route concern only, with no agent tool: the model can
- * still author an edge it cannot remove, and a fuller fix is a decision about
- * whether the claim is ever going to be enforced.
+ * The table *is* read now, and deliberately so. The audit's
+ * `unit_dependency_out_of_order` and `unit_dependency_cycle` check these edges
+ * against `unit.orderIndex`, so an author who declares "B follows A" and then
+ * places B first is told so, and a claimed order that loops is caught. That is
+ * a second, independent check from `dependency_out_of_order`, which compares
+ * the *objective* graph against delivery order and knows nothing about these
+ * edges: the two claims can be satisfied by different sequences, and only the
+ * author's own edge says which one was meant.
+ *
+ * It is still a store and route concern with no agent tool, and that remains
+ * deliberate. The model can author an edge it cannot withdraw, but it does not
+ * need to: a wrong edge produces a finding the author can see and delete,
+ * whereas an agent-writable deletion would let the same pass that writes a bad
+ * order quietly erase the evidence of it.
  */
 export async function deleteCurriculumUnitDependency(
   queryable: Queryable,

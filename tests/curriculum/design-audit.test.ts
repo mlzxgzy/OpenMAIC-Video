@@ -18,6 +18,7 @@ import type {
   CurriculumObjectiveType,
   CurriculumUnitRecord,
   CurriculumUnitCoverageRecord,
+  CurriculumUnitDependencyRecord,
 } from '@/lib/curriculum/design-types';
 
 const NOW = '2026-01-01T00:00:00.000Z';
@@ -900,5 +901,227 @@ describe('audit rule registry', () => {
         true,
       );
     }
+  });
+});
+
+// ── Item ordering edges ──────────────────────────────────────────────────────
+
+/**
+ * `snapshot.unitDependencies` is the *teaching sequence*: the order the author
+ * claims the course presents items in. It is a second, independent claim from
+ * the objective graph, and these tests pin the two rules that hold the author to
+ * it. Each test breaks exactly one thing from a snapshot that already passes.
+ */
+function makeUnitDependency(
+  overrides: Partial<CurriculumUnitDependencyRecord> &
+    Required<Pick<CurriculumUnitDependencyRecord, 'sourceUnitId' | 'targetUnitId'>>,
+): CurriculumUnitDependencyRecord {
+  return {
+    id: nextId('udep'),
+    taskId: 'task-1',
+    edgeType: 'prerequisite',
+    strength: 1,
+    note: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+/**
+ * Two items in a sound design. The single-item baseline cannot express an order
+ * at all, and passing a second unit to `makeSnapshot` alone leaves it an
+ * orphan: the default coverage only covers `units[0]`. So the second item is
+ * given its own teach/practice/assess coverage, which is what a real two-item
+ * outline looks like. Without this the pre-existing `unit_orphan` rule would
+ * break `dependency_valid` tests for reasons that have nothing to do with order.
+ */
+function makeOrderedSnapshot(orderIndexes: number[]): CurriculumDesignSnapshot {
+  const units = orderIndexes.map((orderIndex, index) =>
+    makeUnit({ title: `Item ${index + 1}`, orderIndex, unitRole: 'lecture' as const }),
+  );
+  const snapshot = makeSnapshot({ units });
+  for (const unit of units.slice(1)) {
+    for (const coverageKind of ['teach', 'practice', 'assess'] as const) {
+      snapshot.unitCoverage.push(
+        makeCoverage({ unitId: unit.id, objectiveId: snapshot.objectives[0].id, coverageKind }),
+      );
+    }
+  }
+  return snapshot;
+}
+
+describe('auditCurriculumDesign — item ordering', () => {
+  it('flags an item scheduled before its declared prerequisite', () => {
+    // "Basic is a prerequisite of Advanced" is claimed, yet Advanced sits at
+    // position 1 and Basic at position 2. The objective graph is untouched, so
+    // `dependency_out_of_order` stays silent and only this rule can catch it.
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [advanced, basic] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: basic.id, targetUnitId: advanced.id }),
+    ];
+
+    const findings = auditCurriculumDesign(snapshot).filter(
+      (f) => f.rule === 'unit_dependency_out_of_order',
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('error');
+    expect(findings[0].message).toContain('Item 1');
+    expect(findings[0].message).toContain('Item 2');
+    // Positions are 0-based internally but 1-based for a human reading an
+    // outline, and the message must name the edge that is wrong.
+    expect(findings[0].message).toContain('position 1');
+    expect(findings[0].message).toContain('position 2');
+    expect(findings[0].refKind).toBe('unitDependency');
+    expect(findings[0].refIds).toEqual([basic.id, advanced.id]);
+  });
+
+  it('does not flag a correctly ordered prerequisite pair', () => {
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [basic, advanced] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: basic.id, targetUnitId: advanced.id }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('accepts an adjacent pair, where the prerequisite is delivered immediately before', () => {
+    // Positions 6 and 7, not 1 and 2: adjacency must not be what makes it legal.
+    // The comparison is `<=`, so a prereq one position earlier passes whatever
+    // the absolute positions are.
+    const snapshot = makeOrderedSnapshot([6, 7]);
+    const [basic, advanced] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: basic.id, targetUnitId: advanced.id }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('ignores a related edge, because it claims no order', () => {
+    // `related` is an annotation. Demanding an order from it would be the audit
+    // inventing a constraint the author never made.
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [first, second] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: second.id, targetUnitId: first.id, edgeType: 'related' }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('ignores a follow-up edge, which points forward without being a prerequisite', () => {
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [first, second] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({
+        sourceUnitId: second.id,
+        targetUnitId: first.id,
+        edgeType: 'follow-up',
+      }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('ignores an edge touching a chapter, which is not delivered at a position', () => {
+    const item = makeUnit({ title: 'Item', orderIndex: 0, unitRole: 'lecture' });
+    const chapter = makeUnit({ title: 'Chapter', unitType: 'chapter', orderIndex: 1 });
+    const snapshot = makeSnapshot({ units: [item, chapter] });
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: item.id, targetUnitId: chapter.id }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('flags a loop in the declared teaching order', () => {
+    const snapshot = makeOrderedSnapshot([0, 1, 2]);
+    const [a, b, c] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: a.id, targetUnitId: b.id }),
+      makeUnitDependency({ sourceUnitId: b.id, targetUnitId: c.id }),
+      makeUnitDependency({ sourceUnitId: c.id, targetUnitId: a.id }),
+    ];
+
+    const findings = auditCurriculumDesign(snapshot).filter(
+      (f) => f.rule === 'unit_dependency_cycle',
+    );
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe('error');
+    expect(findings[0].message).toContain('no first item');
+    expect(findings[0].refKind).toBe('unitDependency');
+    expect([...findings[0].refIds].sort()).toEqual([a.id, b.id, c.id].sort());
+  });
+
+  it('does not flag a cycle made only of related edges', () => {
+    // A related-edge "cycle" is three cross references, not a teaching order.
+    const snapshot = makeOrderedSnapshot([0, 1, 2]);
+    const [a, b, c] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: a.id, targetUnitId: b.id, edgeType: 'related' }),
+      makeUnitDependency({ sourceUnitId: b.id, targetUnitId: c.id, edgeType: 'related' }),
+      makeUnitDependency({ sourceUnitId: c.id, targetUnitId: a.id, edgeType: 'related' }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_cycle'),
+    ).toBeUndefined();
+  });
+
+  it('does not report the same cycle twice', () => {
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [a, b] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: a.id, targetUnitId: b.id }),
+      makeUnitDependency({ sourceUnitId: b.id, targetUnitId: a.id }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).filter((f) => f.rule === 'unit_dependency_cycle'),
+    ).toHaveLength(1);
+  });
+
+  it('ignores an edge naming a unit that is not in the outline', () => {
+    // A dangling edge has no delivery position, so it states no order. Skipping
+    // it keeps the rule from reporting a position for something that has none.
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [first] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: first.id, targetUnitId: 'unit-does-not-exist' }),
+    ];
+    expect(
+      auditCurriculumDesign(snapshot).find((f) => f.rule === 'unit_dependency_out_of_order'),
+    ).toBeUndefined();
+  });
+
+  it('breaks dependency_valid, so a wrong order is not exportable', () => {
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [advanced, basic] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: basic.id, targetUnitId: advanced.id }),
+    ];
+
+    const { quality } = reviewCurriculumDesign(snapshot);
+    expect(quality.layers.dependency_valid).toBe(false);
+    expect(quality.exportable).toBe(false);
+    // The layer it breaks, not the order of the chain: a later fix is
+    // meaningless while the delivery order contradicts the author's own claim.
+    expect(quality.broken.map((b) => b.layer)).toContain('dependency_valid');
+  });
+
+  it('leaves a sound design exportable, so the rules do not fire on a clean course', () => {
+    const snapshot = makeOrderedSnapshot([0, 1]);
+    const [basic, advanced] = snapshot.units;
+    snapshot.unitDependencies = [
+      makeUnitDependency({ sourceUnitId: basic.id, targetUnitId: advanced.id }),
+    ];
+    const { quality } = reviewCurriculumDesign(snapshot);
+    expect(quality.exportable).toBe(true);
   });
 });
