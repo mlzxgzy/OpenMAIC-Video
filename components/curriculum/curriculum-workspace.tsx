@@ -191,7 +191,13 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export function CurriculumWorkspace() {
+interface CurriculumWorkspaceProps {
+  /** When set, all workflow steps are scoped to this series and cross-series controls are hidden. */
+  seriesId?: string;
+}
+
+export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {}) {
+  const isSeriesScoped = Boolean(seriesId);
   const router = useRouter();
   const pathname = usePathname();
   const [snapshot, setSnapshot] = useState<CurriculumSnapshot>({
@@ -212,7 +218,8 @@ export function CurriculumWorkspace() {
     courseIndicatorSupports: [],
   });
   const [stages, setStages] = useState<StageOption[]>([]);
-  const [selectedSeriesId, setSelectedSeriesId] = useState<string>('');
+  const [selectedSeriesId, setSelectedSeriesId] = useState<string>(seriesId ?? '');
+  const [loaded, setLoaded] = useState(false);
   const [courseForm, setCourseForm] = useState<CourseFormState>(EMPTY_COURSE_FORM);
   const [seriesName, setSeriesName] = useState('');
   const [seriesDescription, setSeriesDescription] = useState('');
@@ -238,6 +245,7 @@ export function CurriculumWorkspace() {
       setSnapshot(curriculum);
       setStages((stagePayload.stages ?? []).map((stage) => ({ id: stage.id, name: stage.name })));
       setSelectedSeriesId((current) => {
+        if (seriesId) return seriesId;
         if (current) return current;
         const requested = currentSeriesId();
         if (requested && curriculum.series.some((series) => series.id === requested)) {
@@ -248,9 +256,10 @@ export function CurriculumWorkspace() {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
+      setLoaded(true);
       setBusy(null);
     }
-  }, []);
+  }, [seriesId]);
 
   useEffect(() => {
     void load();
@@ -259,15 +268,17 @@ export function CurriculumWorkspace() {
   useEffect(() => {
     const syncFromUrl = () => {
       setActiveTab(currentWorkflowTab());
-      setSelectedSeriesId(currentSeriesId());
+      if (seriesId) setSelectedSeriesId(seriesId);
+      else setSelectedSeriesId(currentSeriesId());
     };
     syncFromUrl();
     window.addEventListener('popstate', syncFromUrl);
     return () => window.removeEventListener('popstate', syncFromUrl);
-  }, []);
+  }, [seriesId]);
 
   const handleSeriesChange = useCallback(
     (value: string) => {
+      if (seriesId) return;
       setSelectedSeriesId(value);
       const params = new URLSearchParams(window.location.search);
       if (value) params.set('series', value);
@@ -275,7 +286,7 @@ export function CurriculumWorkspace() {
       const query = params.toString();
       router.replace(query ? `${pathname}?${query}` : pathname, { scroll: false });
     },
-    [pathname, router],
+    [pathname, router, seriesId],
   );
 
   const handleTabChange = useCallback(
@@ -564,6 +575,32 @@ export function CurriculumWorkspace() {
     }
   };
 
+  const currentSeriesName =
+    snapshot.series.find((series) => series.id === selectedSeriesId)?.name ??
+    seriesId ??
+    selectedSeriesId;
+
+  if (isSeriesScoped && loaded && !snapshot.series.some((series) => series.id === seriesId)) {
+    return (
+      <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 p-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>没有找到这个课程序列</CardTitle>
+            <CardDescription>它可能已被删除，或者当前浏览器身份没有访问权限。</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href="/curriculum/series">
+                <ArrowLeft />
+                返回课程序列
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 p-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -571,18 +608,26 @@ export function CurriculumWorkspace() {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => router.push('/')}
-            title="返回首页"
-            aria-label="返回首页"
+            onClick={() => router.push('/curriculum/series')}
+            title="返回课程序列"
+            aria-label="返回课程序列"
             className="mt-0.5 shrink-0"
           >
             <ArrowLeft />
           </Button>
           <div className="min-w-0">
-            <p className="text-muted-foreground text-sm">课程产品层 / Curriculum</p>
-            <h1 className="text-2xl font-semibold">课程体系与培养方案</h1>
+            <p className="text-muted-foreground text-sm">
+              {isSeriesScoped
+                ? '课程产品层 / Curriculum / 课程序列'
+                : '课程产品层 / Curriculum / 全部课程'}
+            </p>
+            <h1 className="text-2xl font-semibold">
+              {isSeriesScoped ? currentSeriesName : '全部课程总览'}
+            </h1>
             <p className="text-muted-foreground mt-1 text-sm">
-              用一条流水线完成：建课程 → 维护知识点 → 配培养方案 → 组装 → 生成课堂 → 导出视频。
+              {isSeriesScoped
+                ? '在序列内完成：建课程 → 维护知识点 → 配培养方案 → 组装 → 生成课堂 → 导出视频。'
+                : '跨系列查看所有课程、知识点、培养方案和生产状态。'}
             </p>
           </div>
         </div>
@@ -590,7 +635,7 @@ export function CurriculumWorkspace() {
           <Button variant="outline" asChild>
             <Link href="/curriculum/series">
               <Library />
-              课程序列
+              {isSeriesScoped ? '全部系列' : '课程序列'}
             </Link>
           </Button>
           <Button variant="outline" onClick={() => router.push('/')}>
@@ -659,93 +704,133 @@ export function CurriculumWorkspace() {
 
         <div className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
           <aside className="flex flex-col gap-4">
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>课程系列</CardTitle>
-                <CardDescription>一个专业方向或一个课程包系列。</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-3">
-                <Input
-                  placeholder="系列名称，例如 CTF综合实战"
-                  value={seriesName}
-                  onChange={(event) => setSeriesName(event.target.value)}
-                />
-                <Textarea
-                  placeholder="描述（可选）"
-                  value={seriesDescription}
-                  onChange={(event) => setSeriesDescription(event.target.value)}
-                  className="min-h-20"
-                />
-                <Button
-                  onClick={() => void createSeries()}
-                  disabled={busy !== null || !seriesName.trim()}
-                >
-                  <Plus />
-                  新建/复用系列
-                </Button>
-              </CardContent>
-            </Card>
+            {isSeriesScoped ? (
+              <Card size="sm">
+                <CardHeader>
+                  <CardTitle>当前系列</CardTitle>
+                  <CardDescription>
+                    本页的课程、知识点和生成任务都限定在这个序列内。
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-3">
+                  <div className="bg-muted/40 rounded-lg border p-3">
+                    <div className="font-medium">{currentSeriesName}</div>
+                    <p className="text-muted-foreground mt-1 line-clamp-3 text-xs">
+                      {snapshot.series.find((series) => series.id === seriesId)?.description ||
+                        '暂无描述'}
+                    </p>
+                    <div className="text-muted-foreground mt-2 text-xs">
+                      {snapshot.courses.filter((course) => course.seriesId === seriesId).length}{' '}
+                      门课程
+                    </div>
+                  </div>
+                  <Button asChild variant="outline" size="sm">
+                    <Link href="/curriculum/series">
+                      <Library />
+                      切换 / 管理系列
+                    </Link>
+                  </Button>
+                  <Button asChild variant="ghost" size="sm">
+                    <Link href="/curriculum">
+                      <BookOpen />
+                      查看全部课程
+                    </Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : (
+              <>
+                <Card size="sm">
+                  <CardHeader>
+                    <CardTitle>课程系列</CardTitle>
+                    <CardDescription>一个专业方向或一个课程包系列。</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-3">
+                    <Input
+                      placeholder="系列名称，例如 CTF综合实战"
+                      value={seriesName}
+                      onChange={(event) => setSeriesName(event.target.value)}
+                    />
+                    <Textarea
+                      placeholder="描述（可选）"
+                      value={seriesDescription}
+                      onChange={(event) => setSeriesDescription(event.target.value)}
+                      className="min-h-20"
+                    />
+                    <Button
+                      onClick={() => void createSeries()}
+                      disabled={busy !== null || !seriesName.trim()}
+                    >
+                      <Plus />
+                      新建/复用系列
+                    </Button>
+                  </CardContent>
+                </Card>
 
-            <Card size="sm">
-              <CardHeader>
-                <CardTitle>系列列表</CardTitle>
-                <CardDescription>选择系列后，下面所有步骤都会按这个系列统计。</CardDescription>
-              </CardHeader>
-              <CardContent className="flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => handleSeriesChange('')}
-                  className={`rounded-md border px-3 py-2 text-left text-sm ${
-                    selectedSeriesId === '' ? 'border-primary bg-primary/5' : 'border-border'
-                  }`}
-                >
-                  全部课程
-                </button>
-                {snapshot.series.map((series) => (
-                  <button
-                    key={series.id}
-                    type="button"
-                    onClick={() => handleSeriesChange(series.id)}
-                    className={`rounded-md border px-3 py-2 text-left text-sm ${
-                      selectedSeriesId === series.id
-                        ? 'border-primary bg-primary/5'
-                        : 'border-border'
-                    }`}
-                  >
-                    <span className="block font-medium">{series.name}</span>
-                    <span className="text-muted-foreground text-xs">
-                      {series.courseCount} 门课程
-                    </span>
-                  </button>
-                ))}
-                <Button asChild variant="outline" size="sm" className="mt-1">
-                  <Link href="/curriculum/series">
-                    <Library />
-                    管理课程序列
-                  </Link>
-                </Button>
-              </CardContent>
-            </Card>
+                <Card size="sm">
+                  <CardHeader>
+                    <CardTitle>系列列表</CardTitle>
+                    <CardDescription>选择系列后，下面所有步骤都会按这个系列统计。</CardDescription>
+                  </CardHeader>
+                  <CardContent className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => handleSeriesChange('')}
+                      className={`rounded-md border px-3 py-2 text-left text-sm ${
+                        selectedSeriesId === '' ? 'border-primary bg-primary/5' : 'border-border'
+                      }`}
+                    >
+                      全部课程
+                    </button>
+                    {snapshot.series.map((series) => (
+                      <button
+                        key={series.id}
+                        type="button"
+                        onClick={() => handleSeriesChange(series.id)}
+                        className={`rounded-md border px-3 py-2 text-left text-sm ${
+                          selectedSeriesId === series.id
+                            ? 'border-primary bg-primary/5'
+                            : 'border-border'
+                        }`}
+                      >
+                        <span className="block font-medium">{series.name}</span>
+                        <span className="text-muted-foreground text-xs">
+                          {series.courseCount} 门课程
+                        </span>
+                      </button>
+                    ))}
+                    <Button asChild variant="outline" size="sm" className="mt-1">
+                      <Link href="/curriculum/series">
+                        <Library />
+                        管理课程序列
+                      </Link>
+                    </Button>
+                  </CardContent>
+                </Card>
+              </>
+            )}
           </aside>
 
           <main className="flex flex-col gap-6">
             {selectedSeriesId ? (
               <div className="border-border bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
                 <span>
-                  当前系列：
-                  <strong>
-                    {snapshot.series.find((series) => series.id === selectedSeriesId)?.name ??
-                      selectedSeriesId}
-                  </strong>
+                  当前系列：<strong>{currentSeriesName}</strong>
                 </span>
-                <Button
-                  variant="link"
-                  size="sm"
-                  onClick={() => handleSeriesChange('')}
-                  className="h-auto p-0"
-                >
-                  查看全部系列
-                </Button>
+                {isSeriesScoped ? (
+                  <Button asChild variant="link" size="sm" className="h-auto p-0">
+                    <Link href="/curriculum/series">切换系列</Link>
+                  </Button>
+                ) : (
+                  <Button
+                    variant="link"
+                    size="sm"
+                    onClick={() => handleSeriesChange('')}
+                    className="h-auto p-0"
+                  >
+                    查看全部系列
+                  </Button>
+                )}
               </div>
             ) : null}
             <TabsContent
@@ -775,20 +860,27 @@ export function CurriculumWorkspace() {
                     value={courseForm.code}
                     onChange={(event) => setCourseForm({ ...courseForm, code: event.target.value })}
                   />
-                  <select
-                    className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
-                    value={courseForm.seriesId}
-                    onChange={(event) =>
-                      setCourseForm({ ...courseForm, seriesId: event.target.value })
-                    }
-                  >
-                    <option value="">未归属系列</option>
-                    {snapshot.series.map((series) => (
-                      <option key={series.id} value={series.id}>
-                        {series.name}
-                      </option>
-                    ))}
-                  </select>
+                  {isSeriesScoped ? (
+                    <div className="border-input bg-muted/40 flex h-9 min-w-0 items-center gap-2 rounded-md border px-2.5 text-sm">
+                      <span className="text-muted-foreground shrink-0">所属系列</span>
+                      <span className="truncate font-medium">{currentSeriesName}</span>
+                    </div>
+                  ) : (
+                    <select
+                      className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
+                      value={courseForm.seriesId}
+                      onChange={(event) =>
+                        setCourseForm({ ...courseForm, seriesId: event.target.value })
+                      }
+                    >
+                      <option value="">未归属系列</option>
+                      {snapshot.series.map((series) => (
+                        <option key={series.id} value={series.id}>
+                          {series.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
                   <select
                     className="border-input h-9 rounded-md border bg-transparent px-2.5 text-sm"
                     value={courseForm.stageId}

@@ -279,6 +279,10 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     () => snapshot.series.find((series) => series.id === course?.seriesId)?.name ?? '未归属系列',
     [course?.seriesId, snapshot.series],
   );
+  const backHref = course?.seriesId
+    ? `/curriculum/series/${course.seriesId}`
+    : '/curriculum/series';
+  const backLabel = course?.seriesId ? '返回所属系列' : '返回课程序列';
 
   const hasActiveWork = useMemo(
     () =>
@@ -406,7 +410,7 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
     setError(null);
     try {
       await requestJson(`/api/curriculum/courses/${courseId}`, { method: 'DELETE' });
-      router.push('/curriculum');
+      router.push(backHref);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setBusy(null);
@@ -478,9 +482,9 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
           </CardHeader>
           <CardContent>
             <Button asChild variant="outline">
-              <Link href="/curriculum">
+              <Link href="/curriculum/series">
                 <ArrowLeft />
-                返回课程体系
+                返回课程序列
               </Link>
             </Button>
           </CardContent>
@@ -496,20 +500,18 @@ export function CourseWorkspace({ courseId }: CourseWorkspaceProps) {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => router.push('/curriculum')}
-            title="返回课程体系"
-            aria-label="返回课程体系"
+            onClick={() => router.push(backHref)}
+            title={backLabel}
+            aria-label={backLabel}
             className="mt-0.5 shrink-0"
           >
             <ArrowLeft />
           </Button>
           <div className="min-w-0">
-            <p className="text-muted-foreground text-sm">
-              课程产品层 / Curriculum / {course.code ?? '课程产品'}
-            </p>
+            <p className="text-muted-foreground text-sm">课程产品层 / Curriculum / {seriesName}</p>
             <h1 className="text-2xl font-semibold">{course.title}</h1>
             <p className="text-muted-foreground mt-1 text-sm">
-              {seriesName}
+              {course.code ?? '未设置课程编号'}
               {course.chapter ? ` · ${course.chapter}` : ''}
               {course.section ? ` · ${course.section}` : ''}
             </p>

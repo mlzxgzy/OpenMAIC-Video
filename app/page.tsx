@@ -700,13 +700,13 @@ function HomePage() {
       <div className="fixed top-4 left-4 z-50">
         <button
           type="button"
-          onClick={() => router.push('/curriculum')}
+          onClick={() => router.push('/curriculum/series')}
           className="flex items-center gap-2 rounded-full border border-gray-100/50 bg-white/70 px-3 py-1.5 text-xs font-medium text-gray-600 shadow-sm backdrop-blur-md transition-colors hover:bg-white hover:text-gray-900 dark:border-gray-700/50 dark:bg-gray-800/70 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-gray-100"
-          title="打开课程体系与培养方案"
-          aria-label="打开课程体系与培养方案"
+          title="打开课程序列"
+          aria-label="打开课程序列"
         >
           <BookOpen className="size-3.5" />
-          <span className="hidden sm:inline">课程体系</span>
+          <span className="hidden sm:inline">课程序列</span>
         </button>
       </div>
 
@@ -980,7 +980,7 @@ function HomePage() {
           </button>
           <button
             type="button"
-            onClick={() => router.push('/curriculum')}
+            onClick={() => router.push('/curriculum/series')}
             className="group border-border/70 bg-white/70 hover:border-primary/40 hover:bg-white dark:bg-slate-900/70 dark:hover:bg-slate-900 flex items-start gap-3 rounded-xl border p-3 text-left shadow-sm transition-all hover:shadow-md"
           >
             <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/10 text-violet-600 dark:text-violet-300">
@@ -988,11 +988,11 @@ function HomePage() {
             </span>
             <span className="min-w-0">
               <span className="flex items-center gap-1.5 text-sm font-medium">
-                设计课程体系
+                进入课程序列
                 <ArrowRight className="size-3.5 opacity-40 transition-transform group-hover:translate-x-0.5" />
               </span>
               <span className="text-muted-foreground mt-0.5 block text-xs leading-4">
-                先建课程、知识点和培养方案，再批量生产系列课
+                先选择或新建一个序列，再进入序列维护课程和生产
               </span>
             </span>
           </button>

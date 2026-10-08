@@ -314,7 +314,7 @@ export function SeriesWorkspace() {
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <Button variant="ghost" size="icon" asChild className="mt-0.5 shrink-0">
-            <Link href="/curriculum" title="返回课程体系" aria-label="返回课程体系">
+            <Link href="/" title="返回首页" aria-label="返回首页">
               <ArrowLeft />
             </Link>
           </Button>
@@ -330,7 +330,7 @@ export function SeriesWorkspace() {
           <Button variant="outline" asChild>
             <Link href="/curriculum">
               <Layers />
-              课程体系
+              全部课程
             </Link>
           </Button>
           <Button variant="outline" onClick={() => void load()} disabled={busy !== null}>
@@ -466,7 +466,7 @@ export function SeriesWorkspace() {
                         </div>
                         <div className="flex shrink-0 items-center gap-1">
                           <Button asChild size="sm">
-                            <Link href={`/curriculum?tab=ledger&series=${series.id}`}>
+                            <Link href={`/curriculum/series/${series.id}`}>
                               进入系列
                               <ArrowRight />
                             </Link>
