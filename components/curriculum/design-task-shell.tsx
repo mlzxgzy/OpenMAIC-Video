@@ -105,7 +105,16 @@ export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) 
           // erased the "已保存" the author needed to see. Staged coverage is
           // discarded inside the editor's own `load`, which is where the new
           // snapshot actually arrives.
-          <DesignWorkbench taskId={taskId} phase={phase} onChanged={reload} />
+          //
+          // `version` is passed rather than only read here because the editor
+          // must re-read through `load`, not remount. The sentence above ("both
+          // halves re-read the snapshot themselves") was false without it: the
+          // editor fetched once on mount, so a unit or outcome created anywhere
+          // but inside the editor stayed invisible to it after a refresh. The
+          // phase moved — the gate opened — while the form's selects stayed
+          // empty, which is a control that opens and then offers nothing. The
+          // live walk for the hands-on-task form is what found it.
+          <DesignWorkbench taskId={taskId} phase={phase} version={version} onChanged={reload} />
         )}
       </TabsContent>
     </Tabs>

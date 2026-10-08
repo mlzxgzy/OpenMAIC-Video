@@ -76,6 +76,14 @@ import {
   authoringAvailability,
   designPhaseLabel,
 } from '@/lib/curriculum/design-editing';
+import {
+  EXAM_FORCED_VALUES,
+  LAB_VERIFY_KINDS,
+  labVerifyKindLabel,
+  labVerifyRuleFrom,
+  labVerifyTargetOf,
+  type LabVerifyKind,
+} from '@/lib/curriculum/lab-authoring';
 import type {
   CurriculumCoverageKind,
   CurriculumDesignPhase,
@@ -84,12 +92,23 @@ import type {
   CurriculumLearningNodeRecord,
   CurriculumObjectiveRecord,
   CurriculumUnitRecord,
+  LabVerifyRule,
 } from '@/lib/curriculum/design-types';
 
 interface DesignWorkbenchProps {
   taskId: string;
   /** Owned by the shell, so the two halves cannot disagree about the phase. */
   phase: CurriculumDesignPhase;
+  /**
+   * The shell's shared refresh counter.
+   *
+   * The editor re-reads its snapshot when this changes. Without it the editor
+   * fetched once on mount: a refresh moved the phase and the gate, but left the
+   * data behind the gate stale, so a unit created outside the editor was
+   * missing from the very form that needed to select it. Re-reading through
+   * `load` rather than remounting is deliberate — see the shell's comment.
+   */
+  version: number;
   /**
    * Re-read the phase as well as this snapshot.
    *
@@ -136,6 +155,31 @@ const ROLE_OPTIONS = [
   { value: 'practice', label: '练习' },
   { value: 'exam', label: '考试' },
 ];
+
+/**
+ * Verify kinds, each labelled with what its target is.
+ *
+ * The label is the whole point: "验证方式" and "验证目标" then read as one
+ * sentence — pick `file_read`, give the path — so the author chooses by intent
+ * instead of having to know which of the record's seven condition fields the
+ * kind is stored in.
+ */
+const LAB_VERIFY_KIND_OPTIONS = LAB_VERIFY_KINDS.map((kind) => ({
+  value: kind,
+  label: `${kind} — ${labVerifyKindLabel(kind)}`,
+}));
+
+const LAB_VERIFY_TARGET_HINT = `目标会按验证方式自动写入对应字段：${LAB_VERIFY_KINDS.map(
+  (kind) => `${kind}→${labVerifyKindLabel(kind)}`,
+).join('；')}。`;
+
+/** The rule's asserted condition, for the list. */
+const labRuleTarget = (rule: LabVerifyRule) => labVerifyTargetOf(rule) || '(未填写)';
+
+/** A number field's text as an integer; `NaN` for blank, so callers can default. */
+function intFrom(value: string | boolean | string[] | undefined): number {
+  return typeof value === 'string' && value.trim() !== '' ? Number.parseInt(value, 10) : Number.NaN;
+}
 
 const roleLabel = (role: string | null | undefined) =>
   ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role ?? '未指定';
@@ -208,7 +252,7 @@ function DeleteButton({
   );
 }
 
-export function DesignWorkbench({ taskId, phase, onChanged }: DesignWorkbenchProps) {
+export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWorkbenchProps) {
   const [snapshot, setSnapshot] = useState<CurriculumDesignSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -236,7 +280,9 @@ export function DesignWorkbench({ taskId, phase, onChanged }: DesignWorkbenchPro
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // `version` is the shell's shared refresh: a change means another half
+    // changed something, so the data behind this editor's gates may have moved.
+  }, [load, version]);
 
   /**
    * One write, with its own busy key.
@@ -837,8 +883,20 @@ export function DesignWorkbench({ taskId, phase, onChanged }: DesignWorkbenchPro
               busy={busy}
               submitLabel="新建题目"
               fields={[
-                { kind: 'select', name: 'unitId', label: '条目', options: itemOptions },
-                { kind: 'select', name: 'objectiveId', label: '目标', options: objectiveOptions },
+                {
+                  kind: 'select',
+                  name: 'unitId',
+                  label: '条目',
+                  options: itemOptions,
+                  required: true,
+                },
+                {
+                  kind: 'select',
+                  name: 'objectiveId',
+                  label: '目标',
+                  options: objectiveOptions,
+                  required: true,
+                },
                 {
                   kind: 'textarea',
                   name: 'stem',
@@ -931,6 +989,184 @@ export function DesignWorkbench({ taskId, phase, onChanged }: DesignWorkbenchPro
                       run(`question:${question.id}`, async () => {
                         await requestJson(`${base}/questions/${question.id}`, { method: 'DELETE' });
                         return '已删除题目。';
+                      })
+                    }
+                  />
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Hands-on tasks ─────────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">实操任务</CardTitle>
+              <CardDescription>
+                一道上机题：结果由「验证规则」判定，参考解法只用于提示与复盘
+              </CardDescription>
+            </div>
+            <CreateForm
+              kind="lab-tasks"
+              phase={phase}
+              busyKey="lab:new"
+              busy={busy}
+              submitLabel="新建实操任务"
+              fields={[
+                {
+                  kind: 'select',
+                  name: 'unitId',
+                  label: '条目',
+                  options: itemOptions,
+                  required: true,
+                },
+                {
+                  kind: 'select',
+                  name: 'objectiveId',
+                  label: '目标',
+                  options: objectiveOptions,
+                  required: true,
+                },
+                {
+                  kind: 'select',
+                  name: 'assessmentMode',
+                  label: '考核方式',
+                  options: [
+                    { value: 'practice', label: '练习（可提示、可重试）' },
+                    { value: 'exam', label: '考试（无提示、不重试、限时）' },
+                  ],
+                  initial: 'practice',
+                },
+                {
+                  kind: 'text',
+                  name: 'taskGoal',
+                  label: '任务目标',
+                  required: true,
+                  placeholder: '例如：对给定站点完成一次注入检测并取出 flag',
+                },
+                {
+                  kind: 'text',
+                  name: 'dockerImage',
+                  label: '靶场镜像',
+                  required: true,
+                  placeholder: '例如：sqlmap:latest',
+                },
+                {
+                  kind: 'select',
+                  name: 'verifyKind',
+                  label: '验证方式',
+                  options: LAB_VERIFY_KIND_OPTIONS,
+                  initial: 'file_read',
+                },
+                {
+                  kind: 'text',
+                  name: 'verifyTarget',
+                  label: '验证目标',
+                  required: true,
+                  placeholder: '例如：/flag',
+                  // The kind decides which record field this lands in; the
+                  // mapping is a pure function with its own tests, because a
+                  // condition stored in the wrong field is stored successfully
+                  // and then never matches.
+                  hint: LAB_VERIFY_TARGET_HINT,
+                },
+                {
+                  kind: 'number',
+                  name: 'timeLimitSec',
+                  label: '限时（秒）',
+                  placeholder: '考试必填；留空按 1800',
+                  hint: '考试模式必须有时限，留空会按 1800 秒（30 分钟）提交。',
+                },
+                {
+                  kind: 'textarea',
+                  name: 'brief',
+                  label: '任务说明',
+                  placeholder: '给学员看的背景与要求',
+                },
+              ]}
+              onSubmit={(values) =>
+                run('lab:new', async () => {
+                  const rule = labVerifyRuleFrom(
+                    values.verifyKind as LabVerifyKind,
+                    String(values.verifyTarget ?? ''),
+                  );
+                  if (!rule) {
+                    throw new Error('请填写「验证目标」：没有它的规则无法判定结果。');
+                  }
+                  const mode = String(values.assessmentMode ?? 'practice');
+                  const isExam = mode === 'exam';
+                  const limit = Number(intFrom(values.timeLimitSec));
+                  const body = {
+                    unitId: values.unitId,
+                    objectiveId: values.objectiveId,
+                    assessmentMode: mode,
+                    taskGoal: values.taskGoal,
+                    dockerImage: values.dockerImage,
+                    brief: values.brief || '',
+                    verifyRules: [rule],
+                    // An exam is taken cold, and the server refuses anything
+                    // else. Rather than let the author submit a combination the
+                    // server will reject, choosing "exam" submits the only
+                    // values that satisfy the rule — and the field hints say so.
+                    ...(isExam
+                      ? {
+                          hintPolicy: EXAM_FORCED_VALUES.hintPolicy,
+                          allowRetry: EXAM_FORCED_VALUES.allowRetry,
+                          timeLimitSec: Number.isFinite(limit) && limit > 0 ? limit : 1800,
+                        }
+                      : {}),
+                  };
+                  await requestJson(`${base}/lab-tasks`, {
+                    method: 'POST',
+                    body: JSON.stringify(body),
+                  });
+                  return isExam
+                    ? '已新建实操任务（考试：无提示、不重试、限时）。'
+                    : '已新建实操任务。';
+                })
+              }
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {(snapshot.labTasks ?? []).length === 0 ? (
+            <EmptySection phase={phase} kind="lab-tasks">
+              还没有实操任务。实操类评价证据如果没有对应的实操任务，审核会报「有承诺、无交付」。
+            </EmptySection>
+          ) : (
+            <ul className="flex flex-col gap-2">
+              {(snapshot.labTasks ?? []).map((lab) => (
+                <li
+                  key={lab.id}
+                  className="border-border flex items-start justify-between gap-3 rounded-lg border p-2.5"
+                >
+                  <div className="flex min-w-0 flex-col gap-0.5">
+                    <span className="text-xs font-medium">{lab.taskGoal}</span>
+                    <span className="text-muted-foreground text-[11px]">
+                      {objectiveById.get(lab.objectiveId)?.title ?? lab.objectiveId}
+                      {' · '}
+                      {unitById.get(lab.unitId)?.title ?? lab.unitId}
+                      {' · '}
+                      {lab.assessmentMode === 'exam' ? '考试' : '练习'}
+                      {' · '}
+                      {/* Shown per rule, by kind, so an author can see that the
+                          condition was stored where the grader will read it. */}
+                      {lab.verifyRules
+                        .map((rule) => `${rule.kind}:${labRuleTarget(rule)}`)
+                        .join('，')}
+                    </span>
+                  </div>
+                  <DeleteButton
+                    label={`删除实操任务「${lab.taskGoal}」`}
+                    busyKey={`lab:${lab.id}`}
+                    busy={busy}
+                    onDelete={() =>
+                      run(`lab:${lab.id}`, async () => {
+                        await requestJson(`${base}/lab-tasks/${lab.id}`, { method: 'DELETE' });
+                        return '已删除实操任务。';
                       })
                     }
                   />

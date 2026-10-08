@@ -71,6 +71,7 @@ import {
 } from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
 import { deriveVerifiability, nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
+import { examStrictRefusal } from '@/lib/curriculum/lab-authoring';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
@@ -2239,6 +2240,24 @@ export async function createCurriculumLabTask(
       'a lab task needs at least one verification rule; the reference solution is not one',
     );
   }
+  /**
+   * Stated here rather than left to `curriculum_lab_exam_strict`.
+   *
+   * The constraint is still the backstop, but its message names the constraint:
+   * a caller who picks "exam" and keeps the practice defaults is told that "a
+   * rule on this field was not satisfied", which names none of the three things
+   * to change. The rule is the same one; this is the version that says it.
+   *
+   * The values are the ones the insert would use, defaults included, so the
+   * sentence describes the row that would have been written.
+   */
+  const examRefusal = examStrictRefusal({
+    assessmentMode: input.assessmentMode ?? 'practice',
+    hintPolicy: input.hintPolicy ?? 'unlimited',
+    allowRetry: input.allowRetry ?? true,
+    timeLimitSec: input.timeLimitSec ?? null,
+  });
+  if (examRefusal) throw new CurriculumDesignValidationError(examRefusal);
 
   const result = await queryable.query<LabTaskRow>(
     `INSERT INTO curriculum_lab_task
@@ -2299,6 +2318,22 @@ export async function updateCurriculumLabTask(
       'a lab task must keep at least one verification rule',
     );
   }
+  /**
+   * The exam rule is checked against the *resulting* row, not the patch.
+   *
+   * `curriculum_lab_exam_strict` is a row constraint, so a one-field patch can
+   * break it — an update that sets `hintPolicy: 'unlimited'` on an existing exam
+   * is the same defect as creating a warm exam, and checking only the fields
+   * present in the patch would let it through to a raw constraint violation.
+   */
+  const examRefusal = examStrictRefusal({
+    assessmentMode: patch.assessmentMode ?? (row.assessment_mode as CurriculumAssessmentMode),
+    hintPolicy: patch.hintPolicy ?? (row.hint_policy as CurriculumHintPolicy),
+    allowRetry: patch.allowRetry ?? row.allow_retry,
+    timeLimitSec:
+      patch.timeLimitSec !== undefined ? patch.timeLimitSec : nullableNumeric(row.time_limit_sec),
+  });
+  if (examRefusal) throw new CurriculumDesignValidationError(examRefusal);
   const result = await queryable.query<LabTaskRow>(
     `UPDATE curriculum_lab_task
         SET unit_id = $3, objective_id = $4, evidence_id = $5, assessment_mode = $6, task_goal = $7,

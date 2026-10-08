@@ -47,6 +47,8 @@ export type FormField =
       placeholder?: string;
       required?: boolean;
       initial?: string;
+      /** Small print under the control; rendered, never only a tooltip. */
+      hint?: string;
     }
   | {
       kind: 'textarea';
@@ -64,6 +66,7 @@ export type FormField =
       placeholder?: string;
       required?: boolean;
       initial?: string;
+      hint?: string;
     }
   | {
       kind: 'select';
@@ -71,6 +74,13 @@ export type FormField =
       label: string;
       options: { value: string; label: string }[];
       initial?: string;
+      /**
+       * A select can be empty when nothing is chosen, and an empty foreign key
+       * is not "unset" — it is a lookup for a row with no id, which the server
+       * answers 404. Marking the ones that are needed turns that into a local
+       * sentence naming the field.
+       */
+      required?: boolean;
     }
   | {
       kind: 'tags';
