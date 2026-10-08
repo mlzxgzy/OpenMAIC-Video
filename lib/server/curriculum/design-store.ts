@@ -64,9 +64,13 @@ import type {
   LabScoreRule,
   LabVerifyRule,
 } from '@/lib/curriculum/design-types';
-import { auditCurriculumDesign, evaluateCurriculumQuality } from '@/lib/curriculum/audit';
+import {
+  auditCurriculumDesign,
+  evaluateCurriculumQuality,
+  type CurriculumAuditFinding,
+} from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
-import { nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
+import { deriveVerifiability, nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
@@ -1268,7 +1272,13 @@ export async function createCurriculumObjective(
       jsonParam(input.proficientCriteria ?? []),
       jsonParam(input.excellentCriteria ?? []),
       input.difficulty ?? 'basic',
-      input.verifiable ?? false,
+      // Derived, never taken on trust. The CHECK only refuses a claim the
+      // shape cannot support; nothing infers the claim from the shape, so a
+      // caller that forgot to derive would store a perfectly checkable outcome
+      // as unverifiable — and nothing downstream would refuse it, it would
+      // just silently never be assessable. An explicit `false` still wins: an
+      // outcome reclassified as a topic is a decision, not an omission.
+      deriveVerifiability(input.expectedBehavior, input.minCriteria, input.verifiable),
       optionalText(input.unverifiableReason),
       input.status ?? 'draft',
       input.sortOrder ?? 0,
@@ -1296,6 +1306,14 @@ export async function updateCurriculumObjective(
       );
     }
   }
+  // Hoisted so the derivation below reads exactly the values this UPDATE
+  // writes, rather than a second, separately-merged copy of them.
+  const nextBehavior =
+    patch.expectedBehavior !== undefined
+      ? (optionalText(patch.expectedBehavior) ?? '')
+      : current.expected_behavior;
+  const nextMinCriteria =
+    patch.minCriteria !== undefined ? patch.minCriteria : stringList(current.min_criteria);
   const result = await queryable.query<ObjectiveRow>(
     `UPDATE curriculum_objective
         SET parent_id = $3, code = $4, title = $5, description = $6, objective_type = $7,
@@ -1315,12 +1333,8 @@ export async function updateCurriculumObjective(
       patch.objectiveType ?? (current.objective_type as CurriculumObjectiveType),
       patch.bloomLevel !== undefined ? optionalText(patch.bloomLevel) : current.bloom_level,
       patch.level ?? (current.level as CurriculumObjectiveLevel),
-      patch.expectedBehavior !== undefined
-        ? (optionalText(patch.expectedBehavior) ?? '')
-        : current.expected_behavior,
-      patch.minCriteria !== undefined
-        ? jsonParam(patch.minCriteria)
-        : jsonParam(stringList(current.min_criteria)),
+      nextBehavior,
+      jsonParam(nextMinCriteria),
       patch.proficientCriteria !== undefined
         ? jsonParam(patch.proficientCriteria)
         : jsonParam(stringList(current.proficient_criteria)),
@@ -1328,7 +1342,10 @@ export async function updateCurriculumObjective(
         ? jsonParam(patch.excellentCriteria)
         : jsonParam(stringList(current.excellent_criteria)),
       patch.difficulty ?? (current.difficulty as CurriculumDifficulty),
-      patch.verifiable ?? current.verifiable,
+      // Against the MERGED fields: adding the behavior to an outcome that only
+      // had a title is the ordinary way one becomes checkable, so deriving
+      // from the patch alone would leave it unverifiable forever.
+      deriveVerifiability(nextBehavior, nextMinCriteria, patch.verifiable),
       patch.unverifiableReason !== undefined
         ? optionalText(patch.unverifiableReason)
         : current.unverifiable_reason,
@@ -1512,16 +1529,21 @@ export async function setCurriculumNodeObjectives(
   links: CurriculumNodeObjectiveInput[],
 ): Promise<CurriculumNodeObjectiveRecord[]> {
   await assertPhase(queryable, ownerId, taskId, 'graph');
+  // Dedupe on the pair, which is this table's own UNIQUE key. Keying on the
+  // objective alone silently keeps one supporter per outcome, which is the
+  // opposite of what the layer is for: an outcome built from several knowledge
+  // nodes loses all but the last, and the audit then reports it as unsupported
+  // on a design that does support it.
   const unique = new Map<string, CurriculumNodeObjectiveInput>();
   for (const link of links) {
-    if (!unique.has(link.objectiveId)) unique.set(link.objectiveId, link);
+    unique.set(`${link.nodeId}:${link.objectiveId}`, link);
   }
-  for (const [objectiveId, link] of unique) {
+  for (const link of unique.values()) {
     const node = await readNodeRow(queryable, ownerId, link.nodeId);
     if (!node) throw new CurriculumDesignNotFoundError(`learning node not found: ${link.nodeId}`);
-    const objective = await readObjectiveRow(queryable, ownerId, objectiveId);
+    const objective = await readObjectiveRow(queryable, ownerId, link.objectiveId);
     if (!objective) {
-      throw new CurriculumDesignNotFoundError(`learning outcome not found: ${objectiveId}`);
+      throw new CurriculumDesignNotFoundError(`learning outcome not found: ${link.objectiveId}`);
     }
     if (node.task_id !== taskId || objective.task_id !== taskId) {
       throw new CurriculumDesignValidationError('node and outcome must belong to the same task');
@@ -1533,7 +1555,7 @@ export async function setCurriculumNodeObjectives(
     [ownerId, taskId],
   );
   const created: CurriculumNodeObjectiveRecord[] = [];
-  for (const [objectiveId, link] of unique) {
+  for (const link of unique.values()) {
     const result = await queryable.query<NodeObjectiveRow>(
       `INSERT INTO curriculum_node_objective
          (id, owner_id, task_id, node_id, objective_id, support_level, note)
@@ -1544,7 +1566,7 @@ export async function setCurriculumNodeObjectives(
         ownerId,
         taskId,
         link.nodeId,
-        objectiveId,
+        link.objectiveId,
         link.supportLevel ?? 'primary',
         optionalText(link.note),
       ],
@@ -1676,6 +1698,32 @@ export async function deleteCurriculumDependency(
 
 // ── Unit CRUD ───────────────────────────────────────────────────────────────
 
+/**
+ * A chapter classifies and carries no teaching role; an item is a teaching
+ * unit and is exactly one of lecture, practice or exam.
+ *
+ * The table's `curriculum_unit_role_shape` CHECK enforces this too, but a
+ * constraint violation reaches the caller as a 500 — and getting this wrong is
+ * an ordinary authoring mistake, not a server fault. Stated here, it is a
+ * refusal that names the rule.
+ */
+function assertUnitRoleShape(
+  unitType: CurriculumUnitType,
+  unitRole: CurriculumUnitRole | null | undefined,
+): void {
+  const role = unitRole ?? null;
+  if (unitType === 'chapter' && role !== null) {
+    throw new CurriculumDesignValidationError(
+      'a chapter only classifies and cannot have a teaching role; only an item is a lecture, practice or exam',
+    );
+  }
+  if (unitType === 'item' && role === null) {
+    throw new CurriculumDesignValidationError(
+      'an item is a teaching unit and must declare its role: lecture, practice or exam',
+    );
+  }
+}
+
 export async function createCurriculumUnit(
   queryable: Queryable,
   ownerId: string,
@@ -1684,6 +1732,7 @@ export async function createCurriculumUnit(
 ): Promise<CurriculumUnitRecord> {
   await assertPhase(queryable, ownerId, taskId, 'outline');
   const title = requiredText(input.title, 'title');
+  assertUnitRoleShape(input.unitType, input.unitRole);
   if (input.parentId) {
     const parent = await readUnitRow(queryable, ownerId, input.parentId);
     if (!parent) throw new CurriculumDesignNotFoundError('parent unit not found');
@@ -1726,6 +1775,16 @@ export async function updateCurriculumUnit(
 ): Promise<CurriculumUnitRecord> {
   const current = await readUnitRow(queryable, ownerId, unitId);
   if (!current) throw new CurriculumDesignNotFoundError('outline unit not found');
+  // Checked against the merged role and the stored kind. `unitType` is not in
+  // the UPDATE below and is not meant to be: a chapter and an item are not
+  // interchangeable after creation, so a patch that names one is ignored here
+  // and refused by the route's own contract.
+  assertUnitRoleShape(
+    (current.unit_type as CurriculumUnitType) ?? 'item',
+    patch.unitRole !== undefined
+      ? patch.unitRole
+      : (current.unit_role as CurriculumUnitRole | null),
+  );
   if (patch.parentId) {
     const parent = await readUnitRow(queryable, ownerId, patch.parentId);
     if (!parent) throw new CurriculumDesignNotFoundError('parent unit not found');
@@ -2341,13 +2400,62 @@ export async function getCurriculumDesignSnapshot(
 
 // ── Review ───────────────────────────────────────────────────────────────────
 
-export interface CurriculumDesignReview {
-  findings: CurriculumAuditFindingRecord[];
+export interface CurriculumDesignEvaluation {
+  /** The audit's verdict, before persistence — derived, not stored rows. */
+  findings: CurriculumAuditFinding[];
   quality: ReturnType<typeof evaluateCurriculumQuality>;
   coverage: ReturnType<typeof buildDesignCoverage>;
   verdict: ReturnType<typeof summariseCoverage>;
   /** Whether the design may be handed to generation and export. */
   exportable: boolean;
+}
+
+export interface CurriculumDesignReview extends Omit<CurriculumDesignEvaluation, 'findings'> {
+  findings: CurriculumAuditFindingRecord[];
+}
+
+/**
+ * The whole review, computed from a snapshot and touching nothing.
+ *
+ * Split out from the persisting wrapper so a read can ask "would this export?"
+ * without writing: a GET that records findings would make every prefetch and
+ * retry a mutation, and the answer would then depend on who asked last.
+ */
+export function evaluateCurriculumDesign(
+  snapshot: CurriculumDesignSnapshot,
+): CurriculumDesignEvaluation {
+  const findings = auditCurriculumDesign(snapshot);
+  const quality = evaluateCurriculumQuality(findings);
+  const coverage = buildDesignCoverage(snapshot);
+  const verdict = summariseCoverage(coverage);
+  return {
+    findings,
+    quality,
+    coverage,
+    verdict,
+    exportable: quality.exportable && verdict.complete,
+  };
+}
+
+/**
+ * Why a design cannot be produced, in the order the layers are checked.
+ *
+ * Reporting the FIRST broken layer rather than all of them is deliberate:
+ * fixing a later layer while an earlier one is still broken produces coverage
+ * that points at the wrong thing. The list is empty exactly when the design is
+ * exportable.
+ */
+export function describeCurriculumExportBlockers(
+  evaluation: Pick<CurriculumDesignEvaluation, 'quality' | 'verdict'>,
+): string[] {
+  const parts: string[] = [];
+  if (!evaluation.quality.exportable) {
+    parts.push(`design review failed at "${evaluation.quality.firstBrokenLayer}"`);
+  }
+  if (!evaluation.verdict.complete) {
+    parts.push(evaluation.verdict.summary);
+  }
+  return parts;
 }
 
 /**
@@ -2369,16 +2477,13 @@ export async function reviewCurriculumTaskDesign(
   taskId: string,
 ): Promise<CurriculumDesignReview> {
   const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
-  const findings = auditCurriculumDesign(snapshot);
-  const quality = evaluateCurriculumQuality(findings);
-  const coverage = buildDesignCoverage(snapshot);
-  const verdict = summariseCoverage(coverage);
+  const evaluation = evaluateCurriculumDesign(snapshot);
 
   const persisted = await replaceCurriculumAuditFindings(
     queryable,
     ownerId,
     taskId,
-    findings.map((finding) => ({
+    evaluation.findings.map((finding) => ({
       ruleCode: finding.rule,
       severity: finding.severity,
       message: finding.message,
@@ -2389,13 +2494,7 @@ export async function reviewCurriculumTaskDesign(
     })),
   );
 
-  return {
-    findings: persisted,
-    quality,
-    coverage,
-    verdict,
-    exportable: quality.exportable && verdict.complete,
-  };
+  return { ...evaluation, findings: persisted };
 }
 
 /**
@@ -2412,16 +2511,9 @@ export async function assertCurriculumDesignExportable(
   taskId: string,
 ): Promise<CurriculumDesignReview> {
   const review = await reviewCurriculumTaskDesign(queryable, ownerId, taskId);
-  if (review.exportable) return review;
-
-  const parts: string[] = [];
-  if (!review.quality.exportable) {
-    parts.push(`design review failed at "${review.quality.firstBrokenLayer}"`);
-  }
-  if (!review.verdict.complete) {
-    parts.push(review.verdict.summary);
-  }
+  const blockers = describeCurriculumExportBlockers(review);
+  if (blockers.length === 0) return review;
   throw new CurriculumDesignValidationError(
-    `This course cannot be produced yet: ${parts.join('; ')}.`,
+    `This course cannot be produced yet: ${blockers.join('; ')}.`,
   );
 }

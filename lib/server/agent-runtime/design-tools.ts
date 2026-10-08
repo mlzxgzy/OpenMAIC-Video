@@ -740,28 +740,6 @@ function notYoursResult(taskId: string) {
 }
 
 /**
- * Whether an outcome's stated behavior and criteria make it checkable.
- *
- * This mirrors the database CHECK exactly — non-empty behavior, at least one
- * minimum criterion — but computes the flag instead of only validating it.
- * The distinction matters: the CHECK refuses an outcome that CLAIMS to be
- * verifiable without the shape to support it, and nothing in the schema infers
- * the claim from the shape. Leaving that to the caller would mean every
- * outcome authored by the model stayed unverifiable, and "add expectedBehavior
- * and minCriteria" would be advice the model could follow ten times with no
- * effect.
- */
-function verifiabilityOf(
-  expectedBehavior: string | undefined,
-  minCriteria: string[] | undefined,
-  explicit?: boolean,
-): { verifiable: boolean } {
-  const hasBehavior = typeof expectedBehavior === 'string' && expectedBehavior.trim() !== '';
-  const hasCriteria = Array.isArray(minCriteria) && minCriteria.some((c) => c && c.trim() !== '');
-  return { verifiable: explicit ?? (hasBehavior && hasCriteria) };
-}
-
-/**
  * Owner scope: a task that is not this owner's reads as absent.
  */
 async function ownsTask(
@@ -1095,13 +1073,9 @@ export function buildCurriculumDesignTools(
             proficientCriteria: params.proficientCriteria,
             excellentCriteria: params.excellentCriteria,
             difficulty: params.difficulty,
-            // Derived, never taken from the caller. The database CHECK only
-            // validates the claim; nothing else computes it, and a model will
-            // not think to set a flag whose absence silently means "this
-            // outcome is not checkable". Deriving here is what makes
-            // "add expectedBehavior and criteria" actually flip the outcome
-            // to verifiable on the next call.
-            ...verifiabilityOf(params.expectedBehavior, params.minCriteria),
+            // `verifiable` is deliberately absent: the store derives it from
+            // the behavior and criteria, so the flag cannot disagree between
+            // this tool and the HTTP route that writes the same row.
             sortOrder: params.sortOrder,
           }),
         (objective) => ({
@@ -1142,29 +1116,15 @@ export function buildCurriculumDesignTools(
           true,
         );
       }
-      // Re-derive against the MERGED values. This patch is the ordinary way an
-      // outcome becomes verifiable — the model adds the behavior to a title
-      // that had none — so the flag has to follow the merge rather than the
-      // fields this call happens to carry.
-      const current = (
-        await getCurriculumDesignSnapshot(queryable, ownerId, taskId)
-      ).objectives.find((objective) => objective.id === objectiveId);
-      if (!current) return notYoursResult(taskId);
-      const patch = {
-        ...rest,
-        ...verifiabilityOf(
-          rest.expectedBehavior ?? current.expectedBehavior,
-          rest.minCriteria ?? current.minCriteria,
-          // An explicit `verifiable: false` is a deliberate demotion (the
-          // outcome was found to be a topic after all), so it wins.
-          rest.verifiable === false ? false : undefined,
-        ),
-      };
+      // `verifiable` is not derived here. The store re-derives it against the
+      // MERGED outcome, which is what makes this patch — the ordinary way an
+      // outcome becomes checkable, by gaining the behavior it lacked — flip
+      // the flag. It also means one fewer snapshot read per write.
       return guarded(
         deps,
         taskId,
         'patch_learning_outcome',
-        () => updateCurriculumObjective(queryable, ownerId, objectiveId, patch),
+        () => updateCurriculumObjective(queryable, ownerId, objectiveId, rest),
         (objective) => ({
           text: `Updated outcome ${objective.id} — now ${objective.verifiable ? 'verifiable' : 'not verifiable'}.`,
           details: { objectiveId: objective.id, verifiable: objective.verifiable },

@@ -136,6 +136,32 @@ export interface CurriculumObjectiveRecord {
   updatedAt: string;
 }
 
+/**
+ * Whether an outcome can be evidenced, derived from its own behavior and
+ * criteria rather than declared.
+ *
+ * This mirrors the `curriculum_objective_verifiable_shape` database CHECK on
+ * purpose, and it is the only TypeScript definition of that rule — the design
+ * tools and the HTTP routes both call it. Left to each caller, the two would
+ * drift, and the failure mode of a drifted copy is quiet: an outcome that has
+ * a behavior and criteria but is still stored as unverifiable is refused by
+ * nothing downstream, it just silently cannot be assessed.
+ *
+ * `explicit` carries a deliberate demotion. When a caller has decided an
+ * outcome really is a topic after all, that decision has to beat the
+ * derivation; absent one, the fields decide.
+ */
+export function deriveVerifiability(
+  expectedBehavior: string | null | undefined,
+  minCriteria: readonly string[] | null | undefined,
+  explicit?: boolean,
+): boolean {
+  if (explicit !== undefined) return explicit;
+  const hasBehavior = typeof expectedBehavior === 'string' && expectedBehavior.trim() !== '';
+  const hasCriteria = Array.isArray(minCriteria) && minCriteria.some((c) => c && c.trim() !== '');
+  return hasBehavior && hasCriteria;
+}
+
 // ── Evidence ────────────────────────────────────────────────────────────────
 
 export const CURRICULUM_EVIDENCE_TYPES = [
