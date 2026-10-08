@@ -26,9 +26,12 @@ import {
   CurriculumDesignNotFoundError,
   CurriculumDesignValidationError,
   CurriculumPhaseError,
+  assertCurriculumDesignExportable,
   getCurriculumDesignSnapshot,
   listCurriculumTasks,
+  reviewCurriculumTaskDesign,
   setCurriculumNodeObjectives,
+  updateCurriculumUnit,
 } from '@/lib/server/curriculum/design-store';
 
 const OWNER = 'owner:design-store';
@@ -493,5 +496,127 @@ describe('reverse-design store (PGlite)', () => {
     await expect(getCurriculumDesignSnapshot(pool, OTHER, task.id)).rejects.toBeInstanceOf(
       CurriculumDesignNotFoundError,
     );
+  });
+
+  // ── Review and the export gate ─────────────────────────────────────────────
+
+  /**
+   * Build a course that closes its loop: one outcome, one node it names, one
+   * item, and teach + practice + assess coverage with a gradable lab behind the
+   * assess row. Every gate test then removes exactly one piece.
+   */
+  async function buildClosedCourse(): Promise<{ objectiveId: string; unitId: string }> {
+    await advanceTo('assessment');
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    const objective = snapshot.objectives[0];
+    const node = snapshot.nodes[0];
+    const unit = snapshot.units[0];
+
+    await updateCurriculumUnit(pool, OWNER, unit.id, {
+      teachingDesign: { nodes: [node.id] },
+    });
+    await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: objective.id,
+      coverageKind: 'practice',
+    });
+    await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: objective.id,
+      coverageKind: 'assess',
+    });
+    await createCurriculumLabTask(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: objective.id,
+      taskGoal: '读取 /flag',
+      brief: '存在注入点的靶场服务',
+      dockerImage: 'ctf/sql:latest',
+      verifyRules: [{ kind: 'file_read', path: '/flag' }],
+      referenceSolution: [{ step: 1, action: '构造 payload 并读取 /flag' }],
+      scoringMode: 'result',
+    });
+    return { objectiveId: objective.id, unitId: unit.id };
+  }
+
+  it('passes the review for a course that closes its loop', async () => {
+    await buildClosedCourse();
+    const review = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    expect(review.quality.broken).toEqual([]);
+    expect(review.verdict.complete).toBe(true);
+    expect(review.verdict.summary).toContain('1/1');
+    expect(review.exportable).toBe(true);
+  });
+
+  it('persists the findings so the workspace can show them without re-running', async () => {
+    await buildClosedCourse();
+    const review = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const persisted = (await getCurriculumDesignSnapshot(pool, OWNER, task.id)).auditFindings;
+    expect(persisted.length).toBe(review.findings.length);
+    expect(persisted.every((row) => row.status === 'open')).toBe(true);
+  });
+
+  it('replaces open findings on a second run instead of duplicating them', async () => {
+    await buildClosedCourse();
+    await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const second = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const persisted = (await getCurriculumDesignSnapshot(pool, OWNER, task.id)).auditFindings;
+    expect(persisted.length).toBe(second.findings.length);
+  });
+
+  it('blocks export when the loop is not closed, naming the broken layer', async () => {
+    const { objectiveId } = await buildClosedCourse();
+    // Drop the assess coverage: the outcome is taught and trained but never
+    // verified, which is precisely the defect the gate exists to catch.
+    await pool.query('DELETE FROM curriculum_unit_coverage WHERE objective_id = $1', [objectiveId]);
+    await expect(assertCurriculumDesignExportable(pool, OWNER, task.id)).rejects.toBeInstanceOf(
+      CurriculumDesignValidationError,
+    );
+  });
+
+  it('explains which layer to repair first when export is blocked', async () => {
+    const { objectiveId } = await buildClosedCourse();
+    // Remove only the assess row. The item still teaches and practises, so
+    // `curriculum_covers` holds and `assess_covers` is the first real break —
+    // which is exactly the layer the message must name.
+    await pool.query(
+      "DELETE FROM curriculum_unit_coverage WHERE objective_id = $1 AND coverage_kind = 'assess'",
+      [objectiveId],
+    );
+    await assertCurriculumDesignExportable(pool, OWNER, task.id).catch((error: unknown) => {
+      expect(error).toBeInstanceOf(CurriculumDesignValidationError);
+      expect((error as Error).message).toMatch(/cannot be produced/i);
+      expect((error as Error).message).toContain('assess_covers');
+    });
+  });
+
+  it('re-reads the design at gate time rather than trusting an earlier review', async () => {
+    const { objectiveId } = await buildClosedCourse();
+    // A review passes, then the design regresses.
+    await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    await pool.query('DELETE FROM curriculum_unit_coverage WHERE objective_id = $1', [objectiveId]);
+    await expect(assertCurriculumDesignExportable(pool, OWNER, task.id)).rejects.toBeInstanceOf(
+      CurriculumDesignValidationError,
+    );
+  });
+
+  it('finds a lab that was authored with no verification rule', async () => {
+    const { unitId, objectiveId } = await buildClosedCourse();
+    await createCurriculumLabTask(pool, OWNER, task.id, {
+      unitId,
+      objectiveId,
+      taskGoal: '未配验证规则的任务',
+      brief: 'brief',
+      dockerImage: 'ctf/x:latest',
+      verifyRules: [],
+    }).catch((error: unknown) => {
+      // The schema refuses this outright, which is the stronger guarantee; if
+      // the write is ever relaxed, the audit still catches it.
+      expect(error).toBeInstanceOf(CurriculumDesignValidationError);
+    });
+    const review = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const stored = (await getCurriculumDesignSnapshot(pool, OWNER, task.id)).labTasks;
+    if (stored.some((lab) => lab.verifyRules.length === 0)) {
+      expect(review.findings.some((f) => f.ruleCode === 'lab_no_verify_rule')).toBe(true);
+    }
   });
 });

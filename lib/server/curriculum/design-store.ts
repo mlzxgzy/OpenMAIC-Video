@@ -64,6 +64,8 @@ import type {
   LabScoreRule,
   LabVerifyRule,
 } from '@/lib/curriculum/design-types';
+import { auditCurriculumDesign, evaluateCurriculumQuality } from '@/lib/curriculum/audit';
+import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
 import { nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
@@ -2335,4 +2337,91 @@ export async function getCurriculumDesignSnapshot(
     labTasks: labResult.rows.map((row) => mapLabTask(row as LabTaskRow)),
     auditFindings: findingResult.rows.map((row) => mapAuditFinding(row as AuditFindingRow)),
   };
+}
+
+// ── Review ───────────────────────────────────────────────────────────────────
+
+export interface CurriculumDesignReview {
+  findings: CurriculumAuditFindingRecord[];
+  quality: ReturnType<typeof evaluateCurriculumQuality>;
+  coverage: ReturnType<typeof buildDesignCoverage>;
+  verdict: ReturnType<typeof summariseCoverage>;
+  /** Whether the design may be handed to generation and export. */
+  exportable: boolean;
+}
+
+/**
+ * Run the full design review for one task and persist the findings.
+ *
+ * The audit is pure, so it runs over a snapshot that was already read; this
+ * wrapper adds the two things a pure function cannot do — persist the result
+ * so the workspace can show it, and fold the coverage verdict in so callers
+ * get the loop state without a second query.
+ *
+ * Persisting is a replace, not an append: a review re-runs after an edit, and
+ * carrying a fixed defect forward as `open` would report problems that no
+ * longer exist. Resolved and waived findings survive so a decision to accept a
+ * known gap is not silently erased by the next review.
+ */
+export async function reviewCurriculumTaskDesign(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<CurriculumDesignReview> {
+  const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
+  const findings = auditCurriculumDesign(snapshot);
+  const quality = evaluateCurriculumQuality(findings);
+  const coverage = buildDesignCoverage(snapshot);
+  const verdict = summariseCoverage(coverage);
+
+  const persisted = await replaceCurriculumAuditFindings(
+    queryable,
+    ownerId,
+    taskId,
+    findings.map((finding) => ({
+      ruleCode: finding.rule,
+      severity: finding.severity,
+      message: finding.message,
+      refKind: finding.refKind,
+      refId: finding.refId,
+      refIds: finding.refIds,
+      status: 'open' as const,
+    })),
+  );
+
+  return {
+    findings: persisted,
+    quality,
+    coverage,
+    verdict,
+    exportable: quality.exportable && verdict.complete,
+  };
+}
+
+/**
+ * The gate that generation and export must pass.
+ *
+ * It re-reads the snapshot rather than trusting a previously stored review,
+ * because the design can change after a review and a stale "pass" would let an
+ * unclosed loop into production. Throwing rather than returning a boolean keeps
+ * the check impossible to forget at a call site that ignores the result.
+ */
+export async function assertCurriculumDesignExportable(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<CurriculumDesignReview> {
+  const review = await reviewCurriculumTaskDesign(queryable, ownerId, taskId);
+  if (review.exportable) return review;
+
+  const parts: string[] = [];
+  if (!review.quality.exportable) {
+    parts.push(`design review failed at "${review.quality.firstBrokenLayer}"`);
+  }
+  if (!review.verdict.complete) {
+    parts.push(review.verdict.summary);
+  }
+  throw new CurriculumDesignValidationError(
+    `This course cannot be produced yet: ${parts.join('; ')}.`,
+  );
 }
