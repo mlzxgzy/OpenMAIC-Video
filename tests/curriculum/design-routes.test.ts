@@ -52,9 +52,14 @@ vi.mock('@/lib/server/curriculum/design-store', async (importOriginal) => {
 // test is the route's own contribution: that the gate runs before the start,
 // that the run input comes from the design rather than a template, and that a
 // refusal leaves no run behind.
-vi.mock('@/lib/server/generation/run/start', () => ({
-  startGenerationRun: mocks.startGenerationRun,
-}));
+//
+// `startRefusal` is the real one, not a stub: the route's job is to *call* it and
+// map what it returns, and a stub would only prove the route called a function
+// it also defined the behaviour of.
+vi.mock('@/lib/server/generation/run/start', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/generation/run/start')>();
+  return { ...actual, startGenerationRun: mocks.startGenerationRun };
+});
 
 import { GET as listTasks, POST as createTask } from '@/app/api/curriculum/design/tasks/route';
 import {
@@ -1360,6 +1365,51 @@ describe('design routes (PGlite)', () => {
       expect(response.status).toBe(400);
       expect(mocks.startGenerationRun).not.toHaveBeenCalled();
       expect(teach.id).toBeTruthy();
+    });
+
+    // The bug this covers was found on the live server, not by reasoning: the
+    // walk produced a lecture and a practice, then the exam came back
+    // `500 CURRICULUM_DESIGN_FAILED`. That was the owner's *third* run, and the
+    // active-run limit is 2 — so the exam was refused, not faulted, and the
+    // refusal was reported as a broken server. The walk's first two assertions
+    // passing is what made it look exam-specific.
+    it('maps a refused start to the refusal’s own status, not a 500', async () => {
+      const { teach } = await closableDesign();
+      // The real error class from the real module, thrown by the mocked starter,
+      // so `startRefusal` recognises it by `instanceof` exactly as it would in
+      // production. A plain `Error` with a similar message would not be mapped
+      // and this test would pass for the wrong reason.
+      const { ActiveRunLimitError } = await import('@/lib/server/generation/run/store');
+      mocks.startGenerationRun.mockRejectedValueOnce(new ActiveRunLimitError(2));
+
+      const response = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+
+      expect(response.status).toBe(429);
+      const body = await read<{ error: { code: string; message: string } }>(response);
+      expect(body.error.code).toBe('ACTIVE_RUN_LIMIT');
+      // The limit itself must survive: "429" alone tells the caller to wait
+      // forever, while the number tells them how many to finish first.
+      expect(body.error.message).toContain('2');
+      expect(body.error.code).not.toBe('CURRICULUM_DESIGN_FAILED');
+    });
+
+    it('answers 400 for a start refused by the caller, not by a limit', async () => {
+      const { teach } = await closableDesign();
+      const { ClassroomMaterialsRejectedError } = await import('@/lib/server/classroom-materials');
+      mocks.startGenerationRun.mockRejectedValueOnce(
+        new ClassroomMaterialsRejectedError('material not available'),
+      );
+
+      const response = await generateUnit(
+        post(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}/generate`),
+        childParams(task.id, 'unitId', teach.id),
+      );
+      expect(response.status).toBe(400);
+      const body = await read<{ error: { code: string } }>(response);
+      expect(body.error.code).toBe('INVALID_REQUEST');
     });
   });
 });

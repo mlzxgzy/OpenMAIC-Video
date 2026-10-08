@@ -36,11 +36,20 @@
  *    the only place that knows the produced stage. Writing the *run* id into
  *    `stage_id` here would put an identifier of the wrong kind into the column
  *    and make "does this item have a stage?" true before anything was produced.
+ *
+ * 5. **A refused start is not a 500.** One course is several items and each
+ *    generate starts one run, so producing a whole course reaches the owner's
+ *    active-run limit partway through — which is an ordinary, temporary state,
+ *    not a fault. The refusals are mapped through `startRefusal`, the same
+ *    mapping `POST /api/generation-runs` uses, so both ways of starting a run
+ *    answer 429 with the same body instead of one of them reporting a broken
+ *    server.
  */
 import type { NextRequest } from 'next/server';
 
 import { ownerJson } from '@/lib/server/agent-runtime/route-response';
 import { runDesignRoute } from '@/lib/server/curriculum/design-http';
+import { curriculumJsonError } from '@/lib/server/curriculum/http';
 import {
   assertCurriculumDesignExportable,
   getCurriculumUnit,
@@ -52,7 +61,7 @@ import {
   unitRoleRunModes,
   unitRoleSceneTypes,
 } from '@/lib/server/curriculum/unit-role-run';
-import { startGenerationRun } from '@/lib/server/generation/run/start';
+import { startGenerationRun, startRefusal } from '@/lib/server/generation/run/start';
 import { runSnapshot } from '@/lib/server/generation/run/store';
 
 export const runtime = 'nodejs';
@@ -111,23 +120,49 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     // 202 is a start, not a completion: the caller follows the returned run, and
     // the item's `stageId` appears when the run commits its first scene.
-    const run = await startGenerationRun(ctx.ownerId, {
-      requirement: describeDesignedItem({
-        title: unit.title,
-        role: unit.unitRole,
-        outcomes,
-        plannedPages: unit.deckDesign?.pages?.length ?? 0,
-      }),
-      materialIds: [],
-      sceneTypes: unitRoleSceneTypes(unit.unitRole),
-      interactive: modes.interactive,
-      taskEngine: modes.taskEngine,
-      deckDesign: deckDesignForRole(unit.unitRole, unit.deckDesign),
-      curriculumTaskId: ctx.taskId,
-      curriculumUnitId: unitId,
-      agents: { mode: 'auto' },
-      outlineReview: 'auto',
-    });
+    //
+    // A start can be refused, and the refusals are mapped rather than left to
+    // fall through to a 500. The one that bites in practice is the owner's
+    // active-run limit: a course has several items, each generate starts one
+    // run, so producing a whole course from one owner hits the limit on the
+    // third item — and "At most 2 courses may be in progress at once" arriving
+    // as `CURRICULUM_DESIGN_FAILED` reads as a broken server rather than a
+    // caller that should wait. `startRefusal` is the same mapping
+    // `POST /api/generation-runs` uses, so both ways of starting a run refuse
+    // identically.
+    let run;
+    try {
+      run = await startGenerationRun(ctx.ownerId, {
+        requirement: describeDesignedItem({
+          title: unit.title,
+          role: unit.unitRole,
+          outcomes,
+          plannedPages: unit.deckDesign?.pages?.length ?? 0,
+        }),
+        materialIds: [],
+        sceneTypes: unitRoleSceneTypes(unit.unitRole),
+        interactive: modes.interactive,
+        taskEngine: modes.taskEngine,
+        deckDesign: deckDesignForRole(unit.unitRole, unit.deckDesign),
+        curriculumTaskId: ctx.taskId,
+        curriculumUnitId: unitId,
+        agents: { mode: 'auto' },
+        outlineReview: 'auto',
+      });
+    } catch (error) {
+      const refusal = startRefusal(error);
+      if (refusal) {
+        const response = curriculumJsonError(
+          refusal.status,
+          refusal.code,
+          refusal.message,
+          ctx.headers,
+        );
+        for (const [key, value] of refusal.headers ?? []) response.headers.append(key, value);
+        return response;
+      }
+      throw error;
+    }
 
     return ownerJson(
       {
