@@ -33,6 +33,8 @@ import {
 
 interface ProgramPlanPanelProps {
   snapshot: CurriculumSnapshot;
+  /** Restrict the plan to courses inside this series. Empty means cross-series. */
+  seriesId?: string;
   onChanged: () => Promise<void> | void;
 }
 
@@ -95,7 +97,7 @@ interface ProgramPlanImportResponse {
   };
 }
 
-export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps) {
+export function ProgramPlanPanel({ snapshot, seriesId, onChanged }: ProgramPlanPanelProps) {
   const [programId, setProgramId] = useState('');
   const [versionId, setVersionId] = useState('');
   const [programForm, setProgramForm] = useState({ name: '', code: '', description: '' });
@@ -130,6 +132,14 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
   const [notice, setNotice] = useState<string | null>(null);
 
   const programs = snapshot.programs;
+  /** Courses the plan may reference: only this series' courses when scoped. */
+  const scopedCourses = useMemo(
+    () =>
+      seriesId
+        ? snapshot.courses.filter((course) => course.seriesId === seriesId)
+        : snapshot.courses,
+    [seriesId, snapshot.courses],
+  );
   const versions = useMemo(
     () => snapshot.programVersions.filter((version) => version.programId === programId),
     [programId, snapshot.programVersions],
@@ -142,6 +152,13 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
           (left, right) => left.sortOrder - right.sortOrder || left.code.localeCompare(right.code),
         ),
     [snapshot.graduationIndicators, versionId],
+  );
+  const scopedKnowledgePoints = useMemo(
+    () =>
+      seriesId
+        ? snapshot.knowledgePoints.filter((point) => point.seriesId === seriesId)
+        : snapshot.knowledgePoints,
+    [seriesId, snapshot.knowledgePoints],
   );
   const programCourses = useMemo(
     () =>
@@ -200,12 +217,12 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
             graduationIndicators: snapshot.graduationIndicators,
             programCourses: snapshot.programCourses,
             courseIndicatorSupports: snapshot.courseIndicatorSupports,
-            courses: snapshot.courses,
-            knowledgePoints: snapshot.knowledgePoints,
+            courses: scopedCourses,
+            knowledgePoints: scopedKnowledgePoints,
             courseKnowledgePoints: snapshot.courseKnowledgePoints,
           })
         : null,
-    [snapshot, versionId],
+    [scopedCourses, scopedKnowledgePoints, snapshot, versionId],
   );
 
   const run = async (key: string, action: () => Promise<void>) => {
@@ -276,7 +293,7 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
   const addProgramCourse = () =>
     run('program-course', async () => {
       if (!versionId) return;
-      const selectedCourse = snapshot.courses.find((course) => course.id === courseForm.courseId);
+      const selectedCourse = scopedCourses.find((course) => course.id === courseForm.courseId);
       const title = courseForm.title.trim() || selectedCourse?.title || '';
       if (!title) return;
       await requestJson('/api/curriculum/program-courses', {
@@ -394,7 +411,7 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
     if (file) importProgramPlan(file);
   };
 
-  const selectedCourse = snapshot.courses.find((course) => course.id === courseForm.courseId);
+  const selectedCourse = scopedCourses.find((course) => course.id === courseForm.courseId);
 
   return (
     <Card>
@@ -642,14 +659,13 @@ export function ProgramPlanPanel({ snapshot, onChanged }: ProgramPlanPanelProps)
                     ...courseForm,
                     courseId: event.target.value,
                     title:
-                      snapshot.courses.find((course) => course.id === event.target.value)?.title ??
-                      '',
+                      scopedCourses.find((course) => course.id === event.target.value)?.title ?? '',
                   })
                 }
                 disabled={!versionId}
               >
                 <option value="">仅建计划占位（暂不关联课程）</option>
-                {snapshot.courses.map((course) => (
+                {scopedCourses.map((course) => (
                   <option key={course.id} value={course.id}>
                     {course.code ? `${course.code} · ` : ''}
                     {course.title}

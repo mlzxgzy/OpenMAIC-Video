@@ -355,6 +355,45 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
     [visibleCourses],
   );
 
+  /** Relations whose two endpoints both belong to the visible course set. */
+  const visibleRelations = useMemo(
+    () =>
+      selectedSeriesId
+        ? snapshot.relations.filter(
+            (relation) =>
+              visibleCourseIds.has(relation.sourceCourseId) &&
+              visibleCourseIds.has(relation.targetCourseId),
+          )
+        : snapshot.relations,
+    [selectedSeriesId, snapshot.relations, visibleCourseIds],
+  );
+
+  /**
+   * Stages this series can reach: a course link, a generation job or an export
+   * job. Without this the series workspace would still surface every stage the
+   * owner ever generated.
+   */
+  const scopedStages = useMemo(() => {
+    if (!selectedSeriesId) return stages;
+    const stageIds = new Set<string>();
+    for (const course of visibleCourses) if (course.stageId) stageIds.add(course.stageId);
+    for (const job of snapshot.generationJobs) {
+      if (job.stageId && visibleCourseIds.has(job.courseId)) stageIds.add(job.stageId);
+    }
+    for (const job of snapshot.exportJobs) {
+      if (job.stageId && job.courseId && visibleCourseIds.has(job.courseId))
+        stageIds.add(job.stageId);
+    }
+    return stages.filter((stage) => stageIds.has(stage.id));
+  }, [
+    selectedSeriesId,
+    snapshot.exportJobs,
+    snapshot.generationJobs,
+    stages,
+    visibleCourseIds,
+    visibleCourses,
+  ]);
+
   const scopedCourseKnowledgePoints = useMemo(
     () => snapshot.courseKnowledgePoints.filter((link) => visibleCourseIds.has(link.courseId)),
     [snapshot.courseKnowledgePoints, visibleCourseIds],
@@ -575,10 +614,12 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
     }
   };
 
-  const currentSeriesName =
-    snapshot.series.find((series) => series.id === selectedSeriesId)?.name ??
-    seriesId ??
-    selectedSeriesId;
+  const currentSeries = useMemo(
+    () => snapshot.series.find((series) => series.id === selectedSeriesId) ?? null,
+    [selectedSeriesId, snapshot.series],
+  );
+  const currentSeriesName = currentSeries?.name ?? seriesId ?? selectedSeriesId;
+  const currentSeriesDescription = currentSeries?.description ?? '暂无描述';
 
   if (isSeriesScoped && loaded && !snapshot.series.some((series) => series.id === seriesId)) {
     return (
@@ -632,12 +673,14 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/curriculum/series">
-              <Library />
-              {isSeriesScoped ? '全部系列' : '课程序列'}
-            </Link>
-          </Button>
+          {isSeriesScoped ? null : (
+            <Button variant="outline" asChild>
+              <Link href="/curriculum/series">
+                <Library />
+                课程序列
+              </Link>
+            </Button>
+          )}
           <Button variant="outline" onClick={() => router.push('/')}>
             <BookOpen />
             去单课生成
@@ -707,33 +750,48 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
             {isSeriesScoped ? (
               <Card size="sm">
                 <CardHeader>
-                  <CardTitle>当前系列</CardTitle>
+                  <CardTitle>本序列进度</CardTitle>
                   <CardDescription>
-                    本页的课程、知识点和生成任务都限定在这个序列内。
+                    下面所有课程、知识点、培养方案和生成任务都只属于当前序列。
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-3">
                   <div className="bg-muted/40 rounded-lg border p-3">
                     <div className="font-medium">{currentSeriesName}</div>
                     <p className="text-muted-foreground mt-1 line-clamp-3 text-xs">
-                      {snapshot.series.find((series) => series.id === seriesId)?.description ||
-                        '暂无描述'}
+                      {currentSeriesDescription}
                     </p>
-                    <div className="text-muted-foreground mt-2 text-xs">
-                      {snapshot.courses.filter((course) => course.seriesId === seriesId).length}{' '}
-                      门课程
-                    </div>
+                    <dl className="text-muted-foreground mt-3 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <dt>课程</dt>
+                        <dd className="text-foreground font-medium tabular-nums">
+                          {visibleCourses.length}
+                        </dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <dt>知识点</dt>
+                        <dd className="text-foreground font-medium tabular-nums">
+                          {scopedKnowledgePoints.length}
+                        </dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <dt>已生成课堂</dt>
+                        <dd className="text-foreground font-medium tabular-nums">
+                          {scopedGenerationJobs.filter((job) => job.stageId).length}
+                        </dd>
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        <dt>已导出视频</dt>
+                        <dd className="text-foreground font-medium tabular-nums">
+                          {scopedExportJobs.filter((job) => job.status === 'succeeded').length}
+                        </dd>
+                      </div>
+                    </dl>
                   </div>
                   <Button asChild variant="outline" size="sm">
                     <Link href="/curriculum/series">
                       <Library />
-                      切换 / 管理系列
-                    </Link>
-                  </Button>
-                  <Button asChild variant="ghost" size="sm">
-                    <Link href="/curriculum">
-                      <BookOpen />
-                      查看全部课程
+                      返回课程序列
                     </Link>
                   </Button>
                 </CardContent>
@@ -812,25 +870,19 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
           </aside>
 
           <main className="flex flex-col gap-6">
-            {selectedSeriesId ? (
+            {!isSeriesScoped && selectedSeriesId ? (
               <div className="border-border bg-muted/40 flex flex-wrap items-center justify-between gap-2 rounded-lg border px-3 py-2 text-sm">
                 <span>
                   当前系列：<strong>{currentSeriesName}</strong>
                 </span>
-                {isSeriesScoped ? (
-                  <Button asChild variant="link" size="sm" className="h-auto p-0">
-                    <Link href="/curriculum/series">切换系列</Link>
-                  </Button>
-                ) : (
-                  <Button
-                    variant="link"
-                    size="sm"
-                    onClick={() => handleSeriesChange('')}
-                    className="h-auto p-0"
-                  >
-                    查看全部系列
-                  </Button>
-                )}
+                <Button
+                  variant="link"
+                  size="sm"
+                  onClick={() => handleSeriesChange('')}
+                  className="h-auto p-0"
+                >
+                  查看全部系列
+                </Button>
               </div>
             ) : null}
             <TabsContent
@@ -889,7 +941,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
                     }
                   >
                     <option value="">不关联课堂</option>
-                    {stages.map((stage) => (
+                    {scopedStages.map((stage) => (
                       <option key={stage.id} value={stage.id}>
                         {stage.name} ({stage.id})
                       </option>
@@ -1052,7 +1104,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
                         onChange={(event) => setRelationSource(event.target.value)}
                       >
                         <option value="">源课程</option>
-                        {snapshot.courses.map((course) => (
+                        {visibleCourses.map((course) => (
                           <option key={course.id} value={course.id}>
                             {course.title}
                           </option>
@@ -1064,7 +1116,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
                         onChange={(event) => setRelationTarget(event.target.value)}
                       >
                         <option value="">目标课程</option>
-                        {snapshot.courses.map((course) => (
+                        {visibleCourses.map((course) => (
                           <option key={course.id} value={course.id}>
                             {course.title}
                           </option>
@@ -1102,7 +1154,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
                       新建/更新关系
                     </Button>
                     <div className="flex flex-col gap-2">
-                      {snapshot.relations.map((relation) => (
+                      {visibleRelations.map((relation) => (
                         <div
                           key={relation.id}
                           className="border-border flex items-center justify-between gap-2 rounded-md border px-3 py-2 text-xs"
@@ -1155,17 +1207,17 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
               <KnowledgePointsPanel
                 seriesId={selectedSeriesId}
                 courses={visibleCourses}
-                knowledgePoints={snapshot.knowledgePoints}
-                courseKnowledgePoints={snapshot.courseKnowledgePoints}
+                knowledgePoints={scopedKnowledgePoints}
+                courseKnowledgePoints={scopedCourseKnowledgePoints}
                 onChanged={load}
               />
 
               <KnowledgeRelationsPanel
                 seriesId={selectedSeriesId}
-                courses={snapshot.courses}
-                knowledgePoints={snapshot.knowledgePoints}
+                courses={visibleCourses}
+                knowledgePoints={scopedKnowledgePoints}
                 knowledgePointRelations={snapshot.knowledgePointRelations}
-                courseKnowledgePoints={snapshot.courseKnowledgePoints}
+                courseKnowledgePoints={scopedCourseKnowledgePoints}
                 onChanged={load}
               />
             </TabsContent>
@@ -1176,7 +1228,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
               className={tabContentClass('curriculum-program')}
               forceMount
             >
-              <ProgramPlanPanel snapshot={snapshot} onChanged={load} />
+              <ProgramPlanPanel snapshot={snapshot} seriesId={selectedSeriesId} onChanged={load} />
               <ProgramDiffPanel snapshot={snapshot} onChanged={load} />
             </TabsContent>
 
@@ -1188,10 +1240,10 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
             >
               <CourseAssemblerPanel
                 seriesId={selectedSeriesId}
-                courses={snapshot.courses}
-                knowledgePoints={snapshot.knowledgePoints}
-                courseKnowledgePoints={snapshot.courseKnowledgePoints}
-                generationJobs={snapshot.generationJobs}
+                courses={visibleCourses}
+                knowledgePoints={scopedKnowledgePoints}
+                courseKnowledgePoints={scopedCourseKnowledgePoints}
+                generationJobs={scopedGenerationJobs}
                 onChanged={load}
               />
             </TabsContent>
@@ -1204,8 +1256,8 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
             >
               <BatchQueuePanel
                 seriesId={selectedSeriesId}
-                courses={snapshot.courses}
-                courseKnowledgePoints={snapshot.courseKnowledgePoints}
+                courses={visibleCourses}
+                courseKnowledgePoints={scopedCourseKnowledgePoints}
                 batches={snapshot.batches}
                 batchItems={snapshot.batchItems}
                 onChanged={load}
@@ -1220,19 +1272,28 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
             >
               <BatchExportPanel
                 seriesId={selectedSeriesId}
-                courses={snapshot.courses}
-                batchItems={snapshot.batchItems}
-                exportJobs={snapshot.exportJobs}
+                courses={visibleCourses}
+                batchItems={scopedBatchItems}
+                exportJobs={scopedExportJobs}
                 onChanged={load}
               />
 
               <Card size="sm">
                 <CardHeader>
-                  <CardTitle>已有 stage</CardTitle>
-                  <CardDescription>生成出来的课堂，可被课程台账关联。</CardDescription>
+                  <CardTitle>{isSeriesScoped ? '本序列的课堂' : '已有 stage'}</CardTitle>
+                  <CardDescription>
+                    {isSeriesScoped
+                      ? '本序列课程已经生成出来的课堂，可被课程台账关联。'
+                      : '生成出来的课堂，可被课程台账关联。'}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-2 md:grid-cols-2">
-                  {stages.map((stage) => (
+                  {scopedStages.length === 0 ? (
+                    <p className="text-muted-foreground py-6 text-center text-sm md:col-span-2">
+                      {isSeriesScoped ? '本序列还没有关联任何课堂' : '还没有生成课堂'}
+                    </p>
+                  ) : null}
+                  {scopedStages.map((stage) => (
                     <div
                       key={stage.id}
                       className="border-border flex items-start justify-between gap-3 rounded-md border px-3 py-2 text-xs"
