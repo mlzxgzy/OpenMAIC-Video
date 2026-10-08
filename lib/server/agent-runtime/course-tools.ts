@@ -283,6 +283,13 @@ interface CoursePromptBlocks {
   availableSkills?: string;
   /** Multi-stage workflow guidance (explicit stage ids and folders). */
   curriculum?: string;
+  /**
+   * Outcome-first course design guidance (the design order and its two
+   * hard refusals). Present whenever the design toolset is registered, which
+   * is unconditionally: an agent asked to "design a course" must not have to
+   * discover the layer that holds its decisions.
+   */
+  design?: string;
   /** Present exactly when the web_search tool is registered. */
   search?: string;
   /** Policy boundary for content fetched from session-observed URLs. */
@@ -312,6 +319,7 @@ export function courseSystemPrompt(blocks: CoursePromptBlocks): string {
   const parts = [COURSE_SYSTEM_PROMPT];
   if (blocks.availableSkills) parts.push('', blocks.availableSkills);
   if (blocks.curriculum) parts.push('', blocks.curriculum);
+  if (blocks.design) parts.push('', blocks.design);
   if (blocks.search) parts.push('', blocks.search);
   if (blocks.dslTools) parts.push('', blocks.dslTools);
   if (blocks.fetch) parts.push('', blocks.fetch);

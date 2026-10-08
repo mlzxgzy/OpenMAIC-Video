@@ -1,7 +1,7 @@
 ---
 name: stage-design
 title: "课堂设计"
-description: The baseline method for building ONE stage — a single classroom — with this runtime. Covers how the plan is settled in conversation, the order the generation tools are called in, how the classroom roster is written, when narration has to be re-synthesized, and what must be true before a stage is called done. Load this before generating or rebuilding any stage from scratch, whatever its subject; it is the floor the topic skills build on, not an alternative to them.
+description: The baseline method for building ONE stage — a single classroom — with this runtime, outside any course-design plan. Covers how the plan is settled in conversation, the order the generation tools are called in, how the classroom roster is written, when narration has to be re-synthesized, and what must be true before a stage is called done. Load this before generating or rebuilding any stage from scratch, whatever its subject; it is the floor the topic skills build on, not an alternative to them. Do NOT use it to build a course that has learning outcomes to verify — that path is outcome-first (course-analysis onward).
 ---
 
 # Building one stage
@@ -17,6 +17,31 @@ same under every topic skill. Read this one first, then the topic skill.
 
 Nothing here applies to a stage that already has pages. A stage with persisted
 pages is edited, not built (see `pro-editing`).
+
+## When NOT to use this skill
+
+This skill builds a classroom from a plan the conversation settles. It does not
+design a course.
+
+**If the request involves a course that has to prove anything** — a cohort, a
+curriculum, an outcome that has to be examined, a syllabus to turn into
+lessons, "we need a training course" — that is the outcome-first path:
+
+```text
+course-analysis → outcome-design → knowledge-decomposition → dependency-builder
+  → outline-designer → teaching-designer → deck-designer
+  → practice-designer → exam-designer → content-producer → course-auditor
+```
+
+Start at `course-analysis`. `content-producer` then builds each stage from a
+deck design whose pages already say what they must achieve, and
+`assert_course_design_exportable` gates the whole thing on the teach–practice–
+assess loop actually closing.
+
+The tell that you are in the wrong skill: the deliverable is a **promise about
+what someone can do afterwards**. A promise needs evidence, and evidence is
+what this skill has no way to produce. If the user just wants a lesson that
+explains something, stay here.
 
 ## The build sequence
 
@@ -99,3 +124,10 @@ status. Only then is the stage finished.
 
 When every settled page is persisted, say so to the user in one or two
 sentences.
+
+## Related skills
+
+`course-analysis` … `course-auditor` — the outcome-first path, for a course
+whose outcomes have to be evidenced and examined. `content-producer` is its
+build half, and it consumes a `deckDesign` rather than planning pages in
+conversation.

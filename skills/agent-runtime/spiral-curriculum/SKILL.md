@@ -54,7 +54,7 @@ description: "Design a multi-stage OpenMAIC course series around a small concept
 - 每个核心概念写成一句可迁移的理解，而不是名词；
 - 一个系列通常选择 3–6 个核心概念，避免过多导致每课浅尝辄止；
 - 每个概念同时声明初始理解目标和最终理解目标，作为 Learner Progression 的两个端点；
-- 可结合 `/understanding-by-design` 确定大概念、基本问题和表现性证据，再用本 Skill 安排跨课升阶重访。
+- 可结合 `outcome-design`（references/understanding-by-design.md）确定大概念与表现性证据，再用本 Skill 安排跨课升阶重访。
 
 ## Spiral Map
 
@@ -173,6 +173,6 @@ description: "Design a multi-stage OpenMAIC course series around a small concept
 
 ## 与其他教学法的关系
 
-- `/understanding-by-design` 可先确定大概念、基本问题和表现性评估，本 Skill 负责让这些概念跨课升阶重访；
+- `outcome-design`（references/understanding-by-design.md）可先确定大概念与表现性评估，本 Skill 负责让这些概念跨课升阶重访；
 - `/feynman-learning` 在一节课堂内推动解释反复外化和重建，本 Skill 在整个系列中安排概念反复回来；
 - `/learning-to-learn` 与 `/social-emotional-learning` 是平行目标，只有服务当前概念重访时才嵌入，不另起课程主线。

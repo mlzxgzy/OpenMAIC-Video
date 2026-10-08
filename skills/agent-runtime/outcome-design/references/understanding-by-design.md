@@ -1,14 +1,39 @@
----
-name: understanding-by-design
-title: "理解本位设计（UbD）"
-description: "Use Understanding by Design (UbD) to plan one OpenMAIC classroom or a course series around transferable conceptual understanding. Use when the user wants backward design, enduring understandings, essential questions, GRASPS performance evidence, WHERETO learning experiences, or a concept-centered lesson rather than a list of facts. Do not use for visual style cloning, teacher-style imitation, or direct PPT import."
----
+# 理解本位设计（UbD）— 参考材料
 
-# 理解本位设计（UbD）
+> **这是一份参考文档，不是流程 Skill。** 它不定义阶段，不持有阶段锁，也不
+> 直接产出数据。它是 `outcome-design` 与 `teaching-designer` 在需要时调用的
+> 设计语言。
+
+## 为什么被降级
+
+UbD 的核心是**持久理解（Enduring Understanding）**：学生离开课堂后仍能
+迁移的思想。它是一句高度抽象的陈述，没有通过/不通过的判定条件。
+
+系统的学习目标必须可验证——数据库拒绝没有 `expectedBehavior` 和
+`minCriteria` 的目标被标记为可验证，也拒绝无法追溯到目标的考试题。所以
+「持久理解」**不能**作为目标记录存在：它无法进入证据链，也无法判断一名
+学员是否达成。
+
+这不等于 UbD 的方法没有价值。它提供的是**另外两样东西**，在系统的正确
+位置上有用：
+
+| UbD 的贡献 | 在系统里的位置 |
+|---|---|
+| 持久理解、基本问题 | `teaching-designer` 的输入——决定讲什么、怎么组织 |
+| WHERETO | `teaching-designer` 决定 sequence 时的检查表 |
+| 表现性任务（GRASPS） | `practice-designer` / `exam-designer` 的任务设计参考 |
+| 页面节奏建议 | `deck-designer` 的 mode 选择参考 |
+
+**能进系统的**：行为、标准、评分条件。
+**不能进系统的**：持久理解、基本问题——它们是设计的**输入**，不是设计的
+**产物**。
+
+使用方式：读这份文档，把有用的部分带进对应阶段的产物里。不要试图把
+「持久理解」翻译成一个 objective，然后声称翻译是等价的。
+
+---
 
 用 UbD 逆向设计组织一节课或一组系列课：先明确学生最终要理解什么、如何证明真正理解，再设计学习经历。
-
-`stage-design` 仍然约束新课堂的持久化顺序；本 Skill 约束教学设计与每页 brief 的内容。已有页面的课堂按 `pro-editing` 做局部编辑，不要重建课堂。
 
 ## 先确定设计范围
 
@@ -68,3 +93,9 @@ description: "Use Understanding by Design (UbD) to plan one OpenMAIC classroom o
 ## 边界
 
 不用于品牌风格复制、名师讲课风格模仿、纯排版克隆或 PPT 直接导入；这些请求分别使用对应的 style、teacher-style 或 `pptx-import` 流程。
+
+也不用于**产出**课程设计记录。当课程走 outcome-first 流程时，本文档的内容
+分别进入 `outcome-design`（作为结果_framing 的参考）、`teaching-designer`
+（sequence 的 WHERETO 检查）和 `deck-designer`（mode 与页面节奏）。持久
+理解与基本问题**不写入**任何 objective 字段——它们没有判定条件，写进去
+就是一条无法验证的目标。

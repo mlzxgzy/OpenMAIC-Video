@@ -307,24 +307,23 @@ describe('shipped skill constraints', () => {
     const feynman = loaded.find((skill) => skill.id === 'feynman-learning');
     const spiral = loaded.find((skill) => skill.id === 'spiral-curriculum');
 
-    expect(ubd).toMatchObject({
-      title: '理解本位设计（UbD）',
-      source: 'builtin',
-    });
-    expect(ubd?.content).toContain('GRASPS');
-    expect(ubd?.content).toContain('WHERETO');
+    // UbD is deliberately NOT here any more: it was demoted to a reference
+    // document under outcome-design, because an enduring understanding has no
+    // pass/fail condition and cannot be the outcome record the database
+    // enforces. The other teaching methods below stay skills.
+    expect(ubd).toBeUndefined();
 
     expect(sel).toMatchObject({
       title: '社会情感学习（SEL）',
       source: 'builtin',
     });
-    expect(sel?.content).toContain('/understanding-by-design');
+    expect(sel?.content).toContain('outcome-design');
 
     expect(learning).toMatchObject({
       title: '学会学习（Learning to Learn）',
       source: 'builtin',
     });
-    expect(learning?.content).toContain('/understanding-by-design');
+    expect(learning?.content).toContain('outcome-design');
     expect(learning?.content).toContain('/social-emotional-learning');
 
     expect(feynman).toMatchObject({

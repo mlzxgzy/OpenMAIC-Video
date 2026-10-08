@@ -8,7 +8,7 @@ description: "Infuse learning strategies and metacognition into a concept-center
 
 把学习策略与元认知作为**平行目标**嵌入概念主课：不替换学科概念主线，而是改变学生如何经历、检查和巩固这些概念。
 
-`stage-design` 仍然约束课堂的创建和持久化流程。如果同时使用 `/understanding-by-design`，先确定大概念、基本问题与表现性任务，再嵌入学习策略；如果同时使用 `/social-emotional-learning`，让两类平行目标服务同一概念任务，不要各自另起一条课程主线。
+`stage-design` 仍然约束课堂的创建和持久化流程。如果同时使用 `outcome-design`（其 references/understanding-by-design.md 提供大概念、基本问题与表现性任务的设计语言），先确定大概念与表现性任务，再嵌入学习策略；如果同时使用 `/social-emotional-learning`，让两类平行目标服务同一概念任务，不要各自另起一条课程主线。
 
 ## 先声明平行目标
 

@@ -8,7 +8,7 @@ description: "Infuse social-emotional learning (SEL) into a concept-centered Ope
 
 把社会情感学习作为**平行目标**嵌入概念主课：不替换用户真正关心的学科概念，而是改变学生如何经历它。
 
-`stage-design` 仍然约束课堂的创建和持久化流程。如果同时使用 `/understanding-by-design`，先确定大概念、基本问题与表现性任务，再在页面计划中嵌入 SEL。每一个 SEL 设计都要能回答“它在服务哪个概念理解”；答不出就删除。
+`stage-design` 仍然约束课堂的创建和持久化流程。如果同时使用 `outcome-design`（其 references/understanding-by-design.md 提供大概念、基本问题与表现性任务的设计语言），先确定大概念与表现性任务，再在页面计划中嵌入 SEL。每一个 SEL 设计都要能回答“它在服务哪个概念理解”；答不出就删除。
 
 ## 先声明平行目标
 

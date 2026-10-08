@@ -42,6 +42,7 @@ import { resolveServerGenerationCapabilities } from '@/lib/server/generation-cap
 import { isNonRetryableHostFailure } from '@/lib/server/generation-run-hooks/runtime';
 import { sortDocumentImagesForVision } from '@/lib/document/bundle';
 import { resolveVocationalActive } from '@/lib/config/feature-flags';
+import { buildDeckDesignBlock } from './deck-design-contract';
 
 import {
   StepAbortedError,
@@ -541,17 +542,25 @@ async function prepareOutline(
     throw new StepRefusal<OutlineRefusal>('prompt-unavailable', 'Prompt template not found');
   }
 
+  // The course-design path arrives with a page plan instead of a paragraph of
+  // intent. It is appended to the system prompt — not substituted for the
+  // requirement — so the shared template's byte-identical behaviour on the
+  // ad-hoc path is untouched, and the plan constrains rather than replaces.
+  const deckDesignBlock = buildDeckDesignBlock(requirements.deckDesign);
   // The learner narrowed the scene types in the composer. Tell the model up
   // front so it spends no tokens planning a type that is dropped anyway. The
   // filter in streamOutlines still drops whatever slips through, so this only
   // has to be persuasive, not airtight.
   const sceneTypes = requirements.sceneTypes;
+  const constraintBlocks = [
+    ...(sceneTypes && sceneTypes.length < ALL_SCENE_TYPES.length
+      ? [sceneTypeConstraint(sceneTypes)]
+      : []),
+    ...(deckDesignBlock ? [deckDesignBlock] : []),
+  ];
   const promptsForTypes =
-    sceneTypes && sceneTypes.length < ALL_SCENE_TYPES.length
-      ? {
-          system: `${prompts.system}\n\n${sceneTypeConstraint(sceneTypes)}`,
-          user: prompts.user,
-        }
+    constraintBlocks.length > 0
+      ? { system: `${prompts.system}\n\n${constraintBlocks.join('\n\n')}`, user: prompts.user }
       : prompts;
 
   ctx.log.info(

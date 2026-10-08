@@ -87,6 +87,45 @@ export interface UploadedDocument {
 }
 
 /**
+ * One planned slide, as produced by the course-design `deck_designer` phase.
+ *
+ * The four required fields are what make a page a page rather than a title:
+ * `goal` says what the learner must come away able to do, `coreInfo` says the
+ * one thing the page carries, and `mode` says how to present it. A plan with
+ * only titles is not a deck design, and the outline step treats a missing
+ * `goal` as a reason to regenerate the page rather than to render it as-is.
+ */
+export interface DeckDesignPage {
+  order: number;
+  title: string;
+  /** What this page must make the learner understand or be able to do. */
+  goal: string;
+  /** The single idea this page carries. */
+  coreInfo: string;
+  mode: 'case' | 'explain' | 'demo' | 'compare' | 'summary' | 'diagram';
+  /** Specific words or steps that must land. */
+  emphasis?: string[];
+  /** What diagram the page needs, described so a generator can draw it. */
+  visual?: string;
+  /** The snippet the page must show, verbatim. */
+  code?: string;
+}
+
+/**
+ * The structured page plan handed from course design to slide generation.
+ *
+ * This is the strong-typed contract that replaces a free-form `requirement`
+ * paragraph for the course-design path: teaching intent arrives as data the
+ * outline step can plan against page by page, rather than as prose it has to
+ * re-interpret. `requirement` remains for the ad-hoc path, where there is no
+ * deck design to consume.
+ */
+export interface DeckDesign {
+  estPages?: number;
+  pages: DeckDesignPage[];
+}
+
+/**
  * Simplified user requirements for course generation
  * All details (topic, duration, style, etc.) should be included in the requirement text
  */
@@ -102,6 +141,20 @@ export interface UserRequirements {
    * outline that arrives with a type outside this list is dropped.
    */
   sceneTypes?: SceneType[];
+  /**
+   * The page plan from course design's `deck_designer` phase. When present it
+   * is authoritative over `requirement`: the outline follows these pages
+   * rather than inventing a structure from prose.
+   */
+  deckDesign?: DeckDesign;
+  /**
+   * The design task this generation belongs to, for traceability back to the
+   * outcomes the content serves. Informational — it does not change what is
+   * generated, but it is what lets a stage be traced back to a promise.
+   */
+  curriculumTaskId?: string;
+  /** The item (chapter/lesson) within the task that this stage realizes. */
+  curriculumUnitId?: string;
 }
 
 // ==================== Stage 1 Output: Scene Outlines (Simplified) ====================

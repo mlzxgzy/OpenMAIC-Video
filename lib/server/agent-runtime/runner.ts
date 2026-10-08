@@ -41,6 +41,11 @@ import {
   probeStageAccess,
 } from './curriculum-tools';
 import {
+  buildCurriculumDesignTools,
+  CURRICULUM_DESIGN_ALLOWLIST,
+  CURRICULUM_DESIGN_TOOLS_PROMPT,
+} from './design-tools';
+import {
   buildFetchUrlTool,
   fetchPromptBlock,
   untrustedContentPolicyPromptBlock,
@@ -1458,6 +1463,14 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       onCheckpoint: (info) => emit(LIFECYCLE.checkpoint, info),
       courseGenerations,
     });
+    // The outcome-first design toolset: the layer UNDERNEATH classrooms. It is
+    // registered unconditionally (reference semantics) for the same reason the
+    // material tools are — an agent asked to "design a course" must reach the
+    // model that holds its decisions without a capability probe, and a tool
+    // that appears only once a design already exists cannot be the one that
+    // creates it. The provider is resolved lazily on first call, so a
+    // deployment with no curriculum schema still starts the run normally.
+    const curriculumDesignTools = buildCurriculumDesignTools({ ownerId: meta.ownerId });
     // Scene preview is registered beside the course toolset with its own
     // owner probe (reference semantics) — it is not wrapped by the generic
     // stage authorization of the course toolset, and it refuses a foreign
@@ -1538,6 +1551,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         [buildFetchUrlTool({ sessionId: id, ownerId: meta.ownerId })],
         dslTools,
         curriculumTools,
+        curriculumDesignTools,
         scenePreviewTools,
         materialTools,
         rosterTools,
@@ -1553,6 +1567,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
       systemPrompt: buildRunnerCoursePrompt({
         availableSkills: availableSkillsPromptBlock(installedSkills),
         curriculum: CURRICULUM_TOOLS_PROMPT,
+        design: CURRICULUM_DESIGN_TOOLS_PROMPT,
         ...(search ? { search: searchPromptBlock() } : {}),
         fetch: fetchPromptBlock(),
         untrustedContent: untrustedContentPolicyPromptBlock(),
@@ -1572,6 +1587,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...dslTools.map((tool) => tool.name),
         ...scenePreviewTools.map((tool) => tool.name),
         ...CURRICULUM_ALLOWLIST,
+        ...CURRICULUM_DESIGN_ALLOWLIST,
         ...ROSTER_TOOL_NAMES,
         ...PERSONAL_HISTORY_TOOL_NAMES,
         // register_voice is registered only when the deployment has a voice
