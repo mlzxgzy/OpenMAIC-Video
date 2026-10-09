@@ -203,4 +203,38 @@ describe('parseCourseAssemblyInput', () => {
       message: 'knowledgePoints must contain at least one item',
     });
   });
+
+  it('takes an explicit null hours as "estimate it", which is what the form offers', () => {
+    // The assembler form sends `hours: null` when the field is left blank, and its
+    // placeholder promises 留空按知识点数量估算. Rejecting the null turned the
+    // documented blank-field path into a 400 that said null was acceptable.
+    const parsed = parseCourseAssemblyInput({
+      title: '按知识点估时',
+      hours: null,
+      knowledgePoints: [{ knowledgePointId: 'kp-a' }],
+    });
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.value.hours).toBeUndefined();
+  });
+
+  it('still refuses an hours that is a number but not a usable one', () => {
+    // Zero reaches the positive-number rule; a negative one is already stopped by
+    // the shared number reader. Both must stay refused — accepting null must not
+    // turn into accepting anything.
+    const cases: [number, string][] = [
+      [0, 'hours must be a positive number or null'],
+      [-2, 'hours must be a non-negative number or null'],
+    ];
+    for (const [hours, message] of cases) {
+      const parsed = parseCourseAssemblyInput({
+        title: '零学时',
+        hours,
+        knowledgePoints: [{ knowledgePointId: 'kp-a' }],
+      });
+      expect(parsed.ok).toBe(false);
+      if (parsed.ok) return;
+      expect(parsed.message).toBe(message);
+    }
+  });
 });

@@ -876,7 +876,10 @@ describe('design routes (PGlite)', () => {
       expect(body.report.counts.assessed).toBe(0);
       expect(body.report.objectives[0]!.teaches).toBe(true);
       expect(body.verdict.complete).toBe(false);
-      expect(body.verdict.summary).toContain('1 outcome');
+      // The summary names the fraction, which is what makes a partly covered
+      // design legible. The sentence around it is Chinese because a person reads
+      // it: it is the matrix header line and one of the export-gate blockers.
+      expect(body.verdict.summary).toContain('0/1');
     });
   });
 

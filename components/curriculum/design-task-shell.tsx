@@ -18,9 +18,10 @@
  * happens.
  */
 
-import { useCallback, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+import { ArrowRight, Loader2 } from 'lucide-react';
 
+import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DesignHeatmap } from '@/components/curriculum/design-heatmap';
 import { DesignWorkbench } from '@/components/curriculum/design-workbench';
@@ -30,6 +31,24 @@ export interface DesignTaskShellProps {
   taskId: string;
   /** The phase at first render, so the screen is correct before any fetch. */
   initialPhase?: CurriculumDesignPhase | null;
+}
+
+const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
+  task: '课程任务',
+  outcomes: '学习成果',
+  graph: '依赖图',
+  outline: '课程大纲',
+  teaching: '教学设计',
+  assessment: '评价设计',
+  review: '课程审核',
+};
+
+/** What `GET /phase` answers: where the design is, and what is still missing. */
+interface PhaseState {
+  phase: CurriculumDesignPhase;
+  nextPhase: CurriculumDesignPhase | null;
+  gaps: string[];
+  readyToAdvance: boolean;
 }
 
 /**
@@ -54,36 +73,119 @@ export interface DesignTaskShellProps {
 export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) {
   const [phase, setPhase] = useState<CurriculumDesignPhase | null>(initialPhase ?? null);
   const [version, setVersion] = useState(0);
+  const [phaseState, setPhaseState] = useState<PhaseState | null>(null);
+  const [advancing, setAdvancing] = useState(false);
+  const [advanceError, setAdvanceError] = useState<string | null>(null);
 
   /**
-   * Bump both halves, then re-read the phase.
+   * Read where the design is, and what the next phase still needs.
+   *
+   * This used to live inside the matrix, which is why the only control that
+   * moves the design forward sat on the tab an author is *not* working in: every
+   * phase boundary meant switching to the matrix, advancing, and switching back.
+   * The state is read here now and the control is rendered above both tabs, so
+   * the button is reachable from wherever the work is happening.
    *
    * A failed phase read is deliberately silent. Every write in either half
    * already reports its own error, and leaving the gate on the last known phase
    * is the safe direction to fail: the store would refuse the write anyway, and
    * a wrong "you may create this" would be worse than a stale one.
    */
-  const reload = useCallback(async () => {
-    setVersion((current) => current + 1);
+  const readPhase = useCallback(async () => {
     try {
       const response = await fetch(`/api/curriculum/design/tasks/${taskId}/phase`, {
         credentials: 'same-origin',
         cache: 'no-store',
       });
       if (!response.ok) return;
-      const payload = (await response.json()) as { phase?: CurriculumDesignPhase };
-      if (payload.phase) setPhase(payload.phase);
+      const payload = (await response.json()) as Partial<PhaseState>;
+      if (!payload.phase) return;
+      setPhase(payload.phase);
+      setPhaseState({
+        phase: payload.phase,
+        nextPhase: payload.nextPhase ?? null,
+        gaps: payload.gaps ?? [],
+        readyToAdvance: payload.readyToAdvance === true,
+      });
     } catch {
       // A navigation or an offline moment: keep the last known phase.
     }
   }, [taskId]);
 
+  useEffect(() => {
+    void readPhase();
+  }, [readPhase]);
+
+  /** Bump both halves, then re-read the phase. */
+  const reload = useCallback(async () => {
+    setVersion((current) => current + 1);
+    await readPhase();
+  }, [readPhase]);
+
+  /**
+   * Advance one phase.
+   *
+   * The button is enabled exactly when the move will succeed, and when it is
+   * not, `gaps` says what is missing instead of the click arriving as a 409. The
+   * POST still re-checks, because the design can change between read and click.
+   */
+  const advancePhase = useCallback(async () => {
+    setAdvancing(true);
+    setAdvanceError(null);
+    try {
+      const response = await fetch(`/api/curriculum/design/tasks/${taskId}/phase`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as {
+          error?: { message?: string };
+        } | null;
+        throw new Error(payload?.error?.message ?? `推进阶段失败：HTTP ${response.status}`);
+      }
+      await reload();
+    } catch (caught) {
+      setAdvanceError(caught instanceof Error ? caught.message : '推进阶段失败');
+    } finally {
+      setAdvancing(false);
+    }
+  }, [reload, taskId]);
+
   return (
     <Tabs defaultValue="matrix" className="w-full">
-      <TabsList className="mx-6 mt-6">
-        <TabsTrigger value="matrix">目标闭环矩阵</TabsTrigger>
-        <TabsTrigger value="editor">设计编辑器</TabsTrigger>
-      </TabsList>
+      <div className="mx-6 mt-6 flex flex-wrap items-start justify-between gap-3">
+        <TabsList>
+          <TabsTrigger value="matrix">目标闭环矩阵</TabsTrigger>
+          <TabsTrigger value="editor">设计编辑器</TabsTrigger>
+        </TabsList>
+        {phaseState && phaseState.nextPhase ? (
+          <div className="flex flex-col items-end gap-1">
+            <Button
+              size="sm"
+              onClick={() => void advancePhase()}
+              disabled={advancing || !phaseState.readyToAdvance}
+              title={
+                phaseState.readyToAdvance
+                  ? `进入${PHASE_LABELS[phaseState.nextPhase]}阶段`
+                  : phaseState.gaps.join('；')
+              }
+            >
+              {advancing ? <Loader2 className="animate-spin" /> : <ArrowRight />}
+              进入{PHASE_LABELS[phaseState.nextPhase]}
+            </Button>
+            {!phaseState.readyToAdvance && phaseState.gaps.length > 0 ? (
+              <span className="text-muted-foreground max-w-md text-right text-[11px]">
+                还差：{phaseState.gaps.join('；')}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+      {advanceError ? (
+        <div className="border-destructive/40 bg-destructive/5 text-destructive mx-6 mt-3 rounded-lg border p-3 text-xs">
+          {advanceError}
+        </div>
+      ) : null}
       <TabsContent value="matrix">
         <DesignHeatmap
           taskId={taskId}

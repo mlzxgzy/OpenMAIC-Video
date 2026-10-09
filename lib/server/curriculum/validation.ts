@@ -442,10 +442,17 @@ export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCours
   const hours = readOptionalNumber(record, 'hours');
   if (isParseFailure(hours)) return hours;
   if (hours !== undefined) {
-    if (hours === null || hours <= 0) {
-      return { ok: false, message: 'hours must be a positive number or null' };
+    // `null` means "not given", and the assembler then estimates the hours from
+    // the knowledge points — which is exactly what the form promises where it
+    // says 留空按知识点数量估算. It was rejected here, so leaving the field empty
+    // the way the placeholder invites produced a 400 whose own text said a null
+    // was acceptable.
+    if (hours !== null) {
+      if (hours <= 0) {
+        return { ok: false, message: 'hours must be a positive number or null' };
+      }
+      value.hours = hours;
     }
-    value.hours = hours;
   }
 
   const links = parseCourseKnowledgePointsInput({ knowledgePoints: record.knowledgePoints });

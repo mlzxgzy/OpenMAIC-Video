@@ -100,6 +100,22 @@ export function KnowledgeRelationsPanel({
     () => new Map(visiblePoints.map((point) => [point.id, point])),
     [visiblePoints],
   );
+
+  /**
+   * Why the create button is closed, in words.
+   *
+   * Only the reasons a person can act on are named here — a missing end and the
+   * same point at both ends. `busy` is deliberately not one of them: it clears
+   * itself the moment the request returns, so a sentence about it would flicker.
+   */
+  const relationRefusal = useMemo(() => {
+    if (!sourceId || !targetId) return null;
+    if (sourceId !== targetId) return null;
+    const point = pointById.get(sourceId);
+    const label = point ? `${point.code ? `${point.code} · ` : ''}${point.name}` : '同一个知识点';
+    return `关系的两端现在都是「${label}」。先修、后继、包含、相关都描述两个知识点之间的关系，请把其中一端换成另一个知识点。`;
+  }, [pointById, sourceId, targetId]);
+
   const courseById = useMemo(
     () => new Map(visibleCourses.map((course) => [course.id, course])),
     [visibleCourses],
@@ -224,6 +240,16 @@ export function KnowledgeRelationsPanel({
             {busy === 'relation' ? <Loader2 className="animate-spin" /> : <Plus />}
             新建/更新知识点关系
           </Button>
+          {/*
+            A disabled button is not an explanation. Picking the same point on
+            both sides is an easy mistake — the two selects look alike and both
+            list every point — so it is named here rather than left to be
+            guessed at. Same reasoning as the phase gates in the design
+            workbench, which also state the reason as visible text.
+          */}
+          {relationRefusal ? (
+            <p className="text-muted-foreground text-xs">{relationRefusal}</p>
+          ) : null}
 
           <div className="flex flex-col gap-2">
             {visibleRelations.map((relation) => (

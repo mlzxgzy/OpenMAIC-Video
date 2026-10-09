@@ -143,10 +143,14 @@ export function summariseCoverage(report: DesignCoverageReport): CoverageVerdict
   if (total > 0 && practiced === total) layers.push('practice_covers');
   if (total > 0 && assessed === total) layers.push('assess_covers');
   const complete_ = total > 0 && complete === total;
+  // Chinese, because a person reads this sentence in two places: the first line
+  // of the matrix header, and the export-gate blocker list. In English it was the
+  // one line explaining why a design cannot be produced — and the only line on
+  // that screen in another language.
   const summary =
     total === 0
-      ? 'No learning outcomes yet'
-      : `${complete}/${total} outcomes are taught, practised and assessed`;
+      ? '还没有学习目标，先到设计编辑器里写下第一个目标'
+      : `${complete}/${total} 个目标已经被教、被练、被考`;
   return { complete: complete_, ratio, layers, summary };
 }
 

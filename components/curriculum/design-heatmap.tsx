@@ -29,7 +29,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowRight,
   CheckCircle2,
   CircleSlash,
   Loader2,
@@ -71,13 +70,6 @@ interface ReviewPayload {
   findings: CurriculumAuditFindingRecord[];
   exportable: boolean;
   quality: CurriculumQualityEvaluation;
-}
-
-interface PhasePayload {
-  phase: CurriculumDesignPhase;
-  nextPhase: CurriculumDesignPhase | null;
-  gaps: string[];
-  readyToAdvance: boolean;
 }
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -191,7 +183,6 @@ export function DesignHeatmap({
   const [coverage, setCoverage] = useState<CoveragePayload | null>(null);
   const [gate, setGate] = useState<ExportGatePayload | null>(null);
   const [findings, setFindings] = useState<CurriculumAuditFindingRecord[]>([]);
-  const [phaseState, setPhaseState] = useState<PhasePayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
@@ -202,17 +193,15 @@ export function DesignHeatmap({
     setLoading(true);
     setError(null);
     try {
-      const [snapshot, coveragePayload, gatePayload, phasePayload] = await Promise.all([
+      const [snapshot, coveragePayload, gatePayload] = await Promise.all([
         requestJson<SnapshotPayload>(base),
         requestJson<CoveragePayload>(`${base}/coverage`),
         requestJson<ExportGatePayload>(`${base}/export-gate`),
-        requestJson<PhasePayload>(`${base}/phase`),
       ]);
       setTitle(snapshot.task.title);
       setPhase(snapshot.task.designPhase);
       setCoverage(coveragePayload);
       setGate(gatePayload);
-      setPhaseState(phasePayload);
       // What the last review recorded, which is not the same as what the
       // design currently is — see the file header.
       setFindings(snapshot.auditFindings);
@@ -231,28 +220,6 @@ export function DesignHeatmap({
   useEffect(() => {
     void load();
   }, [load, version]);
-
-  /**
-   * Advance one phase.
-   *
-   * The `gaps` list from the phase GET is what makes this usable rather than
-   * merely restrictive: the button is enabled exactly when the move will
-   * succeed, and when it is not, the reason is on screen instead of arriving as
-   * a 409 after the click. The POST still re-checks, because the design can
-   * change between the read and the click.
-   */
-  const advancePhase = useCallback(async () => {
-    setBusy('phase');
-    setError(null);
-    try {
-      await requestJson(`${base}/phase`, { method: 'POST' });
-      await load();
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : '推进阶段失败');
-    } finally {
-      setBusy(null);
-    }
-  }, [base, load]);
 
   /** Re-run the review and record it, so findings gain ids the status route acts on. */
   const runReview = useCallback(async () => {
@@ -351,28 +318,12 @@ export function DesignHeatmap({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {phaseState && phaseState.nextPhase ? (
-            <div className="flex flex-col items-end gap-1">
-              <Button
-                size="sm"
-                onClick={() => void advancePhase()}
-                disabled={busy === 'phase' || !phaseState.readyToAdvance}
-                title={
-                  phaseState.readyToAdvance
-                    ? `进入${PHASE_LABELS[phaseState.nextPhase]}阶段`
-                    : phaseState.gaps.join('；')
-                }
-              >
-                {busy === 'phase' ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-                进入{PHASE_LABELS[phaseState.nextPhase]}
-              </Button>
-              {!phaseState.readyToAdvance && phaseState.gaps.length > 0 ? (
-                <span className="text-muted-foreground max-w-md text-right text-[11px]">
-                  还差：{phaseState.gaps.join('；')}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
+          {/*
+            The advance control used to live here. It moved up into the shell,
+            above both tabs, because a phase boundary is not a property of the
+            matrix: an author working in the editor had to switch tabs to move
+            forward and switch back to keep working.
+          */}
           {gate.exportable ? (
             <Badge className="bg-emerald-500/15 text-emerald-700 dark:text-emerald-300">
               <CheckCircle2 />

@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, Loader2, Plus, RotateCcw } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -88,6 +89,7 @@ const EMPTY_BRIEF: BriefForm = {
 };
 
 export function DesignTaskList() {
+  const router = useRouter();
   const [tasks, setTasks] = useState<CurriculumTaskRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -140,6 +142,12 @@ export function DesignTaskList() {
       setBrief(EMPTY_BRIEF);
       setShowForm(false);
       setTasks((current) => [payload.task, ...current]);
+      // The button says 创建并开始设计, so it has to start the designing. The
+      // task is deliberately left at the `task` phase — the brief's optional
+      // fields are edited on the task itself, and the boundary is crossed by a
+      // press the author makes — but leaving them on a list to hunt for the row
+      // they just created is not "开始".
+      router.push(`/curriculum/design/${payload.task.id}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '创建失败');
     } finally {
