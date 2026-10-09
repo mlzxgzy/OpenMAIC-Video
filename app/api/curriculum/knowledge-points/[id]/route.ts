@@ -30,7 +30,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseKnowledgePointInput(body, { requireName: false });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -56,7 +56,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_KNOWLEDGE_POINT_FAILED',
-        'Failed to update the knowledge point',
+        '更新知识点失败',
         responseHeaders,
       );
     }
@@ -87,7 +87,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_KNOWLEDGE_POINT_FAILED',
-        'Failed to delete the knowledge point',
+        '删除知识点失败',
         responseHeaders,
       );
     }

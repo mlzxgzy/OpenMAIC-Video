@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     const task = await getCurriculumTask(ctx.queryable, ctx.ownerId, ctx.taskId);
     if (!task) {
       return ownerJson(
-        { error: { code: 'CURRICULUM_DESIGN_NOT_FOUND', message: 'course task not found' } },
+        { error: { code: 'CURRICULUM_DESIGN_NOT_FOUND', message: '课程设计任务不存在' } },
         404,
         ctx.headers,
       );

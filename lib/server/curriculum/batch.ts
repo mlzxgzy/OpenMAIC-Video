@@ -106,7 +106,7 @@ export async function enqueueCurriculumBatch(
   parsed: ParsedCurriculumBatchInput,
 ): Promise<{ batchId: string; itemCount: number }> {
   if (!isServerPersistenceConfigured()) {
-    throw new CurriculumValidationError('server persistence is not configured');
+    throw new CurriculumValidationError('服务端持久化未配置');
   }
   const { pool, withTransaction } = await getCurriculumProvider();
   const snapshot = await listCurriculum(pool as unknown as Queryable, ownerId);
@@ -123,11 +123,11 @@ export async function enqueueCurriculumBatch(
         generation.courseId &&
         !snapshot.courses.some((course) => course.id === generation.courseId)
       ) {
-        throw new CurriculumNotFoundError(`items[${index}]: course not found`);
+        throw new CurriculumNotFoundError(`items[${index}]：课程不存在`);
       }
       assembly = buildCourseAssembly(snapshot, generation.assembly);
       if (assembly.knowledgePoints.length === 0) {
-        throw new CurriculumValidationError(`items[${index}]: no available knowledge points`);
+        throw new CurriculumValidationError(`items[${index}]：没有可用的知识点`);
       }
       lessonOrder = nextLessonOrderInSeries(
         snapshot.courses,
@@ -136,17 +136,15 @@ export async function enqueueCurriculumBatch(
       );
     } else {
       const course = snapshot.courses.find((candidate) => candidate.id === item.courseId);
-      if (!course) throw new CurriculumNotFoundError(`items[${index}]: course not found`);
+      if (!course) throw new CurriculumNotFoundError(`items[${index}]：课程不存在`);
       const links = snapshot.courseKnowledgePoints.filter((link) => link.courseId === course.id);
       if (links.length === 0) {
-        throw new CurriculumValidationError(
-          `items[${index}]: course has no bound knowledge points`,
-        );
+        throw new CurriculumValidationError(`items[${index}]：课程没有绑定的知识点`);
       }
       const assemblyInput = courseAssemblyInputFromLedger(course, links);
       assembly = buildCourseAssembly(snapshot, assemblyInput);
       if (assembly.knowledgePoints.length === 0) {
-        throw new CurriculumValidationError(`items[${index}]: no available knowledge points`);
+        throw new CurriculumValidationError(`items[${index}]：没有可用的知识点`);
       }
       generation = {
         assembly: assemblyInput,
@@ -227,7 +225,7 @@ export async function advanceCurriculumBatch(ownerId: string): Promise<number> {
         await fenceOwnerWrite(tx as Queryable, ownerId);
         await failCurriculumBatchItem(tx as Queryable, ownerId, claimed.record.id, {
           code: 'BATCH_REQUEST_INVALID',
-          message: 'the queued batch item has no readable assembly snapshot',
+          message: '排队的批次项没有可读取的组装方案快照',
         });
       });
       continue;

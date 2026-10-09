@@ -179,7 +179,7 @@ describe('outcome-first design tools (PGlite)', () => {
       const refused = await call(tools, 'advance_course_design_phase', { taskId: id });
       expect(refused.isError).toBe(true);
       // The message must name what is missing, or the model retries blindly.
-      expect(refused.text).toContain('audience');
+      expect(refused.text).toContain('授课对象');
       expect(refused.text).toContain('Cannot enter "outcomes"');
     });
   });
@@ -350,8 +350,8 @@ describe('outcome-first design tools (PGlite)', () => {
       // The refusal has to name the missing field AND say that the reference
       // solution does not substitute for it — that second half is the whole
       // point, and a model that missed it would try to grade by its steps.
-      expect(refused.text).toMatch(/verification rule/i);
-      expect(refused.text).toMatch(/reference solution is not one/i);
+      expect(refused.text).toMatch(/验证规则/);
+      expect(refused.text).toMatch(/参考解法不能作为验证规则/);
     });
 
     it('reports the rule count and says grading ignores the reference solution', async () => {

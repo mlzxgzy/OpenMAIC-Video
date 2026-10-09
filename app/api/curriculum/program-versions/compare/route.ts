@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
     return curriculumJsonError(
       400,
       'CURRICULUM_INVALID',
-      'baseVersionId and targetVersionId query parameters are required',
+      '查询参数 baseVersionId、targetVersionId 均为必填',
     );
   }
 
@@ -42,7 +42,7 @@ export async function GET(req: NextRequest) {
         return curriculumJsonError(
           404,
           'CURRICULUM_NOT_FOUND',
-          'base or target program version not found',
+          'baseVersionId 或 targetVersionId 对应的培养方案版本不存在',
           responseHeaders,
         );
       }
@@ -55,7 +55,7 @@ export async function GET(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_COMPARE_FAILED',
-        'Failed to compare the program versions',
+        '对比培养方案版本失败',
         responseHeaders,
       );
     }

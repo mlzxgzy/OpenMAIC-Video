@@ -28,7 +28,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCourseKnowledgePointsInput(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -59,7 +59,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_COURSE_KNOWLEDGE_POINTS_FAILED',
-        'Failed to update the course knowledge points',
+        '更新课程知识点失败',
         responseHeaders,
       );
     }

@@ -20,11 +20,7 @@ export async function GET(req: NextRequest) {
   if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
   const programVersionId = new URL(req.url).searchParams.get('programVersionId')?.trim();
   if (!programVersionId) {
-    return curriculumJsonError(
-      400,
-      'CURRICULUM_INVALID',
-      'programVersionId query parameter is required',
-    );
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '查询参数 programVersionId 为必填');
   }
   return withRequestOwner(req, async ({ ownerId }, responseHeaders) => {
     try {
@@ -45,7 +41,7 @@ export async function GET(req: NextRequest) {
         return curriculumJsonError(
           404,
           'CURRICULUM_NOT_FOUND',
-          'program version not found',
+          '培养方案版本不存在',
           responseHeaders,
         );
       }
@@ -58,7 +54,7 @@ export async function GET(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_COVERAGE_FAILED',
-        'Failed to build the program coverage report',
+        '生成培养方案覆盖报告失败',
         responseHeaders,
       );
     }

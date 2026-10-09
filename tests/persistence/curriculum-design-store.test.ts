@@ -155,7 +155,7 @@ describe('reverse-design store (PGlite)', () => {
     expect(failure).toBeInstanceOf(CurriculumPhaseError);
     expect(failure).toMatchObject({ current: 'task', required: 'outcomes' });
     // The pair says where; the message has to say what is missing.
-    expect((failure as Error).message).toContain('audience');
+    expect((failure as Error).message).toContain('授课对象');
   });
 
   it('refuses to author an outcome before the task has left the brief phase', async () => {
@@ -177,7 +177,7 @@ describe('reverse-design store (PGlite)', () => {
       verifiable: true,
     });
     // The outcome is well-formed but nothing can yet show it was met.
-    await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toThrow(/evidence/);
+    await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toThrow(/还没有证据/);
 
     await createCurriculumEvidence(pool, OWNER, task.id, {
       objectiveId: (await getCurriculumDesignSnapshot(pool, OWNER, task.id)).objectives[0].id,
@@ -193,7 +193,7 @@ describe('reverse-design store (PGlite)', () => {
   it('refuses to build the graph before any outcome exists at all', async () => {
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toThrow(
-      /no learning outcomes/,
+      /还没有定义任何学习目标/,
     );
   });
 
@@ -634,8 +634,8 @@ describe('reverse-design store (PGlite)', () => {
     );
     await assertCurriculumDesignExportable(pool, OWNER, task.id).catch((error: unknown) => {
       expect(error).toBeInstanceOf(CurriculumDesignValidationError);
-      expect((error as Error).message).toMatch(/cannot be produced/i);
-      expect((error as Error).message).toContain('assess_covers');
+      expect((error as Error).message).toMatch(/还不能生成/);
+      expect((error as Error).message).toContain('考试覆盖');
     });
   });
 

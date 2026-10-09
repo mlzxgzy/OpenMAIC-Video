@@ -78,11 +78,11 @@ export type DesignHandler = (context: DesignContext) => Promise<NextResponse>;
  * line keeps it diagnosable if the violation turns out to be ours.
  */
 const CONSTRAINT_REFUSALS: Record<string, string> = {
-  '23502': 'a required field was missing',
-  '23503': 'a referenced row does not exist or is not this owner’s',
-  '23505': 'that value is already taken',
-  '23514': 'a rule on this field was not satisfied',
-  '22P02': 'a value had the wrong format',
+  '23502': '缺少必填字段',
+  '23503': '引用的记录不存在，或不属于当前所有者',
+  '23505': '该值已被占用',
+  '23514': '该字段未满足某条规则',
+  '22P02': '某个值的格式不正确',
 };
 
 function mapConstraintViolation(error: unknown, headers: Headers): NextResponse | undefined {
@@ -162,11 +162,7 @@ export async function runDesignRoute(
         try {
           cached = await req.json();
         } catch {
-          throw new DesignRequestError(
-            400,
-            'CURRICULUM_DESIGN_INVALID',
-            'request body must be JSON',
-          );
+          throw new DesignRequestError(400, 'CURRICULUM_DESIGN_INVALID', '请求体必须是 JSON');
         }
       }
       return cached;
@@ -200,12 +196,7 @@ export async function runDesignRoute(
         `[CurriculumDesign] ${req.method} ${req.nextUrl.pathname} failed [owner=${ownerId}]:`,
         error,
       );
-      return curriculumJsonError(
-        500,
-        'CURRICULUM_DESIGN_FAILED',
-        'The course design operation failed',
-        headers,
-      );
+      return curriculumJsonError(500, 'CURRICULUM_DESIGN_FAILED', '课程设计操作失败', headers);
     }
   });
 }
@@ -214,11 +205,7 @@ export async function runDesignRoute(
 export function requiredParam(context: DesignContext, name: string): string {
   const value = context.params[name];
   if (!value) {
-    throw new DesignRequestError(
-      400,
-      'CURRICULUM_DESIGN_INVALID',
-      `${name} is missing from the request path`,
-    );
+    throw new DesignRequestError(400, 'CURRICULUM_DESIGN_INVALID', `${name} 在请求路径中缺失`);
   }
   return value;
 }

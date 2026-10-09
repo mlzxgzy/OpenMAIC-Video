@@ -24,7 +24,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseProgramCourseInput(body, { requireProgramVersionId: true });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_COURSE_FAILED',
-        'Failed to add the program course',
+        '添加计划课程失败',
         responseHeaders,
       );
     }

@@ -40,7 +40,7 @@ export async function GET(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_COVERAGE_FAILED',
-        'Failed to build the curriculum coverage report',
+        '生成课程覆盖报告失败',
         responseHeaders,
       );
     }

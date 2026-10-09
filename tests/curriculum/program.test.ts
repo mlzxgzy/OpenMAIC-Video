@@ -291,7 +291,7 @@ describe('program plan validation', () => {
     });
     expect(parseProgramInput({}, { requireName: true })).toEqual({
       ok: false,
-      message: 'name is required',
+      message: 'name 为必填',
     });
   });
 
@@ -303,12 +303,12 @@ describe('program plan validation', () => {
           { indicatorId: 'indicator-1', weight: 1 },
         ],
       }),
-    ).toEqual({ ok: false, message: 'indicatorId must not be duplicated' });
+    ).toEqual({ ok: false, message: 'indicatorId 不能重复' });
 
     expect(
       parseCourseIndicatorSupportsInput({
         supports: [{ indicatorId: 'indicator-1', weight: 9 }],
       }),
-    ).toEqual({ ok: false, message: 'weight must be an integer between 0 and 5' });
+    ).toEqual({ ok: false, message: 'weight 必须是 0 到 5 之间的整数' });
   });
 });

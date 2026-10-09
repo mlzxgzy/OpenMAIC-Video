@@ -72,6 +72,7 @@ import {
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
 import { deriveVerifiability, nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
 import { examStrictRefusal } from '@/lib/curriculum/lab-authoring';
+import { curriculumQualityLayerLabel } from '@/lib/curriculum/quality-labels';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
@@ -594,7 +595,7 @@ function optionalText(value: string | null | undefined): string | null {
 
 function requiredText(value: string | null | undefined, field: string): string {
   const text = optionalText(value);
-  if (!text) throw new CurriculumDesignValidationError(`${field} is required`);
+  if (!text) throw new CurriculumDesignValidationError(`${field} 不能为空`);
   return text;
 }
 
@@ -885,7 +886,7 @@ async function readTaskPhase(
     [ownerId, taskId],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
   return row.design_phase as CurriculumDesignPhase;
 }
 
@@ -900,8 +901,7 @@ async function assertPhase(
     throw new CurriculumPhaseError(
       current,
       required,
-      `course task is in phase "${current}"; "${required}" work comes after it. ` +
-        'Finish the earlier phase first.',
+      `课程任务当前处于「${current}」阶段；「${required}」的工作在它之后。` + '请先完成当前阶段。',
     );
   }
   return current;
@@ -955,7 +955,7 @@ async function assertSeriesOwned(
     'SELECT id FROM curriculum_series WHERE owner_id = $1 AND id = $2',
     [ownerId, seriesId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('series not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('课程系列不存在');
 }
 
 /**
@@ -974,9 +974,9 @@ async function assertEndpointOwned(
     kind === 'objective'
       ? await readObjectiveRow(queryable, ownerId, id)
       : await readNodeRow(queryable, ownerId, id);
-  if (!row) throw new CurriculumDesignNotFoundError(`${kind} not found: ${id}`);
+  if (!row) throw new CurriculumDesignNotFoundError(`${kind} 不存在：${id}`);
   if (row.task_id !== taskId) {
-    throw new CurriculumDesignValidationError(`${kind} ${id} belongs to a different course task`);
+    throw new CurriculumDesignValidationError(`${kind} ${id} 不属于同一个课程任务`);
   }
 }
 
@@ -1010,7 +1010,7 @@ export async function createCurriculumTask(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('course task could not be created');
+  if (!row) throw new CurriculumDesignValidationError('课程任务创建失败');
   return mapTask(row);
 }
 
@@ -1025,7 +1025,7 @@ export async function updateCurriculumTask(
     [ownerId, taskId],
   );
   const current = existing.rows[0];
-  if (!current) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!current) throw new CurriculumDesignNotFoundError('课程任务不存在');
   if (patch.seriesId !== undefined) await assertSeriesOwned(queryable, ownerId, patch.seriesId);
   const nextTitle = patch.title !== undefined ? requiredText(patch.title, 'title') : current.title;
 
@@ -1059,7 +1059,7 @@ export async function updateCurriculumTask(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
   return mapTask(row);
 }
 
@@ -1090,7 +1090,7 @@ export async function advanceCurriculumTaskPhase(
     throw new CurriculumPhaseError(
       current,
       next,
-      `cannot enter phase "${next}": ${blocking.join('; ')}`,
+      `无法进入「${next}」阶段：${blocking.join('；')}`,
     );
   }
   const result = await queryable.query<TaskRow>(
@@ -1100,7 +1100,7 @@ export async function advanceCurriculumTaskPhase(
     [ownerId, taskId, next],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
   return mapTask(row);
 }
 
@@ -1129,10 +1129,10 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     const row = task.rows[0];
-    if (!row) throw new CurriculumDesignNotFoundError('course task not found');
-    if (!row.audience) gaps.push('the brief is missing the training audience');
-    if (!row.problem_statement) gaps.push('the brief is missing the problem to solve');
-    if (row.duration_hours === null) gaps.push('the brief is missing the training duration');
+    if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
+    if (!row.audience) gaps.push('课程简介缺少授课对象');
+    if (!row.problem_statement) gaps.push('课程简介缺少要解决的问题');
+    if (row.duration_hours === null) gaps.push('课程简介缺少培训时长');
   }
 
   if (next === 'graph') {
@@ -1141,7 +1141,7 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     if (Number(objectives.rows[0]?.count ?? 0) === 0) {
-      gaps.push('no learning outcomes are defined');
+      gaps.push('还没有定义任何学习目标');
     }
     // Every outcome needs a way of being evidenced before the graph is built
     // on top of it, or the graph is an unanchored collection of topics.
@@ -1154,9 +1154,7 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     if (unevidenced.rows.length > 0) {
-      gaps.push(
-        `${unevidenced.rows.length} outcome(s) have no evidence yet, e.g. ${unevidenced.rows[0].id}`,
-      );
+      gaps.push(`${unevidenced.rows.length} 个学习目标还没有证据，例如 ${unevidenced.rows[0].id}`);
     }
   }
 
@@ -1170,7 +1168,7 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     if (Number(orphanNodes.rows[0]?.count ?? 0) > 0) {
-      gaps.push(`${orphanNodes.rows[0].count} knowledge/skill node(s) support no outcome`);
+      gaps.push(`${orphanNodes.rows[0].count} 个知识/技能节点不支撑任何学习目标`);
     }
   }
 
@@ -1185,7 +1183,7 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     if (Number(untaught.rows[0]?.count ?? 0) > 0) {
-      gaps.push(`${untaught.rows[0].count} outcome(s) are not taught by any item`);
+      gaps.push(`${untaught.rows[0].count} 个学习目标还没有被任何条目讲授`);
     }
   }
 
@@ -1206,7 +1204,7 @@ export async function phaseCompletionGaps(
       [ownerId, taskId],
     );
     if (Number(untaught.rows[0]?.count ?? 0) > 0) {
-      gaps.push(`${untaught.rows[0].count} outcome(s) have no teaching yet`);
+      gaps.push(`${untaught.rows[0].count} 个学习目标还没有被讲授`);
     }
   }
 
@@ -1297,7 +1295,7 @@ export async function deleteCurriculumTask(
     'DELETE FROM curriculum_task WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, taskId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('课程任务不存在');
 }
 
 // ── Objective CRUD ──────────────────────────────────────────────────────────
@@ -1312,11 +1310,9 @@ export async function createCurriculumObjective(
   const title = requiredText(input.title, 'title');
   if (input.parentId) {
     const parent = await readObjectiveRow(queryable, ownerId, input.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent outcome not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级学习目标不存在');
     if (parent.task_id !== taskId) {
-      throw new CurriculumDesignValidationError(
-        'parent outcome belongs to a different course task',
-      );
+      throw new CurriculumDesignValidationError('父级学习目标不属于同一个课程任务');
     }
   }
   const result = await queryable.query<ObjectiveRow>(
@@ -1355,7 +1351,7 @@ export async function createCurriculumObjective(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('learning outcome could not be created');
+  if (!row) throw new CurriculumDesignValidationError('学习目标创建失败');
   return mapObjective(row);
 }
 
@@ -1366,14 +1362,12 @@ export async function updateCurriculumObjective(
   patch: CurriculumObjectivePatch,
 ): Promise<CurriculumObjectiveRecord> {
   const current = await readObjectiveRow(queryable, ownerId, objectiveId);
-  if (!current) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!current) throw new CurriculumDesignNotFoundError('学习目标不存在');
   if (patch.parentId) {
     const parent = await readObjectiveRow(queryable, ownerId, patch.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent outcome not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级学习目标不存在');
     if (parent.task_id !== current.task_id) {
-      throw new CurriculumDesignValidationError(
-        'parent outcome belongs to a different course task',
-      );
+      throw new CurriculumDesignValidationError('父级学习目标不属于同一个课程任务');
     }
   }
   // Hoisted so the derivation below reads exactly the values this UPDATE
@@ -1424,7 +1418,7 @@ export async function updateCurriculumObjective(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!row) throw new CurriculumDesignNotFoundError('学习目标不存在');
   return mapObjective(row);
 }
 
@@ -1437,7 +1431,7 @@ export async function deleteCurriculumObjective(
     'DELETE FROM curriculum_objective WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, objectiveId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('学习目标不存在');
 }
 
 // ── Evidence CRUD ───────────────────────────────────────────────────────────
@@ -1450,11 +1444,9 @@ export async function createCurriculumEvidence(
 ): Promise<CurriculumEvidenceRecord> {
   await assertPhase(queryable, ownerId, taskId, 'outcomes');
   const objective = await readObjectiveRow(queryable, ownerId, input.objectiveId);
-  if (!objective) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!objective) throw new CurriculumDesignNotFoundError('学习目标不存在');
   if (objective.task_id !== taskId) {
-    throw new CurriculumDesignValidationError(
-      'learning outcome belongs to a different course task',
-    );
+    throw new CurriculumDesignValidationError('该学习目标不属于本课程任务');
   }
   const result = await queryable.query<EvidenceRow>(
     `INSERT INTO curriculum_evidence
@@ -1486,7 +1478,7 @@ export async function createCurriculumEvidence(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('evidence could not be created');
+  if (!row) throw new CurriculumDesignValidationError('证据创建失败');
   return mapEvidence(row);
 }
 
@@ -1499,7 +1491,7 @@ export async function deleteCurriculumEvidence(
     'DELETE FROM curriculum_evidence WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, evidenceId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('evidence not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('证据不存在');
 }
 
 // ── Learning node CRUD ──────────────────────────────────────────────────────
@@ -1514,9 +1506,9 @@ export async function createCurriculumLearningNode(
   const name = requiredText(input.name, 'name');
   if (input.parentId) {
     const parent = await readNodeRow(queryable, ownerId, input.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent node not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级知识/技能节点不存在');
     if (parent.task_id !== taskId) {
-      throw new CurriculumDesignValidationError('parent node belongs to a different course task');
+      throw new CurriculumDesignValidationError('父级知识/技能节点不属于同一个课程任务');
     }
   }
   const result = await queryable.query<NodeRow>(
@@ -1538,7 +1530,7 @@ export async function createCurriculumLearningNode(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('learning node could not be created');
+  if (!row) throw new CurriculumDesignValidationError('知识/技能节点创建失败');
   return mapNode(row);
 }
 
@@ -1549,12 +1541,12 @@ export async function updateCurriculumLearningNode(
   patch: CurriculumLearningNodePatch,
 ): Promise<CurriculumLearningNodeRecord> {
   const current = await readNodeRow(queryable, ownerId, nodeId);
-  if (!current) throw new CurriculumDesignNotFoundError('learning node not found');
+  if (!current) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
   if (patch.parentId) {
     const parent = await readNodeRow(queryable, ownerId, patch.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent node not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级知识/技能节点不存在');
     if (parent.task_id !== current.task_id) {
-      throw new CurriculumDesignValidationError('parent node belongs to a different course task');
+      throw new CurriculumDesignValidationError('父级知识/技能节点不属于同一个课程任务');
     }
   }
   const result = await queryable.query<NodeRow>(
@@ -1576,7 +1568,7 @@ export async function updateCurriculumLearningNode(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('learning node not found');
+  if (!row) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
   return mapNode(row);
 }
 
@@ -1589,7 +1581,7 @@ export async function deleteCurriculumLearningNode(
     'DELETE FROM curriculum_learning_node WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, nodeId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('learning node not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
 }
 
 export async function setCurriculumNodeObjectives(
@@ -1610,13 +1602,13 @@ export async function setCurriculumNodeObjectives(
   }
   for (const link of unique.values()) {
     const node = await readNodeRow(queryable, ownerId, link.nodeId);
-    if (!node) throw new CurriculumDesignNotFoundError(`learning node not found: ${link.nodeId}`);
+    if (!node) throw new CurriculumDesignNotFoundError(`知识/技能节点不存在：${link.nodeId}`);
     const objective = await readObjectiveRow(queryable, ownerId, link.objectiveId);
     if (!objective) {
-      throw new CurriculumDesignNotFoundError(`learning outcome not found: ${link.objectiveId}`);
+      throw new CurriculumDesignNotFoundError(`学习目标不存在：${link.objectiveId}`);
     }
     if (node.task_id !== taskId || objective.task_id !== taskId) {
-      throw new CurriculumDesignValidationError('node and outcome must belong to the same task');
+      throw new CurriculumDesignValidationError('知识/技能节点和学习目标必须属于同一个课程任务');
     }
   }
 
@@ -1671,7 +1663,7 @@ export async function createCurriculumDependency(
 ): Promise<CurriculumDependencyRecord> {
   await assertPhase(queryable, ownerId, taskId, 'graph');
   if (input.sourceId === input.targetId) {
-    throw new CurriculumDesignValidationError('a dependency cannot point at itself');
+    throw new CurriculumDesignValidationError('依赖不能指向自身');
   }
   await assertEndpointOwned(queryable, ownerId, taskId, input.sourceId, input.sourceKind);
   await assertEndpointOwned(queryable, ownerId, taskId, input.targetId, input.targetKind);
@@ -1708,7 +1700,7 @@ export async function createCurriculumDependency(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('dependency could not be created');
+  if (!row) throw new CurriculumDesignValidationError('依赖创建失败');
   return mapDependency(row);
 }
 
@@ -1750,7 +1742,7 @@ async function assertDependencyAcyclic(
     [ownerId, taskId, targetId, targetKind, edgeType, sourceId, sourceKind],
   );
   if (result.rows[0]) {
-    throw new CurriculumDesignValidationError('dependency would create a cycle');
+    throw new CurriculumDesignValidationError('依赖会形成环');
   }
 }
 
@@ -1763,7 +1755,7 @@ export async function deleteCurriculumDependency(
     'DELETE FROM curriculum_dependency WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, dependencyId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('dependency not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('依赖不存在');
 }
 
 // ── Unit CRUD ───────────────────────────────────────────────────────────────
@@ -1784,12 +1776,12 @@ function assertUnitRoleShape(
   const role = unitRole ?? null;
   if (unitType === 'chapter' && role !== null) {
     throw new CurriculumDesignValidationError(
-      'a chapter only classifies and cannot have a teaching role; only an item is a lecture, practice or exam',
+      '章节只做归类，不能有教学角色；只有条目才会是 lecture、practice 或 exam',
     );
   }
   if (unitType === 'item' && role === null) {
     throw new CurriculumDesignValidationError(
-      'an item is a teaching unit and must declare its role: lecture, practice or exam',
+      '条目是教学单元，必须声明它的角色：lecture、practice 或 exam',
     );
   }
 }
@@ -1805,9 +1797,9 @@ export async function createCurriculumUnit(
   assertUnitRoleShape(input.unitType, input.unitRole);
   if (input.parentId) {
     const parent = await readUnitRow(queryable, ownerId, input.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent unit not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级单元不存在');
     if (parent.task_id !== taskId) {
-      throw new CurriculumDesignValidationError('parent unit belongs to a different course task');
+      throw new CurriculumDesignValidationError('父级单元不属于同一个课程任务');
     }
   }
   const result = await queryable.query<UnitRow>(
@@ -1833,7 +1825,7 @@ export async function createCurriculumUnit(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('outline unit could not be created');
+  if (!row) throw new CurriculumDesignValidationError('大纲单元创建失败');
   return mapUnit(row);
 }
 
@@ -1844,7 +1836,7 @@ export async function updateCurriculumUnit(
   patch: CurriculumUnitPatch,
 ): Promise<CurriculumUnitRecord> {
   const current = await readUnitRow(queryable, ownerId, unitId);
-  if (!current) throw new CurriculumDesignNotFoundError('outline unit not found');
+  if (!current) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   // Checked against the merged role and the stored kind. `unitType` is not in
   // the UPDATE below and is not meant to be: a chapter and an item are not
   // interchangeable after creation, so a patch that names one is ignored here
@@ -1857,9 +1849,9 @@ export async function updateCurriculumUnit(
   );
   if (patch.parentId) {
     const parent = await readUnitRow(queryable, ownerId, patch.parentId);
-    if (!parent) throw new CurriculumDesignNotFoundError('parent unit not found');
+    if (!parent) throw new CurriculumDesignNotFoundError('父级单元不存在');
     if (parent.task_id !== current.task_id) {
-      throw new CurriculumDesignValidationError('parent unit belongs to a different course task');
+      throw new CurriculumDesignValidationError('父级单元不属于同一个课程任务');
     }
   }
   const result = await queryable.query<UnitRow>(
@@ -1888,7 +1880,7 @@ export async function updateCurriculumUnit(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('outline unit not found');
+  if (!row) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   return mapUnit(row);
 }
 
@@ -1901,7 +1893,7 @@ export async function deleteCurriculumUnit(
     'DELETE FROM curriculum_unit WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, unitId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('outline unit not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('大纲单元不存在');
 }
 
 /**
@@ -1916,18 +1908,16 @@ export async function createCurriculumUnitCoverage(
   input: CurriculumUnitCoverageInput,
 ): Promise<CurriculumUnitCoverageRecord> {
   const unit = await readUnitRow(queryable, ownerId, input.unitId);
-  if (!unit) throw new CurriculumDesignNotFoundError(`outline unit not found: ${input.unitId}`);
+  if (!unit) throw new CurriculumDesignNotFoundError(`大纲单元不存在：${input.unitId}`);
   if (unit.task_id !== taskId) {
-    throw new CurriculumDesignValidationError('outline unit belongs to a different course task');
+    throw new CurriculumDesignValidationError('大纲单元不属于同一个课程任务');
   }
   const objective = await readObjectiveRow(queryable, ownerId, input.objectiveId);
   if (!objective) {
-    throw new CurriculumDesignNotFoundError(`learning outcome not found: ${input.objectiveId}`);
+    throw new CurriculumDesignNotFoundError(`学习目标不存在：${input.objectiveId}`);
   }
   if (objective.task_id !== taskId) {
-    throw new CurriculumDesignValidationError(
-      'learning outcome belongs to a different course task',
-    );
+    throw new CurriculumDesignValidationError('该学习目标不属于本课程任务');
   }
   // The phase gate is deliberately not applied here: revising coverage is
   // editing an existing design, and a course being revised must not be frozen
@@ -1954,7 +1944,7 @@ export async function createCurriculumUnitCoverage(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('coverage could not be recorded');
+  if (!row) throw new CurriculumDesignValidationError('覆盖记录创建失败');
   return mapUnitCoverage(row);
 }
 
@@ -1977,13 +1967,13 @@ export async function setCurriculumUnitCoverage(
   }
   for (const row of unique.values()) {
     const unit = await readUnitRow(queryable, ownerId, row.unitId);
-    if (!unit) throw new CurriculumDesignNotFoundError(`outline unit not found: ${row.unitId}`);
+    if (!unit) throw new CurriculumDesignNotFoundError(`大纲单元不存在：${row.unitId}`);
     const objective = await readObjectiveRow(queryable, ownerId, row.objectiveId);
     if (!objective) {
-      throw new CurriculumDesignNotFoundError(`learning outcome not found: ${row.objectiveId}`);
+      throw new CurriculumDesignNotFoundError(`学习目标不存在：${row.objectiveId}`);
     }
     if (unit.task_id !== taskId || objective.task_id !== taskId) {
-      throw new CurriculumDesignValidationError('unit and outcome must belong to the same task');
+      throw new CurriculumDesignValidationError('单元和学习目标必须属于同一个课程任务');
     }
   }
 
@@ -2024,13 +2014,13 @@ export async function createCurriculumUnitDependency(
 ): Promise<CurriculumUnitDependencyRecord> {
   await assertPhase(queryable, ownerId, taskId, 'outline');
   if (input.sourceUnitId === input.targetUnitId) {
-    throw new CurriculumDesignValidationError('a unit cannot be its own prerequisite');
+    throw new CurriculumDesignValidationError('单元不能作为自己的先修');
   }
   for (const unitId of [input.sourceUnitId, input.targetUnitId]) {
     const unit = await readUnitRow(queryable, ownerId, unitId);
-    if (!unit) throw new CurriculumDesignNotFoundError(`outline unit not found: ${unitId}`);
+    if (!unit) throw new CurriculumDesignNotFoundError(`大纲单元不存在：${unitId}`);
     if (unit.task_id !== taskId) {
-      throw new CurriculumDesignValidationError('unit belongs to a different course task');
+      throw new CurriculumDesignValidationError('单元不属于同一个课程任务');
     }
   }
   const result = await queryable.query<UnitDependencyRow>(
@@ -2052,7 +2042,7 @@ export async function createCurriculumUnitDependency(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('unit dependency could not be created');
+  if (!row) throw new CurriculumDesignValidationError('单元依赖创建失败');
   return mapUnitDependency(row);
 }
 
@@ -2086,7 +2076,7 @@ export async function deleteCurriculumUnitDependency(
     'DELETE FROM curriculum_unit_dependency WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, unitDependencyId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('unit dependency not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('单元依赖不存在');
 }
 
 // ── Question CRUD ───────────────────────────────────────────────────────────
@@ -2100,31 +2090,27 @@ export async function createCurriculumQuestion(
   await assertPhase(queryable, ownerId, taskId, 'assessment');
   const stem = requiredText(input.stem, 'stem');
   const unit = await readUnitRow(queryable, ownerId, input.unitId);
-  if (!unit) throw new CurriculumDesignNotFoundError('outline unit not found');
+  if (!unit) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   const objective = await readObjectiveRow(queryable, ownerId, input.objectiveId);
-  if (!objective) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!objective) throw new CurriculumDesignNotFoundError('学习目标不存在');
   if (unit.task_id !== taskId || objective.task_id !== taskId) {
-    throw new CurriculumDesignValidationError('unit and outcome must belong to the same task');
+    throw new CurriculumDesignValidationError('单元和学习目标必须属于同一个课程任务');
   }
   // A question with nothing to select from is not a question; the answer must
   // also be a subset of the options, or it can never be marked.
   const options = input.options ?? [];
   if (input.questionType !== 'true_false' && options.length < 2) {
-    throw new CurriculumDesignValidationError(
-      'a multiple-choice question needs at least two options',
-    );
+    throw new CurriculumDesignValidationError('选择题至少需要两个选项');
   }
   const answer = input.answer ?? [];
   if (answer.length === 0) {
-    throw new CurriculumDesignValidationError('a question needs an answer key');
+    throw new CurriculumDesignValidationError('题目需要答案');
   }
   if (options.length > 0) {
     const keys = new Set(options.map((option) => option.key));
     const stray = answer.filter((key) => !keys.has(key));
     if (stray.length > 0) {
-      throw new CurriculumDesignValidationError(
-        `answer key refers to missing options: ${stray.join(', ')}`,
-      );
+      throw new CurriculumDesignValidationError(`答案引用了不存在的选项：${stray.join('、')}`);
     }
   }
 
@@ -2154,7 +2140,7 @@ export async function createCurriculumQuestion(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('question could not be created');
+  if (!row) throw new CurriculumDesignValidationError('题目创建失败');
   return mapQuestion(row);
 }
 
@@ -2169,7 +2155,7 @@ export async function updateCurriculumQuestion(
     [ownerId, questionId],
   );
   const row = current.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('question not found');
+  if (!row) throw new CurriculumDesignNotFoundError('题目不存在');
   const result = await queryable.query<QuestionRow>(
     `UPDATE curriculum_question
         SET unit_id = $3, objective_id = $4, evidence_id = $5, question_type = $6, stem = $7,
@@ -2200,7 +2186,7 @@ export async function updateCurriculumQuestion(
     ],
   );
   const updated = result.rows[0];
-  if (!updated) throw new CurriculumDesignNotFoundError('question not found');
+  if (!updated) throw new CurriculumDesignNotFoundError('题目不存在');
   return mapQuestion(updated);
 }
 
@@ -2213,7 +2199,7 @@ export async function deleteCurriculumQuestion(
     'DELETE FROM curriculum_question WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, questionId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('question not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('题目不存在');
 }
 
 // ── Lab task CRUD ───────────────────────────────────────────────────────────
@@ -2226,18 +2212,18 @@ export async function createCurriculumLabTask(
 ): Promise<CurriculumLabTaskRecord> {
   await assertPhase(queryable, ownerId, taskId, 'assessment');
   const unit = await readUnitRow(queryable, ownerId, input.unitId);
-  if (!unit) throw new CurriculumDesignNotFoundError('outline unit not found');
+  if (!unit) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   const objective = await readObjectiveRow(queryable, ownerId, input.objectiveId);
-  if (!objective) throw new CurriculumDesignNotFoundError('learning outcome not found');
+  if (!objective) throw new CurriculumDesignNotFoundError('学习目标不存在');
   if (unit.task_id !== taskId || objective.task_id !== taskId) {
-    throw new CurriculumDesignValidationError('unit and outcome must belong to the same task');
+    throw new CurriculumDesignValidationError('单元和学习目标必须属于同一个课程任务');
   }
   // The grading input, not the model's route through the task. A lab with no
   // rule is ungradable, and a lab graded by its reference path would mark
   // every correct alternative wrong.
   if (!Array.isArray(input.verifyRules) || input.verifyRules.length === 0) {
     throw new CurriculumDesignValidationError(
-      'a lab task needs at least one verification rule; the reference solution is not one',
+      '实操任务至少需要一条验证规则；参考解法不能作为验证规则',
     );
   }
   /**
@@ -2297,7 +2283,7 @@ export async function createCurriculumLabTask(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('lab task could not be created');
+  if (!row) throw new CurriculumDesignValidationError('实操任务创建失败');
   return mapLabTask(row);
 }
 
@@ -2312,11 +2298,9 @@ export async function updateCurriculumLabTask(
     [ownerId, labTaskId],
   );
   const row = current.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('lab task not found');
+  if (!row) throw new CurriculumDesignNotFoundError('实操任务不存在');
   if (patch.verifyRules !== undefined && patch.verifyRules.length === 0) {
-    throw new CurriculumDesignValidationError(
-      'a lab task must keep at least one verification rule',
-    );
+    throw new CurriculumDesignValidationError('实操任务必须保留至少一条验证规则');
   }
   /**
    * The exam rule is checked against the *resulting* row, not the patch.
@@ -2394,7 +2378,7 @@ export async function updateCurriculumLabTask(
     ],
   );
   const updated = result.rows[0];
-  if (!updated) throw new CurriculumDesignNotFoundError('lab task not found');
+  if (!updated) throw new CurriculumDesignNotFoundError('实操任务不存在');
   return mapLabTask(updated);
 }
 
@@ -2407,7 +2391,7 @@ export async function deleteCurriculumLabTask(
     'DELETE FROM curriculum_lab_task WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, labTaskId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('lab task not found');
+  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('实操任务不存在');
 }
 
 // ── Audit findings ──────────────────────────────────────────────────────────
@@ -2465,7 +2449,7 @@ export async function setCurriculumAuditFindingStatus(
     [ownerId, findingId, status],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumDesignNotFoundError('audit finding not found');
+  if (!row) throw new CurriculumDesignNotFoundError('审核发现不存在');
   return mapAuditFinding(row);
 }
 
@@ -2482,7 +2466,7 @@ export async function getCurriculumDesignSnapshot(
   taskId: string,
 ): Promise<CurriculumDesignSnapshot> {
   const task = await getCurriculumTask(queryable, ownerId, taskId);
-  if (!task) throw new CurriculumDesignNotFoundError('course task not found');
+  if (!task) throw new CurriculumDesignNotFoundError('课程任务不存在');
 
   const scoped = (table: string, columns: string, order: string) =>
     queryable.query<Row>(
@@ -2587,7 +2571,15 @@ export function describeCurriculumExportBlockers(
 ): string[] {
   const parts: string[] = [];
   if (!evaluation.quality.exportable) {
-    parts.push(`design review failed at "${evaluation.quality.firstBrokenLayer}"`);
+    // The label, not the identifier: this line is the only explanation the
+    // author gets for why the course cannot be produced, and `outcomes_verifiable`
+    // is not a thing a teacher can act on.
+    const layer = evaluation.quality.firstBrokenLayer;
+    parts.push(
+      layer === null
+        ? '设计审核未通过'
+        : `设计审核未通过：卡在「${curriculumQualityLayerLabel(layer)}」层`,
+    );
   }
   if (!evaluation.verdict.complete) {
     parts.push(evaluation.verdict.summary);
@@ -2650,7 +2642,5 @@ export async function assertCurriculumDesignExportable(
   const review = await reviewCurriculumTaskDesign(queryable, ownerId, taskId);
   const blockers = describeCurriculumExportBlockers(review);
   if (blockers.length === 0) return review;
-  throw new CurriculumDesignValidationError(
-    `This course cannot be produced yet: ${blockers.join('; ')}.`,
-  );
+  throw new CurriculumDesignValidationError(`这门课程目前还不能生成：${blockers.join('；')}。`);
 }

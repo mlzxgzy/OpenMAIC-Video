@@ -41,7 +41,7 @@ describe('parseCurriculumExportJobsInput', () => {
   it('rejects an empty selection and unknown render options', () => {
     expect(parseCurriculumExportJobsInput({})).toMatchObject({
       ok: false,
-      message: 'batchId or batchItemIds is required',
+      message: 'batchId 或 batchItemIds 为必填',
     });
     expect(
       parseCurriculumExportJobsInput({ batchItemIds: ['item-1'], resolution: '8k' }),

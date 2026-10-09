@@ -43,7 +43,7 @@ function readOptionalText(
   if (!(key in record)) return undefined;
   const value = record[key];
   if (value === null) return null;
-  if (typeof value !== 'string') return { ok: false, message: `${key} must be a string or null` };
+  if (typeof value !== 'string') return { ok: false, message: `${key} 必须是字符串或 null` };
   return value;
 }
 
@@ -55,7 +55,7 @@ function readOptionalNumber(
   const value = record[key];
   if (value === null) return null;
   if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    return { ok: false, message: `${key} must be a non-negative number or null` };
+    return { ok: false, message: `${key} 必须是非负数或 null` };
   }
   return value;
 }
@@ -71,10 +71,10 @@ export interface ParsedSeriesInput {
 
 export function parseSeriesInput(body: unknown): ParseResult<ParsedSeriesInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const name = record.name;
   if (typeof name !== 'string' || name.trim().length === 0) {
-    return { ok: false, message: 'name is required' };
+    return { ok: false, message: 'name 为必填' };
   }
   const description = readOptionalText(record, 'description');
   if (isParseFailure(description)) return description;
@@ -88,13 +88,13 @@ export interface ParsedSeriesPatch {
 
 export function parseSeriesPatch(body: unknown): ParseResult<ParsedSeriesPatch> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const value: ParsedSeriesPatch = {};
   if ('name' in record) {
     const name = record.name;
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return { ok: false, message: 'name must be a non-empty string' };
+      return { ok: false, message: 'name 必须是非空字符串' };
     }
     value.name = name.trim();
   }
@@ -106,7 +106,7 @@ export function parseSeriesPatch(body: unknown): ParseResult<ParsedSeriesPatch> 
   }
 
   if (Object.keys(value).length === 0) {
-    return { ok: false, message: 'at least one field is required' };
+    return { ok: false, message: '至少需要一个字段' };
   }
 
   return { ok: true, value };
@@ -132,17 +132,17 @@ export function parseCourseInput(
   options: { requireTitle: boolean },
 ): ParseResult<ParsedCourseInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const value: ParsedCourseInput = {};
   const title = record.title;
   if (title !== undefined) {
     if (typeof title !== 'string' || title.trim().length === 0) {
-      return { ok: false, message: 'title must be a non-empty string' };
+      return { ok: false, message: 'title 必须是非空字符串' };
     }
     value.title = title.trim();
   } else if (options.requireTitle) {
-    return { ok: false, message: 'title is required' };
+    return { ok: false, message: 'title 为必填' };
   }
 
   for (const key of [
@@ -166,7 +166,7 @@ export function parseCourseInput(
   if (isParseFailure(lessonOrder)) return lessonOrder;
   if (lessonOrder !== undefined) {
     if (lessonOrder === null || !Number.isInteger(lessonOrder)) {
-      return { ok: false, message: 'lessonOrder must be an integer or null' };
+      return { ok: false, message: 'lessonOrder 必须是整数或 null' };
     }
     value.lessonOrder = lessonOrder;
   }
@@ -182,7 +182,7 @@ export function parseCourseInput(
     if (!CURRICULUM_COURSE_STATUSES.includes(status as CurriculumCourseStatus)) {
       return {
         ok: false,
-        message: `status must be one of ${CURRICULUM_COURSE_STATUSES.join(', ')}`,
+        message: `status 只能是以下之一：${CURRICULUM_COURSE_STATUSES.join(', ')}`,
       };
     }
     value.status = status as CurriculumCourseStatus;
@@ -200,18 +200,18 @@ export interface ParsedRelationInput {
 
 export function parseRelationInput(body: unknown): ParseResult<ParsedRelationInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const { sourceCourseId, targetCourseId, relationType } = record;
   if (typeof sourceCourseId !== 'string' || sourceCourseId.trim().length === 0) {
-    return { ok: false, message: 'sourceCourseId is required' };
+    return { ok: false, message: 'sourceCourseId 为必填' };
   }
   if (typeof targetCourseId !== 'string' || targetCourseId.trim().length === 0) {
-    return { ok: false, message: 'targetCourseId is required' };
+    return { ok: false, message: 'targetCourseId 为必填' };
   }
   if (!CURRICULUM_RELATION_TYPES.includes(relationType as CurriculumRelationType)) {
     return {
       ok: false,
-      message: `relationType must be one of ${CURRICULUM_RELATION_TYPES.join(', ')}`,
+      message: `relationType 只能是以下之一：${CURRICULUM_RELATION_TYPES.join(', ')}`,
     };
   }
   const note = readOptionalText(record, 'note');
@@ -243,17 +243,17 @@ export function parseKnowledgePointInput(
   options: { requireName: boolean },
 ): ParseResult<ParsedKnowledgePointInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const value: ParsedKnowledgePointInput = {};
   const name = record.name;
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return { ok: false, message: 'name must be a non-empty string' };
+      return { ok: false, message: 'name 必须是非空字符串' };
     }
     value.name = name.trim();
   } else if (options.requireName) {
-    return { ok: false, message: 'name is required' };
+    return { ok: false, message: 'name 为必填' };
   }
 
   for (const key of ['seriesId', 'parentId', 'code', 'summary'] as const) {
@@ -269,7 +269,7 @@ export function parseKnowledgePointInput(
     if (!KNOWLEDGE_POINT_TYPES.includes(type as KnowledgePointType)) {
       return {
         ok: false,
-        message: `type must be one of ${KNOWLEDGE_POINT_TYPES.join(', ')}`,
+        message: `type 只能是以下之一：${KNOWLEDGE_POINT_TYPES.join(', ')}`,
       };
     }
     value.type = type as KnowledgePointType;
@@ -282,7 +282,7 @@ export function parseKnowledgePointInput(
     } else if (!KNOWLEDGE_POINT_DIFFICULTIES.includes(difficulty as KnowledgePointDifficulty)) {
       return {
         ok: false,
-        message: `difficulty must be one of ${KNOWLEDGE_POINT_DIFFICULTIES.join(', ')} or null`,
+        message: `difficulty 只能是以下之一：${KNOWLEDGE_POINT_DIFFICULTIES.join(', ')}，或 null`,
       };
     } else {
       value.difficulty = difficulty as KnowledgePointDifficulty;
@@ -293,7 +293,7 @@ export function parseKnowledgePointInput(
   if (isParseFailure(sortOrder)) return sortOrder;
   if (sortOrder !== undefined) {
     if (sortOrder === null || !Number.isInteger(sortOrder)) {
-      return { ok: false, message: 'sortOrder must be an integer or null' };
+      return { ok: false, message: 'sortOrder 必须是整数或 null' };
     }
     value.sortOrder = sortOrder;
   }
@@ -312,18 +312,18 @@ export function parseCourseKnowledgePointsInput(
   body: unknown,
 ): ParseResult<ParsedCourseKnowledgePointInput[]> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const raw = record.knowledgePoints;
-  if (!Array.isArray(raw)) return { ok: false, message: 'knowledgePoints must be an array' };
-  if (raw.length > 500) return { ok: false, message: 'knowledgePoints is too large' };
+  if (!Array.isArray(raw)) return { ok: false, message: 'knowledgePoints 必须是数组' };
+  if (raw.length > 500) return { ok: false, message: 'knowledgePoints 数量过多' };
 
   const links: ParsedCourseKnowledgePointInput[] = [];
   for (const [index, item] of raw.entries()) {
     const entry = asRecord(item);
-    if (!entry) return { ok: false, message: `knowledgePoints[${index}] must be an object` };
+    if (!entry) return { ok: false, message: `knowledgePoints[${index}] 必须是一个对象` };
     const knowledgePointId = entry.knowledgePointId;
     if (typeof knowledgePointId !== 'string' || knowledgePointId.trim().length === 0) {
-      return { ok: false, message: `knowledgePoints[${index}].knowledgePointId is required` };
+      return { ok: false, message: `knowledgePoints[${index}].knowledgePointId 为必填` };
     }
     const parsed: ParsedCourseKnowledgePointInput = { knowledgePointId: knowledgePointId.trim() };
 
@@ -332,7 +332,7 @@ export function parseCourseKnowledgePointsInput(
       if (!COURSE_KNOWLEDGE_COVERAGE_LEVELS.includes(coverage as CourseKnowledgeCoverageLevel)) {
         return {
           ok: false,
-          message: `knowledgePoints[${index}].coverageLevel must be one of ${COURSE_KNOWLEDGE_COVERAGE_LEVELS.join(', ')}`,
+          message: `knowledgePoints[${index}].coverageLevel 只能是以下之一：${COURSE_KNOWLEDGE_COVERAGE_LEVELS.join(', ')}`,
         };
       }
       parsed.coverageLevel = coverage as CourseKnowledgeCoverageLevel;
@@ -340,13 +340,13 @@ export function parseCourseKnowledgePointsInput(
 
     const sortOrder = readOptionalNumber(entry, 'sortOrder');
     if (isParseFailure(sortOrder)) {
-      return { ok: false, message: `knowledgePoints[${index}].sortOrder must be a number` };
+      return { ok: false, message: `knowledgePoints[${index}].sortOrder 必须是数字` };
     }
     if (sortOrder !== undefined) {
       if (sortOrder === null || !Number.isInteger(sortOrder)) {
         return {
           ok: false,
-          message: `knowledgePoints[${index}].sortOrder must be an integer or null`,
+          message: `knowledgePoints[${index}].sortOrder 必须是整数或 null`,
         };
       }
       parsed.sortOrder = sortOrder;
@@ -354,7 +354,7 @@ export function parseCourseKnowledgePointsInput(
 
     const note = readOptionalText(entry, 'note');
     if (isParseFailure(note)) {
-      return { ok: false, message: `knowledgePoints[${index}].note must be a string or null` };
+      return { ok: false, message: `knowledgePoints[${index}].note 必须是字符串或 null` };
     }
     if (note !== undefined) parsed.note = note;
 
@@ -374,18 +374,18 @@ export function parseKnowledgePointRelationInput(
   body: unknown,
 ): ParseResult<ParsedKnowledgePointRelationInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const { sourceKnowledgePointId, targetKnowledgePointId, relationType } = record;
   if (typeof sourceKnowledgePointId !== 'string' || sourceKnowledgePointId.trim().length === 0) {
-    return { ok: false, message: 'sourceKnowledgePointId is required' };
+    return { ok: false, message: 'sourceKnowledgePointId 为必填' };
   }
   if (typeof targetKnowledgePointId !== 'string' || targetKnowledgePointId.trim().length === 0) {
-    return { ok: false, message: 'targetKnowledgePointId is required' };
+    return { ok: false, message: 'targetKnowledgePointId 为必填' };
   }
   if (!KNOWLEDGE_POINT_RELATION_TYPES.includes(relationType as KnowledgePointRelationType)) {
     return {
       ok: false,
-      message: `relationType must be one of ${KNOWLEDGE_POINT_RELATION_TYPES.join(', ')}`,
+      message: `relationType 只能是以下之一：${KNOWLEDGE_POINT_RELATION_TYPES.join(', ')}`,
     };
   }
   const note = readOptionalText(record, 'note');
@@ -414,13 +414,13 @@ export interface ParsedCourseAssemblyInput {
 
 export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCourseAssemblyInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const title = record.title;
   if (typeof title !== 'string' || title.trim().length === 0) {
-    return { ok: false, message: 'title is required' };
+    return { ok: false, message: 'title 为必填' };
   }
-  if (title.trim().length > 240) return { ok: false, message: 'title is too long' };
+  if (title.trim().length > 240) return { ok: false, message: 'title 过长' };
 
   const value: ParsedCourseAssemblyInput = {
     title: title.trim(),
@@ -436,7 +436,7 @@ export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCours
     }
   }
   if (value.type && value.type.length > 60) {
-    return { ok: false, message: 'type is too long' };
+    return { ok: false, message: 'type 过长' };
   }
 
   const hours = readOptionalNumber(record, 'hours');
@@ -449,7 +449,7 @@ export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCours
     // was acceptable.
     if (hours !== null) {
       if (hours <= 0) {
-        return { ok: false, message: 'hours must be a positive number or null' };
+        return { ok: false, message: 'hours 必须是正数或 null' };
       }
       value.hours = hours;
     }
@@ -458,7 +458,7 @@ export function parseCourseAssemblyInput(body: unknown): ParseResult<ParsedCours
   const links = parseCourseKnowledgePointsInput({ knowledgePoints: record.knowledgePoints });
   if (!links.ok) return { ok: false, message: links.message };
   if (links.value.length === 0) {
-    return { ok: false, message: 'knowledgePoints must contain at least one item' };
+    return { ok: false, message: 'knowledgePoints 至少需要包含一项' };
   }
   value.knowledgePoints = links.value;
 
@@ -482,21 +482,21 @@ export interface ParsedGenerationJobInput {
 
 function parseGenerationJobVoice(value: unknown): ParseResult<ParsedGenerationJobVoice> {
   const record = asRecord(value);
-  if (!record) return { ok: false, message: 'voice must be an object' };
+  if (!record) return { ok: false, message: 'voice 必须是一个对象' };
   const providerId = record.providerId;
   if (typeof providerId !== 'string' || providerId.trim().length === 0) {
-    return { ok: false, message: 'voice.providerId is required' };
+    return { ok: false, message: 'voice.providerId 为必填' };
   }
   const voiceId = record.voiceId;
   if (typeof voiceId !== 'string' || voiceId.trim().length === 0) {
-    return { ok: false, message: 'voice.voiceId is required' };
+    return { ok: false, message: 'voice.voiceId 为必填' };
   }
-  if (voiceId.length > 256) return { ok: false, message: 'voice.voiceId is too long' };
+  if (voiceId.length > 256) return { ok: false, message: 'voice.voiceId 过长' };
   if (
     record.speed !== undefined &&
     (typeof record.speed !== 'number' || !(record.speed > 0) || record.speed > 4)
   ) {
-    return { ok: false, message: 'voice.speed must be a number above 0 and at most 4' };
+    return { ok: false, message: 'voice.speed 必须是大于 0 且不超过 4 的数字' };
   }
   return {
     ok: true,
@@ -515,7 +515,7 @@ function parseGenerationJobVoice(value: unknown): ParseResult<ParsedGenerationJo
  */
 export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenerationJobInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const assembly = parseCourseAssemblyInput(record.assembly);
   if (!assembly.ok) return assembly;
@@ -533,7 +533,7 @@ export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenera
     } else if (typeof record.courseId === 'string' && record.courseId.trim().length > 0) {
       value.courseId = record.courseId.trim();
     } else {
-      return { ok: false, message: 'courseId must be a non-empty string or null' };
+      return { ok: false, message: 'courseId 必须是非空字符串或 null' };
     }
   }
 
@@ -545,7 +545,7 @@ export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenera
     ) {
       return {
         ok: false,
-        message: `outlineReview must be one of ${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
+        message: `outlineReview 只能是以下之一：${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
       };
     }
     value.outlineReview = record.outlineReview as CurriculumGenerationOutlineReview;
@@ -554,7 +554,7 @@ export function parseGenerationJobInput(body: unknown): ParseResult<ParsedGenera
   for (const key of ['interactive', 'taskEngine'] as const) {
     const field = record[key];
     if (field !== undefined) {
-      if (typeof field !== 'boolean') return { ok: false, message: `${key} must be a boolean` };
+      if (typeof field !== 'boolean') return { ok: false, message: `${key} 必须是布尔值` };
       value[key] = field;
     }
   }
@@ -591,7 +591,7 @@ function parseCurriculumBatchRunOptions(
     ) {
       return {
         ok: false,
-        message: `outlineReview must be one of ${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
+        message: `outlineReview 只能是以下之一：${CURRICULUM_GENERATION_OUTLINE_REVIEWS.join(', ')}`,
       };
     }
     value.outlineReview = record.outlineReview as CurriculumGenerationOutlineReview;
@@ -599,7 +599,7 @@ function parseCurriculumBatchRunOptions(
   for (const key of ['interactive', 'taskEngine'] as const) {
     const field = record[key];
     if (field !== undefined) {
-      if (typeof field !== 'boolean') return { ok: false, message: `${key} must be a boolean` };
+      if (typeof field !== 'boolean') return { ok: false, message: `${key} 必须是布尔值` };
       value[key] = field;
     }
   }
@@ -638,20 +638,20 @@ export interface ParsedCurriculumBatchInput {
  */
 export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurriculumBatchInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const name =
     typeof record.name === 'string' && record.name.trim().length > 0
       ? record.name.trim().slice(0, 160)
       : '批量生成';
   const rawItems = record.items;
-  if (!Array.isArray(rawItems)) return { ok: false, message: 'items must be an array' };
-  if (rawItems.length === 0) return { ok: false, message: 'items must contain at least one item' };
-  if (rawItems.length > 50) return { ok: false, message: 'items is too large' };
+  if (!Array.isArray(rawItems)) return { ok: false, message: 'items 必须是数组' };
+  if (rawItems.length === 0) return { ok: false, message: 'items 至少需要包含一项' };
+  if (rawItems.length > 50) return { ok: false, message: 'items 数量过多' };
 
   const items: ParsedCurriculumBatchItem[] = [];
   for (const [index, rawItem] of rawItems.entries()) {
     const item = asRecord(rawItem);
-    if (!item) return { ok: false, message: `items[${index}] must be an object` };
+    if (!item) return { ok: false, message: `items[${index}] 必须是一个对象` };
 
     const maxAttemptsRaw = item.maxAttempts;
     let maxAttempts = 1;
@@ -662,7 +662,7 @@ export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurr
         maxAttemptsRaw < 1 ||
         maxAttemptsRaw > 10
       ) {
-        return { ok: false, message: `items[${index}].maxAttempts must be an integer 1-10` };
+        return { ok: false, message: `items[${index}].maxAttempts 必须是 1-10 之间的整数` };
       }
       maxAttempts = maxAttemptsRaw;
     }
@@ -680,7 +680,7 @@ export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurr
     if (typeof courseId !== 'string' || courseId.trim().length === 0) {
       return {
         ok: false,
-        message: `items[${index}] must have a non-empty courseId or an assembly`,
+        message: `items[${index}] 必须提供非空的 courseId 或一个 assembly 方案`,
       };
     }
     const options = parseCurriculumBatchRunOptions(item);
@@ -715,7 +715,7 @@ export function parseCurriculumExportJobsInput(
   body: unknown,
 ): ParseResult<ParsedCurriculumExportJobsInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const value: ParsedCurriculumExportJobsInput = {
     batchItemIds: [],
@@ -727,28 +727,28 @@ export function parseCurriculumExportJobsInput(
 
   if ('batchId' in record && record.batchId !== undefined) {
     if (typeof record.batchId !== 'string' || record.batchId.trim().length === 0) {
-      return { ok: false, message: 'batchId must be a non-empty string' };
+      return { ok: false, message: 'batchId 必须是非空字符串' };
     }
     value.batchId = record.batchId.trim();
   }
 
   if ('batchItemIds' in record && record.batchItemIds !== undefined) {
     if (!Array.isArray(record.batchItemIds)) {
-      return { ok: false, message: 'batchItemIds must be an array' };
+      return { ok: false, message: 'batchItemIds 必须是数组' };
     }
     for (const [index, item] of record.batchItemIds.entries()) {
       if (typeof item !== 'string' || item.trim().length === 0) {
-        return { ok: false, message: `batchItemIds[${index}] must be a non-empty string` };
+        return { ok: false, message: `batchItemIds[${index}] 必须是非空字符串` };
       }
       value.batchItemIds.push(item.trim());
     }
   }
 
   if (!value.batchId && value.batchItemIds.length === 0) {
-    return { ok: false, message: 'batchId or batchItemIds is required' };
+    return { ok: false, message: 'batchId 或 batchItemIds 为必填' };
   }
   if (value.batchItemIds.length > 50) {
-    return { ok: false, message: 'batchItemIds is too large' };
+    return { ok: false, message: 'batchItemIds 数量过多' };
   }
 
   if ('resolution' in record && record.resolution !== undefined) {
@@ -758,7 +758,7 @@ export function parseCurriculumExportJobsInput(
     ) {
       return {
         ok: false,
-        message: `resolution must be one of ${Object.keys(VIDEO_RESOLUTIONS).join(', ')}`,
+        message: `resolution 只能是以下之一：${Object.keys(VIDEO_RESOLUTIONS).join(', ')}`,
       };
     }
     value.resolution = record.resolution as ParsedCurriculumExportJobsInput['resolution'];
@@ -768,7 +768,7 @@ export function parseCurriculumExportJobsInput(
       typeof record.fps !== 'number' ||
       !VIDEO_FPS.includes(record.fps as (typeof VIDEO_FPS)[number])
     ) {
-      return { ok: false, message: `fps must be one of ${VIDEO_FPS.join(', ')}` };
+      return { ok: false, message: `fps 只能是以下之一：${VIDEO_FPS.join(', ')}` };
     }
     value.fps = record.fps;
   }
@@ -777,13 +777,13 @@ export function parseCurriculumExportJobsInput(
       typeof record.quality !== 'string' ||
       !VIDEO_QUALITIES.includes(record.quality as (typeof VIDEO_QUALITIES)[number])
     ) {
-      return { ok: false, message: `quality must be one of ${VIDEO_QUALITIES.join(', ')}` };
+      return { ok: false, message: `quality 只能是以下之一：${VIDEO_QUALITIES.join(', ')}` };
     }
     value.quality = record.quality as ParsedCurriculumExportJobsInput['quality'];
   }
   if ('burnInSubtitles' in record && record.burnInSubtitles !== undefined) {
     if (typeof record.burnInSubtitles !== 'boolean') {
-      return { ok: false, message: 'burnInSubtitles must be a boolean' };
+      return { ok: false, message: 'burnInSubtitles 必须是布尔值' };
     }
     value.burnInSubtitles = record.burnInSubtitles;
   }
@@ -804,11 +804,11 @@ export function parseCurriculumExportJobAction(
   body: unknown,
 ): ParseResult<ParsedCurriculumExportJobAction> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const action = record.action;
   if (action === 'attach-render') {
     if (typeof record.renderJobId !== 'string' || record.renderJobId.trim().length === 0) {
-      return { ok: false, message: 'renderJobId is required' };
+      return { ok: false, message: 'renderJobId 为必填' };
     }
     return { ok: true, value: { action, renderJobId: record.renderJobId.trim() } };
   }
@@ -820,7 +820,7 @@ export function parseCurriculumExportJobAction(
       progress < 0 ||
       progress > 1
     ) {
-      return { ok: false, message: 'progress must be a number between 0 and 1' };
+      return { ok: false, message: 'progress 必须是 0 到 1 之间的数字' };
     }
     return { ok: true, value: { action, progress } };
   }
@@ -830,10 +830,10 @@ export function parseCurriculumExportJobAction(
   if (action === 'fail') {
     const error = asRecord(record.error);
     if (!error || typeof error.code !== 'string' || error.code.trim().length === 0) {
-      return { ok: false, message: 'error.code is required' };
+      return { ok: false, message: 'error.code 为必填' };
     }
     if (error.message !== undefined && typeof error.message !== 'string') {
-      return { ok: false, message: 'error.message must be a string' };
+      return { ok: false, message: 'error.message 必须是字符串' };
     }
     return {
       ok: true,
@@ -850,7 +850,7 @@ export function parseCurriculumExportJobAction(
   }
   return {
     ok: false,
-    message: 'action must be one of attach-render, progress, complete, fail, retry, cancel',
+    message: 'action 只能是以下之一：attach-render、progress、complete、fail、retry、cancel',
   };
 }
 
@@ -866,16 +866,16 @@ export function parseProgramInput(
   options: { requireName: boolean },
 ): ParseResult<ParsedProgramInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const value: ParsedProgramInput = {};
   const name = record.name;
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return { ok: false, message: 'name must be a non-empty string' };
+      return { ok: false, message: 'name 必须是非空字符串' };
     }
     value.name = name.trim();
   } else if (options.requireName) {
-    return { ok: false, message: 'name is required' };
+    return { ok: false, message: 'name 为必填' };
   }
   for (const key of ['code', 'description'] as const) {
     const parsed = readOptionalText(record, key);
@@ -887,7 +887,7 @@ export function parseProgramInput(
     if (!CURRICULUM_PROGRAM_STATUSES.includes(status as CurriculumProgramStatus)) {
       return {
         ok: false,
-        message: `status must be one of ${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
+        message: `status 只能是以下之一：${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
       };
     }
     value.status = status as CurriculumProgramStatus;
@@ -910,25 +910,25 @@ export function parseProgramVersionInput(
   options: { requireProgramId: boolean; requireName: boolean },
 ): ParseResult<ParsedProgramVersionInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const value: ParsedProgramVersionInput = {};
   const programId = record.programId;
   if (programId !== undefined) {
     if (typeof programId !== 'string' || programId.trim().length === 0) {
-      return { ok: false, message: 'programId must be a non-empty string' };
+      return { ok: false, message: 'programId 必须是非空字符串' };
     }
     value.programId = programId.trim();
   } else if (options.requireProgramId) {
-    return { ok: false, message: 'programId is required' };
+    return { ok: false, message: 'programId 为必填' };
   }
   const name = record.name;
   if (name !== undefined) {
     if (typeof name !== 'string' || name.trim().length === 0) {
-      return { ok: false, message: 'name must be a non-empty string' };
+      return { ok: false, message: 'name 必须是非空字符串' };
     }
     value.name = name.trim();
   } else if (options.requireName) {
-    return { ok: false, message: 'name is required' };
+    return { ok: false, message: 'name 为必填' };
   }
   for (const key of ['version', 'gradeYear', 'description'] as const) {
     const parsed = readOptionalText(record, key);
@@ -940,7 +940,7 @@ export function parseProgramVersionInput(
     if (!CURRICULUM_PROGRAM_STATUSES.includes(status as CurriculumProgramStatus)) {
       return {
         ok: false,
-        message: `status must be one of ${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
+        message: `status 只能是以下之一：${CURRICULUM_PROGRAM_STATUSES.join(', ')}`,
       };
     }
     value.status = status as CurriculumProgramStatus;
@@ -965,29 +965,29 @@ export function parseGraduationIndicatorInput(
   options: { requireProgramVersionId: boolean; requireCode: boolean; requireTitle: boolean },
 ): ParseResult<ParsedGraduationIndicatorInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const value: ParsedGraduationIndicatorInput = {};
   const programVersionId = record.programVersionId;
   if (programVersionId !== undefined) {
     if (typeof programVersionId !== 'string' || programVersionId.trim().length === 0) {
-      return { ok: false, message: 'programVersionId must be a non-empty string' };
+      return { ok: false, message: 'programVersionId 必须是非空字符串' };
     }
     value.programVersionId = programVersionId.trim();
   } else if (options.requireProgramVersionId) {
-    return { ok: false, message: 'programVersionId is required' };
+    return { ok: false, message: 'programVersionId 为必填' };
   }
   for (const key of ['code', 'title'] as const) {
     const valueAtKey = record[key];
     if (valueAtKey !== undefined) {
       if (typeof valueAtKey !== 'string' || valueAtKey.trim().length === 0) {
-        return { ok: false, message: `${key} must be a non-empty string` };
+        return { ok: false, message: `${key} 必须是非空字符串` };
       }
       value[key] = valueAtKey.trim();
     } else if (
       (key === 'code' && options.requireCode) ||
       (key === 'title' && options.requireTitle)
     ) {
-      return { ok: false, message: `${key} is required` };
+      return { ok: false, message: `${key} 为必填` };
     }
   }
   const description = readOptionalText(record, 'description');
@@ -1002,7 +1002,7 @@ export function parseGraduationIndicatorInput(
       targetWeight < 1 ||
       targetWeight > 10
     ) {
-      return { ok: false, message: 'targetWeight must be an integer between 1 and 10' };
+      return { ok: false, message: 'targetWeight 必须是 1 到 10 之间的整数' };
     }
     value.targetWeight = targetWeight;
   }
@@ -1010,7 +1010,7 @@ export function parseGraduationIndicatorInput(
   if (isParseFailure(sortOrder)) return sortOrder;
   if (sortOrder !== undefined) {
     if (sortOrder === null || !Number.isInteger(sortOrder)) {
-      return { ok: false, message: 'sortOrder must be an integer or null' };
+      return { ok: false, message: 'sortOrder 必须是整数或 null' };
     }
     value.sortOrder = sortOrder;
   }
@@ -1035,16 +1035,16 @@ export function parseProgramCourseInput(
   options: { requireProgramVersionId: boolean },
 ): ParseResult<ParsedProgramCourseInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const value: ParsedProgramCourseInput = {};
   const programVersionId = record.programVersionId;
   if (programVersionId !== undefined) {
     if (typeof programVersionId !== 'string' || programVersionId.trim().length === 0) {
-      return { ok: false, message: 'programVersionId must be a non-empty string' };
+      return { ok: false, message: 'programVersionId 必须是非空字符串' };
     }
     value.programVersionId = programVersionId.trim();
   } else if (options.requireProgramVersionId) {
-    return { ok: false, message: 'programVersionId is required' };
+    return { ok: false, message: 'programVersionId 为必填' };
   }
   const courseId = readOptionalText(record, 'courseId');
   if (isParseFailure(courseId)) return courseId;
@@ -1054,7 +1054,7 @@ export function parseProgramCourseInput(
     if (isParseFailure(parsed)) return parsed;
     if (parsed !== undefined) {
       if (key === 'title' && parsed !== null && parsed.trim().length === 0) {
-        return { ok: false, message: 'title must be a non-empty string or null' };
+        return { ok: false, message: 'title 必须是非空字符串或 null' };
       }
       value[key] = parsed;
     }
@@ -1066,7 +1066,7 @@ export function parseProgramCourseInput(
     ) {
       return {
         ok: false,
-        message: `category must be one of ${CURRICULUM_PROGRAM_COURSE_CATEGORIES.join(', ')}`,
+        message: `category 只能是以下之一：${CURRICULUM_PROGRAM_COURSE_CATEGORIES.join(', ')}`,
       };
     }
     value.category = category as CurriculumProgramCourseCategory;
@@ -1080,7 +1080,7 @@ export function parseProgramCourseInput(
   if (isParseFailure(sortOrder)) return sortOrder;
   if (sortOrder !== undefined) {
     if (sortOrder === null || !Number.isInteger(sortOrder)) {
-      return { ok: false, message: 'sortOrder must be an integer or null' };
+      return { ok: false, message: 'sortOrder 必须是整数或 null' };
     }
     value.sortOrder = sortOrder;
   }
@@ -1095,20 +1095,20 @@ export function parseCourseIndicatorSupportsInput(
   body: unknown,
 ): ParseResult<ParsedCourseIndicatorSupportsInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const rawSupports = record.supports;
-  if (!Array.isArray(rawSupports)) return { ok: false, message: 'supports must be an array' };
+  if (!Array.isArray(rawSupports)) return { ok: false, message: 'supports 必须是数组' };
   const seen = new Set<string>();
   const supports: ParsedCourseIndicatorSupportsInput['supports'] = [];
   for (const rawSupport of rawSupports) {
     const support = asRecord(rawSupport);
-    if (!support) return { ok: false, message: 'each support must be a JSON object' };
+    if (!support) return { ok: false, message: '每个 support 必须是一个 JSON 对象' };
     if (typeof support.indicatorId !== 'string' || support.indicatorId.trim().length === 0) {
-      return { ok: false, message: 'indicatorId is required for each support' };
+      return { ok: false, message: '每个 support 都需要 indicatorId' };
     }
     const indicatorId = support.indicatorId.trim();
     if (seen.has(indicatorId)) {
-      return { ok: false, message: 'indicatorId must not be duplicated' };
+      return { ok: false, message: 'indicatorId 不能重复' };
     }
     seen.add(indicatorId);
     const weight = readOptionalNumber(support, 'weight');
@@ -1120,7 +1120,7 @@ export function parseCourseIndicatorSupportsInput(
       weight < 0 ||
       weight > 5
     ) {
-      return { ok: false, message: 'weight must be an integer between 0 and 5' };
+      return { ok: false, message: 'weight 必须是 0 到 5 之间的整数' };
     }
     const note = readOptionalText(support, 'note');
     if (isParseFailure(note)) return note;
@@ -1145,13 +1145,13 @@ export function parseProgramPlanImportInput(
   body: unknown,
 ): ParseResult<ParsedProgramPlanImportInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
   const document = parseProgramPlanExportDocument(record.document);
   if (!document.ok) return { ok: false, message: document.message };
 
   const mode = record.mode ?? 'create';
   if (mode !== 'create' && mode !== 'replace') {
-    return { ok: false, message: 'mode must be one of create, replace' };
+    return { ok: false, message: 'mode 只能是以下之一：create、replace' };
   }
 
   const rawProgramId = readOptionalText(record, 'programId');
@@ -1166,10 +1166,10 @@ export function parseProgramPlanImportInput(
       : null;
 
   if (mode === 'replace' && !programVersionId) {
-    return { ok: false, message: 'programVersionId is required when mode is replace' };
+    return { ok: false, message: 'mode 为 replace 时 programVersionId 为必填' };
   }
   if (mode === 'create' && programVersionId) {
-    return { ok: false, message: 'programVersionId is only allowed when mode is replace' };
+    return { ok: false, message: '仅当 mode 为 replace 时才允许 programVersionId' };
   }
 
   return {
@@ -1197,21 +1197,21 @@ export function parseProgramVersionSyncInput(
   body: unknown,
 ): ParseResult<ParsedProgramVersionSyncInput> {
   const record = asRecord(body);
-  if (!record) return { ok: false, message: 'request body must be a JSON object' };
+  if (!record) return { ok: false, message: '请求体必须是一个 JSON 对象' };
 
   const source = record.sourceVersionId;
   if (typeof source !== 'string' || source.trim().length === 0) {
-    return { ok: false, message: 'sourceVersionId is required' };
+    return { ok: false, message: 'sourceVersionId 为必填' };
   }
   const target = record.targetVersionId;
   if (typeof target !== 'string' || target.trim().length === 0) {
-    return { ok: false, message: 'targetVersionId is required' };
+    return { ok: false, message: 'targetVersionId 为必填' };
   }
 
   const sourceVersionId = source.trim();
   const targetVersionId = target.trim();
   if (sourceVersionId === targetVersionId) {
-    return { ok: false, message: 'sourceVersionId and targetVersionId must be different' };
+    return { ok: false, message: 'sourceVersionId 与 targetVersionId 必须不同' };
   }
 
   return { ok: true, value: { sourceVersionId, targetVersionId } };

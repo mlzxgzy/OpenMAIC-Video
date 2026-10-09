@@ -27,7 +27,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseProgramInput(body, { requireName: false });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -49,7 +49,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_FAILED',
-        'Failed to update the program',
+        '更新培养方案失败',
         responseHeaders,
       );
     }
@@ -76,7 +76,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_FAILED',
-        'Failed to delete the program',
+        '删除培养方案失败',
         responseHeaders,
       );
     }

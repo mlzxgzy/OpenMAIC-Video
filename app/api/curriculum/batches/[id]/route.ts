@@ -22,7 +22,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const action =
     typeof body === 'object' && body !== null && !Array.isArray(body)
@@ -32,7 +32,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
     return curriculumJsonError(
       400,
       'CURRICULUM_INVALID',
-      `action must be one of ${ACTIONS.join(', ')}`,
+      `action 只能是以下之一：${ACTIONS.join('、')}`,
     );
   }
 
@@ -49,7 +49,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return curriculumJsonError(
         500,
         'CURRICULUM_BATCH_FAILED',
-        'Failed to update the generation batch',
+        '更新生成批次失败',
         responseHeaders,
       );
     }

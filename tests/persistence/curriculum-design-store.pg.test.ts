@@ -90,7 +90,7 @@ describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
     );
     expect(failure).toBeInstanceOf(CurriculumPhaseError);
     expect(failure).toMatchObject({ current: 'outcomes', required: 'graph' });
-    expect((failure as Error).message).toContain('no learning outcomes');
+    expect((failure as Error).message).toContain('还没有定义任何学习目标');
 
     const after = await pool.query<{ design_phase: string }>(
       'SELECT design_phase FROM curriculum_task WHERE id = $1',

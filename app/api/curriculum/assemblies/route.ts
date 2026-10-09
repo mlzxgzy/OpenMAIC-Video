@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCourseAssemblyInput(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -42,7 +42,7 @@ export async function POST(req: NextRequest) {
         return curriculumJsonError(
           400,
           'CURRICULUM_INVALID',
-          'none of the selected knowledge points are available in this curriculum series',
+          '所选知识点在当前课程系列中均不可用',
           responseHeaders,
         );
       }
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_ASSEMBLY_FAILED',
-        'Failed to build the course assembly plan',
+        '生成课程组装方案失败',
         responseHeaders,
       );
     }

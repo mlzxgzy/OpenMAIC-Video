@@ -130,17 +130,17 @@ class Reader {
    */
   text(key: string, opts: { required?: boolean } = {}): string | undefined {
     if (!this.has(key)) {
-      if (opts.required) this.fail(`${key} is required`);
+      if (opts.required) this.fail(`${key} 为必填`);
       return undefined;
     }
     const raw = this.raw(key);
     if (typeof raw !== 'string') {
-      this.fail(`${key} must be a string`);
+      this.fail(`${key} 必须是字符串`);
       return undefined;
     }
     const trimmed = raw.trim();
     if (trimmed === '') {
-      if (opts.required) this.fail(`${key} must not be empty`);
+      if (opts.required) this.fail(`${key} 不能为空`);
       return undefined;
     }
     return trimmed;
@@ -155,7 +155,7 @@ class Reader {
     const raw = this.raw(key);
     if (raw === null) return null;
     if (typeof raw !== 'string') {
-      this.fail(`${key} must be a string or null`);
+      this.fail(`${key} 必须是字符串或 null`);
       return undefined;
     }
     const trimmed = raw.trim();
@@ -164,12 +164,12 @@ class Reader {
 
   number(key: string, opts: { required?: boolean } = {}): number | undefined {
     if (!this.has(key)) {
-      if (opts.required) this.fail(`${key} is required`);
+      if (opts.required) this.fail(`${key} 为必填`);
       return undefined;
     }
     const raw = this.raw(key);
     if (typeof raw !== 'number' || !Number.isFinite(raw)) {
-      this.fail(`${key} must be a finite number`);
+      this.fail(`${key} 必须是有限数字`);
       return undefined;
     }
     return raw;
@@ -185,7 +185,7 @@ class Reader {
     const value = this.number(key, opts);
     if (value === undefined) return undefined;
     if (!Number.isInteger(value)) {
-      this.fail(`${key} must be an integer`);
+      this.fail(`${key} 必须是整数`);
       return undefined;
     }
     return value;
@@ -195,7 +195,7 @@ class Reader {
     if (!this.has(key)) return undefined;
     const raw = this.raw(key);
     if (typeof raw !== 'boolean') {
-      this.fail(`${key} must be true or false`);
+      this.fail(`${key} 必须是 true 或 false`);
       return undefined;
     }
     return raw;
@@ -213,12 +213,12 @@ class Reader {
     opts: { required?: boolean } = {},
   ): T | undefined {
     if (!this.has(key)) {
-      if (opts.required) this.fail(`${key} is required`);
+      if (opts.required) this.fail(`${key} 为必填`);
       return undefined;
     }
     const raw = this.raw(key);
     if (typeof raw !== 'string' || !(allowed as readonly string[]).includes(raw)) {
-      this.fail(`${key} must be one of: ${allowed.join(', ')}`);
+      this.fail(`${key} 只能是以下之一：${allowed.join(', ')}`);
       return undefined;
     }
     return raw as T;
@@ -229,13 +229,13 @@ class Reader {
     if (!this.has(key)) return undefined;
     const raw = this.raw(key);
     if (!Array.isArray(raw)) {
-      this.fail(`${key} must be an array of strings`);
+      this.fail(`${key} 必须是字符串数组`);
       return undefined;
     }
     const out: string[] = [];
     raw.forEach((entry, index) => {
       if (typeof entry !== 'string') {
-        this.fail(`${key}[${index}] must be a string`);
+        this.fail(`${key}[${index}] 必须是字符串`);
         return;
       }
       const trimmed = entry.trim();
@@ -250,7 +250,7 @@ class Reader {
     const raw = this.raw(key);
     if (raw === null) return undefined;
     if (typeof raw !== 'object' || Array.isArray(raw)) {
-      this.fail(`${key} must be a JSON object`);
+      this.fail(`${key} 必须是一个 JSON 对象`);
       return undefined;
     }
     return raw as Record<string, unknown>;
@@ -267,13 +267,13 @@ class Reader {
     if (!this.has(key)) return undefined;
     const raw = this.raw(key);
     if (!Array.isArray(raw)) {
-      this.fail(`${key} must be an array`);
+      this.fail(`${key} 必须是数组`);
       return undefined;
     }
     const out: T[] = [];
     raw.forEach((entry, index) => {
       if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) {
-        this.fail(`${key}[${index}] must be an object`);
+        this.fail(`${key}[${index}] 必须是一个对象`);
         return;
       }
       const sub = new Reader(entry as Record<string, unknown>);
@@ -293,7 +293,7 @@ class Reader {
 /** A route body: one JSON object, or a named refusal. */
 export function parseJsonObject(body: unknown): ParseResult<Record<string, unknown>> {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) {
-    return { ok: false, message: 'request body must be a JSON object' };
+    return { ok: false, message: '请求体必须是一个 JSON 对象' };
   }
   return { ok: true, value: body as Record<string, unknown> };
 }
@@ -321,7 +321,7 @@ export function parseTaskInput(body: unknown): ParseResult<CurriculumTaskInput> 
   const value = readTask(r, false);
   const result = r.result(value);
   if (!result.ok) return result;
-  if (value.title === undefined) return { ok: false, message: 'title is required' };
+  if (value.title === undefined) return { ok: false, message: 'title 为必填' };
   return { ok: true, value: { ...value, title: value.title } };
 }
 
@@ -363,7 +363,7 @@ export function parseObjectiveInput(body: unknown): ParseResult<CurriculumObject
   const result = r.result(value);
   if (!result.ok) return result;
   if (value.title === undefined || value.objectiveType === undefined) {
-    return { ok: false, message: 'title and objectiveType are required' };
+    return { ok: false, message: 'title、objectiveType 均为必填' };
   }
   return {
     ok: true,
@@ -416,7 +416,7 @@ export function parseEvidenceInput(body: unknown): ParseResult<CurriculumEvidenc
   ) {
     return {
       ok: false,
-      message: 'objectiveId, evidenceType, verificationMethod and successCondition are required',
+      message: 'objectiveId、evidenceType、verificationMethod、successCondition 均为必填',
     };
   }
   return {
@@ -447,7 +447,7 @@ export function parseNodeInput(body: unknown): ParseResult<CurriculumLearningNod
   const result = r.result(value);
   if (!result.ok) return result;
   if (value.name === undefined || value.nodeType === undefined) {
-    return { ok: false, message: 'name and nodeType are required' };
+    return { ok: false, message: 'name、nodeType 均为必填' };
   }
   return { ok: true, value: { ...value, name: value.name, nodeType: value.nodeType } };
 }
@@ -482,7 +482,7 @@ export function parseNodeObjectives(body: unknown): ParseResult<CurriculumNodeOb
     // Absent reads differently from wrong-shaped, because the two need
     // different fixes — and this field is a whole set, so its absence is the
     // common mistake.
-    return { ok: false, message: 'links is required (send the complete set)' };
+    return { ok: false, message: 'links 为必填（请发送完整集合）' };
   }
   return r.result(links ?? []);
 }
@@ -518,7 +518,7 @@ export function parseDependencyInput(body: unknown): ParseResult<CurriculumDepen
   ) {
     return {
       ok: false,
-      message: 'sourceId, targetId, sourceKind, targetKind and edgeType are required',
+      message: 'sourceId、targetId、sourceKind、targetKind、edgeType 均为必填',
     };
   }
   return {
@@ -535,7 +535,7 @@ function readTeachingDesign(r: Reader, key: string): CurriculumTeachingDesign | 
   const raw = r.raw(key);
   if (raw === null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    r.fail(`${key} must be a JSON object`);
+    r.fail(`${key} 必须是一个 JSON 对象`);
     return undefined;
   }
   const sub = new Reader(raw as Record<string, unknown>);
@@ -564,7 +564,7 @@ function readDeckDesign(r: Reader, key: string): CurriculumDeckDesign | undefine
   const raw = r.raw(key);
   if (raw === null) return undefined;
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    r.fail(`${key} must be a JSON object`);
+    r.fail(`${key} 必须是一个 JSON 对象`);
     return undefined;
   }
   const sub = new Reader(raw as Record<string, unknown>);
@@ -598,7 +598,7 @@ function readUnit(r: Reader, partial: boolean): PatchOf<CurriculumUnitInput> {
   // The store's UPDATE does not carry the column, so a patch naming it would
   // be silently ignored — refused here instead, which is the honest answer.
   if (partial && r.has('unitType')) {
-    r.fail('unitType cannot be changed; a chapter and an item are not interchangeable');
+    r.fail('unitType 不可更改：章节与条目不能互换');
   }
   return {
     parentId: r.nullableText('parentId'),
@@ -622,7 +622,7 @@ export function parseUnitInput(body: unknown): ParseResult<CurriculumUnitInput> 
   const result = r.result(value);
   if (!result.ok) return result;
   if (value.unitType === undefined || value.title === undefined) {
-    return { ok: false, message: 'unitType and title are required' };
+    return { ok: false, message: 'unitType、title 均为必填' };
   }
   return { ok: true, value: { ...value, unitType: value.unitType, title: value.title } };
 }
@@ -661,7 +661,7 @@ export function parseUnitCoverageInput(body: unknown): ParseResult<CurriculumUni
   const result = r.result(value);
   if (!result.ok) return result;
   if (value === undefined) {
-    return { ok: false, message: 'unitId, objectiveId and coverageKind are required' };
+    return { ok: false, message: 'unitId、objectiveId、coverageKind 均为必填' };
   }
   return { ok: true, value };
 }
@@ -675,7 +675,7 @@ export function parseUnitCoverageSet(body: unknown): ParseResult<CurriculumUnitC
     readUnitCoverage(entry),
   );
   if (rows === undefined && r.errors.length === 0) {
-    return { ok: false, message: 'rows is required (send the complete coverage set)' };
+    return { ok: false, message: 'rows 为必填（请发送完整的覆盖集合）' };
   }
   return r.result(rows ?? []);
 }
@@ -705,7 +705,7 @@ export function parseUnitDependencyInput(
   const result = r.result(value);
   if (!result.ok) return result;
   if (value === undefined) {
-    return { ok: false, message: 'sourceUnitId and targetUnitId are required' };
+    return { ok: false, message: 'sourceUnitId、targetUnitId 均为必填' };
   }
   return { ok: true, value };
 }
@@ -759,7 +759,7 @@ export function parseQuestionInput(body: unknown): ParseResult<CurriculumQuestio
   ) {
     return {
       ok: false,
-      message: 'unitId, objectiveId, questionType and stem are required',
+      message: 'unitId、objectiveId、questionType、stem 均为必填',
     };
   }
   return { ok: true, value: { ...value, unitId, objectiveId, questionType, stem } };
@@ -881,7 +881,7 @@ export function parseLabTaskInput(body: unknown): ParseResult<CurriculumLabTaskI
   ) {
     return {
       ok: false,
-      message: 'unitId, objectiveId, taskGoal and dockerImage are required',
+      message: 'unitId、objectiveId、taskGoal、dockerImage 均为必填',
     };
   }
   // `verifyRules` is intentionally not defaulted here. An empty set is the
@@ -915,6 +915,6 @@ export function parseFindingStatus(body: unknown): ParseResult<'open' | 'resolve
   const status = r.oneOf('status', ['open', 'resolved', 'waived'] as const, { required: true });
   const result = r.result(status);
   if (!result.ok) return result;
-  if (status === undefined) return { ok: false, message: 'status is required' };
+  if (status === undefined) return { ok: false, message: 'status 为必填' };
   return { ok: true, value: status };
 }

@@ -379,8 +379,8 @@ describe('design routes (PGlite)', () => {
       expect(body.phase).toBe('task');
       expect(body.nextPhase).toBe('outcomes');
       expect(body.readyToAdvance).toBe(false);
-      // Each gap names a field, not just the phase.
-      expect(body.gaps.join(' ')).toContain('audience');
+      // Each gap names what is missing, not just the phase.
+      expect(body.gaps.join(' ')).toContain('授课对象');
     });
 
     it('advances once the brief is complete', async () => {
@@ -409,7 +409,7 @@ describe('design routes (PGlite)', () => {
       expect(body.error.code).toBe('CURRICULUM_DESIGN_PHASE_LOCKED');
       expect(body.error.details).toEqual({ current: 'task', required: 'outcomes' });
       // The pair says where it is stuck; the message still names what is missing.
-      expect(body.error.message).toContain('audience');
+      expect(body.error.message).toContain('授课对象');
     });
 
     it('refuses a write from a later phase with 409 and both phases in the body', async () => {
@@ -609,7 +609,7 @@ describe('design routes (PGlite)', () => {
       );
       expect(response.status).toBe(400);
       const body = await read<{ error: { message: string } }>(response);
-      expect(body.error.message).toContain('chapter');
+      expect(body.error.message).toContain('章节');
     });
 
     it('refuses an item that declares no role', async () => {
@@ -644,7 +644,7 @@ describe('design routes (PGlite)', () => {
       );
       expect(response.status).toBe(400);
       const body = await read<{ error: { message: string } }>(response);
-      expect(body.error.message).toContain('not interchangeable');
+      expect(body.error.message).toContain('不能互换');
     });
 
     it('refuses a deck page with a goal-less heading', async () => {
@@ -801,7 +801,7 @@ describe('design routes (PGlite)', () => {
       );
       expect(response.status).toBe(400);
       const body = await read<{ error: { message: string } }>(response);
-      expect(body.error.message).toContain('verification rule');
+      expect(body.error.message).toContain('验证规则');
     });
   });
 

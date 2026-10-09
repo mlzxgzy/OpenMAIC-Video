@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCourseInput(body, { requireTitle: true });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -47,12 +47,7 @@ export async function POST(req: NextRequest) {
       const known = mapCurriculumError(error, responseHeaders);
       if (known) return known;
       console.error(`[Curriculum] Failed to create course [owner=${ownerId}]:`, error);
-      return curriculumJsonError(
-        500,
-        'CURRICULUM_COURSE_FAILED',
-        'Failed to create the course',
-        responseHeaders,
-      );
+      return curriculumJsonError(500, 'CURRICULUM_COURSE_FAILED', '创建课程失败', responseHeaders);
     }
   });
 }

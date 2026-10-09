@@ -28,7 +28,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_EXPORT_CLAIM_FAILED',
-        'Failed to claim an export job',
+        '领取导出任务失败',
         responseHeaders,
       );
     }

@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseProgramVersionInput(body, { requireProgramId: true, requireName: true });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -48,7 +48,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_VERSION_FAILED',
-        'Failed to create the program version',
+        '创建培养方案版本失败',
         responseHeaders,
       );
     }

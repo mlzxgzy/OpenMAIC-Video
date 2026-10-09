@@ -200,7 +200,7 @@ describe('parseCourseAssemblyInput', () => {
     const parsed = parseCourseAssemblyInput({ title: '空课程', knowledgePoints: [] });
     expect(parsed).toEqual({
       ok: false,
-      message: 'knowledgePoints must contain at least one item',
+      message: 'knowledgePoints 至少需要包含一项',
     });
   });
 
@@ -223,8 +223,8 @@ describe('parseCourseAssemblyInput', () => {
     // the shared number reader. Both must stay refused — accepting null must not
     // turn into accepting anything.
     const cases: [number, string][] = [
-      [0, 'hours must be a positive number or null'],
-      [-2, 'hours must be a non-negative number or null'],
+      [0, 'hours 必须是正数或 null'],
+      [-2, 'hours 必须是非负数或 null'],
     ];
     for (const [hours, message] of cases) {
       const parsed = parseCourseAssemblyInput({

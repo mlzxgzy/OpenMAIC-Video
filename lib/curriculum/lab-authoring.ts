@@ -149,13 +149,13 @@ export function examStrictGaps(input: LabExamStrictness): string[] {
   if (input.assessmentMode !== 'exam') return [];
   const gaps: string[] = [];
   if (input.hintPolicy !== 'forbidden') {
-    gaps.push('hintPolicy must be "forbidden": an exam gives no hints');
+    gaps.push('hintPolicy 必须是 "forbidden"：考试不提供提示');
   }
   if (input.allowRetry !== false) {
-    gaps.push('allowRetry must be false: an exam is taken once');
+    gaps.push('allowRetry 必须是 false：考试只能考一次');
   }
   if (input.timeLimitSec === null || input.timeLimitSec === undefined) {
-    gaps.push('timeLimitSec must be set: an exam is on a clock');
+    gaps.push('timeLimitSec 必须设置：考试限时');
   }
   return gaps;
 }
@@ -164,7 +164,7 @@ export function examStrictGaps(input: LabExamStrictness): string[] {
 export function examStrictRefusal(input: LabExamStrictness): string | null {
   const gaps = examStrictGaps(input);
   if (gaps.length === 0) return null;
-  return `an exam is independent, hint-free and on a clock; this one is not (${gaps.join('; ')})`;
+  return `考试应当独立完成、不给提示、限时；这一项不是（${gaps.join('；')}）`;
 }
 
 /**

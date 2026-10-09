@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_LIST_FAILED',
-        'Failed to load the curriculum ledger',
+        '加载课程台账失败',
         responseHeaders,
       );
     }

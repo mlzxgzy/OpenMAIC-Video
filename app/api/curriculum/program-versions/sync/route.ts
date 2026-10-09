@@ -33,7 +33,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseProgramVersionSyncInput(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
         const snapshot = await listCurriculum(tx as unknown as Queryable, ownerId);
         const document = buildProgramPlanExport(snapshot, parsed.value.sourceVersionId);
         if (!document) {
-          throw new CurriculumNotFoundError('source program version not found');
+          throw new CurriculumNotFoundError('源培养方案版本不存在');
         }
         return importCurriculumProgramPlan(tx as unknown as Queryable, ownerId, {
           mode: 'replace',
@@ -65,7 +65,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_SYNC_FAILED',
-        'Failed to sync the program version',
+        '同步培养方案版本失败',
         responseHeaders,
       );
     }

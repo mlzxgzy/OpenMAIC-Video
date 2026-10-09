@@ -27,7 +27,7 @@ export async function GET(req: NextRequest, { params }: Params) {
     const objectiveId = req.nextUrl.searchParams.get('objectiveId')?.trim();
     const unitId = req.nextUrl.searchParams.get('unitId')?.trim();
     if (!objectiveId && !unitId) {
-      return designInvalid('pass objectiveId or unitId', ctx.headers);
+      return designInvalid('请传入 objectiveId 或 unitId', ctx.headers);
     }
 
     const snapshot = await getCurriculumDesignSnapshot(ctx.queryable, ctx.ownerId, ctx.taskId);
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest, { params }: Params) {
           {
             error: {
               code: 'CURRICULUM_DESIGN_NOT_FOUND',
-              message: `learning outcome not found: ${objectiveId}`,
+              message: `学习目标不存在：${objectiveId}`,
             },
           },
           404,
@@ -54,7 +54,7 @@ export async function GET(req: NextRequest, { params }: Params) {
         {
           error: {
             code: 'CURRICULUM_DESIGN_NOT_FOUND',
-            message: `curriculum item not found: ${unitId}`,
+            message: `课程条目不存在：${unitId}`,
           },
         },
         404,

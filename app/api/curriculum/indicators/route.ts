@@ -23,7 +23,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseGraduationIndicatorInput(body, {
     requireProgramVersionId: true,
@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_INDICATOR_FAILED',
-        'Failed to create the graduation indicator',
+        '创建毕业要求指标点失败',
         responseHeaders,
       );
     }

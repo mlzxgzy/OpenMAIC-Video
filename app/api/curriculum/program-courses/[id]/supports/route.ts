@@ -27,7 +27,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCourseIndicatorSupportsInput(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -54,7 +54,7 @@ export async function PUT(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_SUPPORT_FAILED',
-        'Failed to update the indicator support matrix',
+        '更新指标点支撑矩阵失败',
         responseHeaders,
       );
     }

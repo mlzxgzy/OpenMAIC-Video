@@ -81,14 +81,14 @@ class ProgramIoError extends Error {
 
 function asRecord(value: unknown, field: string): Record<string, unknown> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ProgramIoError(`${field} must be a JSON object`);
+    throw new ProgramIoError(`${field} 必须是 JSON 对象`);
   }
   return value as Record<string, unknown>;
 }
 
 function requiredText(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new ProgramIoError(`${field} must be a non-empty string`);
+    throw new ProgramIoError(`${field} 必须是非空字符串`);
   }
   return value.trim();
 }
@@ -96,7 +96,7 @@ function requiredText(value: unknown, field: string): string {
 function optionalText(value: unknown, field: string): string | null {
   if (value === undefined || value === null) return null;
   if (typeof value !== 'string') {
-    throw new ProgramIoError(`${field} must be a string or null`);
+    throw new ProgramIoError(`${field} 必须是字符串或 null`);
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
@@ -112,16 +112,16 @@ interface NumberOptions {
 function optionalNumber(value: unknown, field: string, options: NumberOptions = {}): number | null {
   if (value === undefined || value === null) return options.fallback ?? null;
   if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throw new ProgramIoError(`${field} must be a finite number or null`);
+    throw new ProgramIoError(`${field} 必须是有限数字或 null`);
   }
   if (options.integer && !Number.isInteger(value)) {
-    throw new ProgramIoError(`${field} must be an integer`);
+    throw new ProgramIoError(`${field} 必须是整数`);
   }
   if (options.min !== undefined && value < options.min) {
-    throw new ProgramIoError(`${field} must be >= ${options.min}`);
+    throw new ProgramIoError(`${field} 必须 >= ${options.min}`);
   }
   if (options.max !== undefined && value > options.max) {
-    throw new ProgramIoError(`${field} must be <= ${options.max}`);
+    throw new ProgramIoError(`${field} 必须 <= ${options.max}`);
   }
   return value;
 }
@@ -134,7 +134,7 @@ function enumValue<T extends string>(
 ): T {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== 'string' || !allowed.includes(value as T)) {
-    throw new ProgramIoError(`${field} must be one of ${allowed.join(', ')}`);
+    throw new ProgramIoError(`${field} 只能是以下之一：${allowed.join(', ')}`);
   }
   return value as T;
 }
@@ -249,10 +249,10 @@ export function parseProgramPlanExportDocument(
   try {
     const root = asRecord(value, 'document');
     if (root.kind !== PROGRAM_PLAN_EXPORT_KIND) {
-      throw new ProgramIoError(`kind must be "${PROGRAM_PLAN_EXPORT_KIND}"`);
+      throw new ProgramIoError(`kind 必须是 "${PROGRAM_PLAN_EXPORT_KIND}"`);
     }
     if (root.version !== PROGRAM_PLAN_EXPORT_VERSION) {
-      throw new ProgramIoError(`version must be ${PROGRAM_PLAN_EXPORT_VERSION}`);
+      throw new ProgramIoError(`version 必须是 ${PROGRAM_PLAN_EXPORT_VERSION}`);
     }
 
     const programRecord = asRecord(root.program, 'program');
@@ -288,14 +288,14 @@ export function parseProgramPlanExportDocument(
 
     const rawIndicators = root.indicators ?? [];
     if (!Array.isArray(rawIndicators)) {
-      throw new ProgramIoError('indicators must be an array');
+      throw new ProgramIoError('indicators 必须是数组');
     }
     const indicatorCodes = new Set<string>();
     const indicators = rawIndicators.map((raw, index): ProgramPlanExportIndicator => {
       const record = asRecord(raw, `indicators[${index}]`);
       const code = requiredText(record.code, `indicators[${index}].code`);
       if (indicatorCodes.has(code)) {
-        throw new ProgramIoError(`indicators[${index}].code is duplicated`);
+        throw new ProgramIoError(`indicators[${index}].code 重复`);
       }
       indicatorCodes.add(code);
       return {
@@ -320,7 +320,7 @@ export function parseProgramPlanExportDocument(
 
     const rawCourses = root.courses ?? [];
     if (!Array.isArray(rawCourses)) {
-      throw new ProgramIoError('courses must be an array');
+      throw new ProgramIoError('courses 必须是数组');
     }
     const courseKeys = new Set<string>();
     const courses = rawCourses.map((raw, index): ProgramPlanExportCourse => {
@@ -330,13 +330,13 @@ export function parseProgramPlanExportDocument(
       const courseCode = optionalText(record.courseCode, `courses[${index}].courseCode`);
       const key = courseId ? `id:${courseId}` : `title:${title.toLowerCase()}`;
       if (courseKeys.has(key)) {
-        throw new ProgramIoError(`courses[${index}] duplicates another course in this file`);
+        throw new ProgramIoError(`courses[${index}] 与文件中的另一门课程重复`);
       }
       courseKeys.add(key);
 
       const rawSupports = record.supports ?? [];
       if (!Array.isArray(rawSupports)) {
-        throw new ProgramIoError(`courses[${index}].supports must be an array`);
+        throw new ProgramIoError(`courses[${index}].supports 必须是数组`);
       }
       const supportKeys = new Set<string>();
       const supports = rawSupports.map((rawSupport, supportIndex): ProgramPlanExportSupport => {
@@ -347,12 +347,12 @@ export function parseProgramPlanExportDocument(
         );
         if (!indicatorCodes.has(indicatorCode)) {
           throw new ProgramIoError(
-            `courses[${index}].supports[${supportIndex}].indicatorCode does not exist in indicators`,
+            `courses[${index}].supports[${supportIndex}].indicatorCode 在 indicators 中不存在`,
           );
         }
         if (supportKeys.has(indicatorCode)) {
           throw new ProgramIoError(
-            `courses[${index}].supports[${supportIndex}].indicatorCode is duplicated`,
+            `courses[${index}].supports[${supportIndex}].indicatorCode 重复`,
           );
         }
         supportKeys.add(indicatorCode);

@@ -29,7 +29,7 @@ export async function GET(req: NextRequest, { params }: Params) {
         return curriculumJsonError(
           404,
           'CURRICULUM_NOT_FOUND',
-          'program version not found',
+          '培养方案版本不存在',
           responseHeaders,
         );
       }
@@ -39,7 +39,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_PROGRAM_EXPORT_FAILED',
-        'Failed to export the program version',
+        '导出培养方案版本失败',
         responseHeaders,
       );
     }

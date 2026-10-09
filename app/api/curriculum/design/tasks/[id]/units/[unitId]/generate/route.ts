@@ -76,7 +76,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         {
           error: {
             code: 'CURRICULUM_DESIGN_INVALID',
-            message: 'unitId is missing from the request path',
+            message: '请求路径缺少 unitId',
           },
         },
         400,
@@ -90,7 +90,7 @@ export async function POST(req: NextRequest, { params }: Params) {
     const unit = await getCurriculumUnit(ctx.queryable, ctx.ownerId, unitId);
     if (!unit || unit.taskId !== ctx.taskId) {
       return ownerJson(
-        { error: { code: 'CURRICULUM_DESIGN_NOT_FOUND', message: 'course item not found' } },
+        { error: { code: 'CURRICULUM_DESIGN_NOT_FOUND', message: '课程条目不存在' } },
         404,
         ctx.headers,
       );
@@ -105,7 +105,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         {
           error: {
             code: 'CURRICULUM_DESIGN_INVALID',
-            message: `"${unit.title}" is a chapter; only an item carries a teaching role and can be produced`,
+            message: `「${unit.title}」是章节，只有条目才承载教学角色、可以生成`,
           },
         },
         400,

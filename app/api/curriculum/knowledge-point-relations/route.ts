@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseKnowledgePointRelationInput(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -55,7 +55,7 @@ export async function POST(req: NextRequest) {
       return curriculumJsonError(
         500,
         'CURRICULUM_KNOWLEDGE_POINT_RELATION_FAILED',
-        'Failed to create the knowledge point relation',
+        '创建知识点关系失败',
         responseHeaders,
       );
     }

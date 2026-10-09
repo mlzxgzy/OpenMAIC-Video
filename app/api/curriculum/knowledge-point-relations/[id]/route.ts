@@ -39,7 +39,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_KNOWLEDGE_POINT_RELATION_FAILED',
-        'Failed to delete the knowledge point relation',
+        '删除知识点关系失败',
         responseHeaders,
       );
     }

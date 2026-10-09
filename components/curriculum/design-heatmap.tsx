@@ -41,6 +41,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import type { CurriculumQualityEvaluation, CurriculumQualityLayer } from '@/lib/curriculum/audit';
+import { CURRICULUM_QUALITY_LAYER_LABELS as LAYER_LABELS } from '@/lib/curriculum/quality-labels';
 import type { CoverageVerdict, DesignCoverageReport } from '@/lib/curriculum/design-coverage';
 import type {
   CurriculumAuditFindingRecord,
@@ -96,18 +97,6 @@ const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
   teaching: '教学设计',
   assessment: '评价设计',
   review: '课程审核',
-};
-
-const LAYER_LABELS: Record<CurriculumQualityLayer, string> = {
-  outcomes_clear: '目标清晰',
-  outcomes_verifiable: '目标可验证',
-  support_complete: '知识技能完整',
-  dependency_valid: '依赖关系正确',
-  curriculum_covers: '大纲覆盖',
-  teach_covers: '教学覆盖',
-  practice_covers: '练习覆盖',
-  assess_covers: '考试覆盖',
-  traceable: '可追溯',
 };
 
 const OBJECTIVE_TYPE_LABELS: Record<CurriculumObjectiveType, string> = {

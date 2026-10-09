@@ -33,7 +33,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         500,
         'CURRICULUM_RELATION_FAILED',
-        'Failed to delete the relation',
+        '删除关系失败',
         responseHeaders,
       );
     }

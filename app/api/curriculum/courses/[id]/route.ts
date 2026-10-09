@@ -48,12 +48,7 @@ export async function GET(req: NextRequest, { params }: Params) {
       const known = mapCurriculumError(error, responseHeaders);
       if (known) return known;
       console.error(`[Curriculum] Failed to load course [owner=${ownerId}, id=${id}]:`, error);
-      return curriculumJsonError(
-        500,
-        'CURRICULUM_COURSE_FAILED',
-        'Failed to load the course',
-        responseHeaders,
-      );
+      return curriculumJsonError(500, 'CURRICULUM_COURSE_FAILED', '加载课程失败', responseHeaders);
     }
   });
 }
@@ -65,7 +60,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCourseInput(body, { requireTitle: false });
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -90,12 +85,7 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       const known = mapCurriculumError(error, responseHeaders);
       if (known) return known;
       console.error(`[Curriculum] Failed to update course [owner=${ownerId}, id=${id}]:`, error);
-      return curriculumJsonError(
-        500,
-        'CURRICULUM_COURSE_FAILED',
-        'Failed to update the course',
-        responseHeaders,
-      );
+      return curriculumJsonError(500, 'CURRICULUM_COURSE_FAILED', '更新课程失败', responseHeaders);
     }
   });
 }
@@ -118,12 +108,7 @@ export async function DELETE(req: NextRequest, { params }: Params) {
       const known = mapCurriculumError(error, responseHeaders);
       if (known) return known;
       console.error(`[Curriculum] Failed to delete course [owner=${ownerId}, id=${id}]:`, error);
-      return curriculumJsonError(
-        500,
-        'CURRICULUM_COURSE_FAILED',
-        'Failed to delete the course',
-        responseHeaders,
-      );
+      return curriculumJsonError(500, 'CURRICULUM_COURSE_FAILED', '删除课程失败', responseHeaders);
     }
   });
 }

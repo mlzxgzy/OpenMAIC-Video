@@ -395,7 +395,7 @@ describe('auditCurriculumDesign — verifiability', () => {
     const finding = auditCurriculumDesign(snapshot).find(
       (f) => f.rule === 'objective_unverifiable',
     );
-    expect(finding?.message).toContain('no expected behavior');
+    expect(finding?.message).toContain('没有写明预期行为');
   });
 
   it('flags a verifiable objective that has no evidence at all', () => {
@@ -577,7 +577,7 @@ describe('auditCurriculumDesign — dependency order', () => {
     ];
     const finding = auditCurriculumDesign(snapshot).find((f) => f.rule === 'dependency_cycle');
     expect(finding?.severity).toBe('error');
-    expect(finding?.message).toContain('no first thing to learn');
+    expect(finding?.message).toContain('没有可以最先学习的东西');
     expect(reviewCurriculumDesign(snapshot).quality.layers.dependency_valid).toBe(false);
   });
 
@@ -711,7 +711,7 @@ describe('auditCurriculumDesign — assessment artifacts', () => {
     snapshot.labTasks[0].verifyRules = [];
     const finding = auditCurriculumDesign(snapshot).find((f) => f.rule === 'lab_no_verify_rule');
     expect(finding?.severity).toBe('error');
-    expect(finding?.message).toContain('cannot be graded');
+    expect(finding?.message).toContain('无法判分');
   });
 
   it('flags a lab whose verify rule restates a reference step', () => {
@@ -723,7 +723,7 @@ describe('auditCurriculumDesign — assessment artifacts', () => {
       (f) => f.rule === 'lab_verify_grades_by_path',
     );
     expect(finding?.severity).toBe('error');
-    expect(finding?.message).toContain('grades one route');
+    expect(finding?.message).toContain('判的是某一种解法');
   });
 
   it('accepts a lab that checks a different, result-shaped condition', () => {
@@ -740,7 +740,7 @@ describe('auditCurriculumDesign — assessment artifacts', () => {
     const snapshot = makeSnapshot();
     snapshot.questions = [];
     const finding = auditCurriculumDesign(snapshot).find(
-      (f) => f.rule === 'evidence_no_artifact' && f.message.includes('Quiz'),
+      (f) => f.rule === 'evidence_no_artifact' && f.message.includes('测验'),
     );
     expect(finding).toBeDefined();
   });
@@ -773,7 +773,7 @@ describe('auditCurriculumDesign — outline structure', () => {
     ];
     const finding = auditCurriculumDesign(snapshot).find((f) => f.rule === 'chapter_with_content');
     expect(finding?.severity).toBe('error');
-    expect(finding?.message).toContain('Chapters classify');
+    expect(finding?.message).toContain('章节只做归类');
   });
 
   it('flags an item that covers no outcome', () => {
@@ -971,8 +971,8 @@ describe('auditCurriculumDesign — item ordering', () => {
     expect(findings[0].message).toContain('Item 2');
     // Positions are 0-based internally but 1-based for a human reading an
     // outline, and the message must name the edge that is wrong.
-    expect(findings[0].message).toContain('position 1');
-    expect(findings[0].message).toContain('position 2');
+    expect(findings[0].message).toContain('第 1 位');
+    expect(findings[0].message).toContain('第 2 位');
     expect(findings[0].refKind).toBe('unitDependency');
     expect(findings[0].refIds).toEqual([basic.id, advanced.id]);
   });
@@ -1056,7 +1056,7 @@ describe('auditCurriculumDesign — item ordering', () => {
     );
     expect(findings).toHaveLength(1);
     expect(findings[0].severity).toBe('error');
-    expect(findings[0].message).toContain('no first item');
+    expect(findings[0].message).toContain('没有可以最先讲授的条目');
     expect(findings[0].refKind).toBe('unitDependency');
     expect([...findings[0].refIds].sort()).toEqual([a.id, b.id, c.id].sort());
   });

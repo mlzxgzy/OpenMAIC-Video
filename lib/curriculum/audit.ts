@@ -100,9 +100,8 @@ function ruleObjectiveUnverifiable(snapshot: CurriculumDesignSnapshot): Curricul
       rule: 'objective_unverifiable' as const,
       severity: 'error' as const,
       message:
-        `Outcome "${objective.title}" cannot be verified: ` +
-        (objective.unverifiableReason ||
-          'it has no expected behavior or no minimum success criterion'),
+        `学习目标「${objective.title}」无法验证：` +
+        (objective.unverifiableReason || '没有写明预期行为，也没有最低成功标准'),
       refKind: 'objective',
       refId: objective.id,
       refIds: [],
@@ -122,7 +121,7 @@ function ruleObjectiveNoEvidence(snapshot: CurriculumDesignSnapshot): Curriculum
     .map((objective) => ({
       rule: 'objective_no_evidence' as const,
       severity: 'error' as const,
-      message: `Outcome "${objective.title}" has no evidence: nothing states how it will be checked`,
+      message: `学习目标「${objective.title}」没有证据：没有任何地方说明它将被如何检验`,
       refKind: 'objective',
       refId: objective.id,
       refIds: [],
@@ -158,7 +157,7 @@ function missingCoverageRule(
       .map((objective) => ({
         rule,
         severity: 'error' as const,
-        message: `Outcome "${objective.title}" is not ${label} by any item`,
+        message: `学习目标「${objective.title}」没有被任何条目${label}`,
         refKind: 'objective',
         refId: objective.id,
         refIds: [],
@@ -171,19 +170,19 @@ const ruleObjectiveUntaught = missingCoverageRule(
   'teach',
   'objective_untaught',
   'teach_covers',
-  'taught',
+  '讲授',
 );
 const ruleObjectiveUnpracticed = missingCoverageRule(
   'practice',
   'objective_unpracticed',
   'practice_covers',
-  'practiced',
+  '练习',
 );
 const ruleObjectiveUncovered = missingCoverageRule(
   'assess',
   'objective_uncovered',
   'assess_covers',
-  'assessed',
+  '考核',
 );
 
 /**
@@ -241,8 +240,8 @@ function ruleObjectiveMissingPrereq(snapshot: CurriculumDesignSnapshot): Curricu
       rule: 'objective_missing_prereq',
       severity: 'error',
       message:
-        `Outcome "${objective?.title ?? objectiveId}" is taught, but no item's teaching ` +
-        `design names its primary support: ${names.join(', ')}`,
+        `学习目标「${objective?.title ?? objectiveId}」已经被讲授，但没有任何条目的教学设计` +
+        `提到它的主要支撑：${names.join('、')}`,
       refKind: 'objective',
       refId: objectiveId,
       refIds: unmentioned,
@@ -307,7 +306,7 @@ function ruleObjectiveDuplicate(snapshot: CurriculumDesignSnapshot): CurriculumA
         findings.push({
           rule: 'objective_duplicate',
           severity: 'warning',
-          message: `Outcomes share code "${code}": they may be the same outcome twice`,
+          message: `两个学习目标共用了编号「${code}」：可能是同一个目标写了两遍`,
           refKind: 'objective',
           refId: ids[i],
           refIds: [ids[i], ids[j]],
@@ -334,8 +333,8 @@ function ruleObjectiveDuplicate(snapshot: CurriculumDesignSnapshot): CurriculumA
           rule: 'objective_duplicate',
           severity: 'warning',
           message:
-            `Outcomes "${a.title}" and "${b.title}" overlap by ` +
-            `${Math.round(overlap * 100)}%: they may be the same outcome twice`,
+            `学习目标「${a.title}」与「${b.title}」的重合度为 ` +
+            `${Math.round(overlap * 100)}%：可能是同一个目标写了两遍`,
           refKind: 'objective',
           refId: a.id,
           refIds: [a.id, b.id],
@@ -366,8 +365,8 @@ function ruleNodeOrphan(snapshot: CurriculumDesignSnapshot): CurriculumAuditFind
       rule: 'node_orphan' as const,
       severity: 'warning' as const,
       message:
-        `"${node.name}" supports no outcome and has no dependency: it is neither taught ` +
-        'for a reason nor part of a learning path',
+        `「${node.name}」不支撑任何学习目标，也没有任何依赖：它既没有理由被讲授，` +
+        '也不属于任何学习路径',
       refKind: 'node',
       refId: node.id,
       refIds: [],
@@ -394,7 +393,7 @@ function ruleNodeUnsupported(snapshot: CurriculumDesignSnapshot): CurriculumAudi
     .map((objective) => ({
       rule: 'node_unsupported',
       severity: 'warning',
-      message: `Course-level outcome "${objective.title}" has no primary knowledge/skill support`,
+      message: `课程级学习目标「${objective.title}」没有主要支撑的知识/技能节点`,
       refKind: 'objective',
       refId: objective.id,
       refIds: [],
@@ -418,9 +417,7 @@ function ruleEvidenceUntaught(snapshot: CurriculumDesignSnapshot): CurriculumAud
       return {
         rule: 'evidence_untaught' as const,
         severity: 'error' as const,
-        message:
-          `Exam evidence for "${objective?.title ?? evidence.objectiveId}" has no ` +
-          'corresponding teaching',
+        message: `「${objective?.title ?? evidence.objectiveId}」的考试证据没有` + '对应的教学',
         refKind: 'evidence',
         refId: evidence.id,
         refIds: [evidence.objectiveId],
@@ -444,7 +441,7 @@ function ruleEvidenceNoArtifact(snapshot: CurriculumDesignSnapshot): CurriculumA
       findings.push({
         rule: 'evidence_no_artifact',
         severity: 'error',
-        message: `Lab evidence for "${objective?.title ?? evidence.objectiveId}" has no lab task`,
+        message: `「${objective?.title ?? evidence.objectiveId}」的实操证据没有对应的实操任务`,
         refKind: 'evidence',
         refId: evidence.id,
         refIds: [evidence.objectiveId],
@@ -455,7 +452,7 @@ function ruleEvidenceNoArtifact(snapshot: CurriculumDesignSnapshot): CurriculumA
       findings.push({
         rule: 'evidence_no_artifact',
         severity: 'error',
-        message: `Quiz evidence for "${objective?.title ?? evidence.objectiveId}" has no question`,
+        message: `「${objective?.title ?? evidence.objectiveId}」的测验证据没有对应的题目`,
         refKind: 'evidence',
         refId: evidence.id,
         refIds: [evidence.objectiveId],
@@ -475,7 +472,7 @@ function ruleDrillNoObjective(snapshot: CurriculumDesignSnapshot): CurriculumAud
     findings.push({
       rule: 'drill_no_objective',
       severity: 'error',
-      message: `Question "${question.stem.slice(0, 40)}" is not linked to any outcome`,
+      message: `题目「${question.stem.slice(0, 40)}」没有关联任何学习目标`,
       refKind: 'question',
       refId: question.id,
       refIds: [],
@@ -492,7 +489,7 @@ function ruleLabNoVerifyRule(snapshot: CurriculumDesignSnapshot): CurriculumAudi
     .map((lab) => ({
       rule: 'lab_no_verify_rule' as const,
       severity: 'error' as const,
-      message: `Lab task "${lab.taskGoal}" has no verification rule: it cannot be graded`,
+      message: `实操任务「${lab.taskGoal}」没有验证规则：无法判分`,
       refKind: 'lab_task',
       refId: lab.id,
       refIds: [],
@@ -533,8 +530,8 @@ function ruleLabVerifyGradesByPath(snapshot: CurriculumDesignSnapshot): Curricul
       rule: 'lab_verify_grades_by_path',
       severity: 'error',
       message:
-        `Lab task "${lab.taskGoal}" has a verification rule that matches a step in its ` +
-        'reference solution: this grades one route, not the result',
+        `实操任务「${lab.taskGoal}」有一条验证规则与参考解答中的某个步骤完全相同：` +
+        '这判的是某一种解法，而不是结果',
       refKind: 'lab_task',
       refId: lab.id,
       refIds: [],
@@ -625,7 +622,7 @@ function ruleDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAudi
     findings.push({
       rule: 'dependency_cycle',
       severity: 'error',
-      message: `Dependency cycle: ${labels.join(' → ')}. There is no first thing to learn.`,
+      message: `依赖成环：${labels.join(' → ')}。没有可以最先学习的东西。`,
       refKind: 'dependency',
       refId: cycle[0],
       refIds: [...new Set(cycle)],
@@ -681,8 +678,8 @@ function ruleDependencyOutOfOrder(snapshot: CurriculumDesignSnapshot): Curriculu
       rule: 'dependency_out_of_order',
       severity: 'error',
       message:
-        `"${target?.title ?? edge.targetId}" is taught before its prerequisite ` +
-        `"${source?.title ?? edge.sourceId}"`,
+        `「${target?.title ?? edge.targetId}」先于它的先修` +
+        `「${source?.title ?? edge.sourceId}」被讲授`,
       refKind: 'dependency',
       refId: edge.id,
       refIds: [edge.sourceId, edge.targetId],
@@ -740,9 +737,9 @@ function ruleUnitDependencyOutOfOrder(
       rule: 'unit_dependency_out_of_order',
       severity: 'error',
       message:
-        `Item "${target?.title ?? edge.targetUnitId}" is scheduled at position ` +
-        `${targetOrder + 1}, before its declared prerequisite ` +
-        `"${source?.title ?? edge.sourceUnitId}" at position ${sourceOrder + 1}`,
+        `条目「${target?.title ?? edge.targetUnitId}」被安排在第 ` +
+        `${targetOrder + 1} 位，却排在它声明的先修` +
+        `「${source?.title ?? edge.sourceUnitId}」（第 ${sourceOrder + 1} 位）之前`,
       refKind: 'unitDependency',
       refId: edge.id,
       refIds: [edge.sourceUnitId, edge.targetUnitId],
@@ -777,7 +774,7 @@ function ruleUnitDependencyCycle(snapshot: CurriculumDesignSnapshot): Curriculum
     findings.push({
       rule: 'unit_dependency_cycle',
       severity: 'error',
-      message: `Item order cycle: ${labels.join(' → ')}. There is no first item to teach.`,
+      message: `条目顺序成环：${labels.join(' → ')}。没有可以最先讲授的条目。`,
       refKind: 'unitDependency',
       refId: cycle[0],
       refIds: [...new Set(cycle)],
@@ -794,7 +791,7 @@ function ruleUnitWithoutRole(snapshot: CurriculumDesignSnapshot): CurriculumAudi
     .map((unit) => ({
       rule: 'unit_without_role',
       severity: 'error' as const,
-      message: `Item "${unit.title}" has no role: it is not marked as lecture, practice, or exam`,
+      message: `条目「${unit.title}」没有角色：需要标记为 lecture（讲授）、practice（练习）或 exam（考试）`,
       refKind: 'unit',
       refId: unit.id,
       refIds: [],
@@ -822,9 +819,8 @@ function ruleChapterWithContent(snapshot: CurriculumDesignSnapshot): CurriculumA
       rule: 'chapter_with_content',
       severity: 'error',
       message:
-        `Chapter "${chapter?.title ?? coverage.unitId}" carries ` +
-        `"${coverage.coverageKind}" content for "${objective?.title ?? coverage.objectiveId}". ` +
-        'Chapters classify; items teach.',
+        `章节「${chapter?.title ?? coverage.unitId}」为「${objective?.title ?? coverage.objectiveId}」` +
+        `承载了「${coverage.coverageKind}」覆盖内容。章节只做归类，条目才负责教学。`,
       refKind: 'unit',
       refId: coverage.unitId,
       refIds: [coverage.objectiveId],
@@ -842,7 +838,7 @@ function ruleUnitOrphan(snapshot: CurriculumDesignSnapshot): CurriculumAuditFind
     .map((unit) => ({
       rule: 'unit_orphan',
       severity: 'error' as const,
-      message: `Item "${unit.title}" covers no outcome: it teaches, practices and assesses nothing`,
+      message: `条目「${unit.title}」不覆盖任何学习目标：既不讲授、不练习，也不考核`,
       refKind: 'unit',
       refId: unit.id,
       refIds: [],
@@ -865,9 +861,9 @@ function ruleBriefIncomplete(snapshot: CurriculumDesignSnapshot): CurriculumAudi
       layer: 'outcomes_clear' as const,
     });
   };
-  if (!task.audience) push('The brief does not say who the training is for');
-  if (!task.problemStatement) push('The brief does not state the problem the course solves');
-  if (task.durationHours === null) push('The brief does not state the training duration');
+  if (!task.audience) push('课程简介没有说明培训对象是谁');
+  if (!task.problemStatement) push('课程简介没有说明课程要解决的问题');
+  if (task.durationHours === null) push('课程简介没有说明培训时长');
   return findings;
 }
 

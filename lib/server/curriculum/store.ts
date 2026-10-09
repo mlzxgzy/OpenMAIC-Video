@@ -638,7 +638,7 @@ async function assertSeriesOwned(
     'SELECT id FROM curriculum_series WHERE owner_id = $1 AND id = $2',
     [ownerId, seriesId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('series not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('课程系列不存在');
 }
 
 async function assertCourseOwned(
@@ -647,7 +647,7 @@ async function assertCourseOwned(
   courseId: string,
 ): Promise<void> {
   const row = await readCourseRow(queryable, ownerId, courseId);
-  if (!row) throw new CurriculumNotFoundError('course not found');
+  if (!row) throw new CurriculumNotFoundError('课程不存在');
 }
 
 async function assertKnowledgePointOwned(
@@ -656,7 +656,7 @@ async function assertKnowledgePointOwned(
   knowledgePointId: string,
 ): Promise<void> {
   const row = await readKnowledgePointRow(queryable, ownerId, knowledgePointId);
-  if (!row) throw new CurriculumNotFoundError('knowledge point not found');
+  if (!row) throw new CurriculumNotFoundError('知识点不存在');
 }
 
 /**
@@ -672,7 +672,7 @@ async function assertKnowledgePointParent(
 ): Promise<void> {
   if (!parentId) return;
   if (knowledgePointId && knowledgePointId === parentId) {
-    throw new CurriculumValidationError('a knowledge point cannot be its own parent');
+    throw new CurriculumValidationError('知识点不能作为自己的父级');
   }
   await assertKnowledgePointOwned(queryable, ownerId, parentId);
   if (!knowledgePointId) return;
@@ -692,7 +692,7 @@ async function assertKnowledgePointParent(
     [ownerId, knowledgePointId, parentId],
   );
   if (result.rows[0]) {
-    throw new CurriculumValidationError('knowledge point parent would create a cycle');
+    throw new CurriculumValidationError('知识点父级会形成环');
   }
 }
 
@@ -733,7 +733,7 @@ async function assertKnowledgePointRelationAcyclic(
     [ownerId, targetKnowledgePointId, relationType, sourceKnowledgePointId],
   );
   if (result.rows[0]) {
-    throw new CurriculumValidationError('knowledge point relation would create a cycle');
+    throw new CurriculumValidationError('知识点关系会形成环');
   }
 }
 
@@ -914,7 +914,7 @@ export async function getCurriculumCourseDetail(
     [ownerId, courseId],
   );
   const courseRow = courseResult.rows[0];
-  if (!courseRow) throw new CurriculumNotFoundError('course not found');
+  if (!courseRow) throw new CurriculumNotFoundError('课程不存在');
   const course = mapCourse(courseRow);
 
   const knowledgePointQuery = course.seriesId
@@ -1035,8 +1035,8 @@ export async function createCurriculumSeries(
   input: CurriculumSeriesInput,
 ): Promise<CurriculumSeriesRecord> {
   const name = optionalText(input.name);
-  if (!name) throw new CurriculumValidationError('name is required');
-  if (name.length > 120) throw new CurriculumValidationError('name is too long');
+  if (!name) throw new CurriculumValidationError('name 不能为空');
+  if (name.length > 120) throw new CurriculumValidationError('name 过长');
   const result = await queryable.query<SeriesRow>(
     `INSERT INTO curriculum_series (id, owner_id, name, description)
      VALUES ($1, $2, $3, $4)
@@ -1047,7 +1047,7 @@ export async function createCurriculumSeries(
     [createId('series'), ownerId, name, optionalText(input.description)],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('series could not be created');
+  if (!row) throw new CurriculumValidationError('课程系列创建失败');
   return mapSeries(row, 0);
 }
 
@@ -1059,11 +1059,11 @@ export async function updateCurriculumSeries(
   patch: CurriculumSeriesPatch,
 ): Promise<CurriculumSeriesRecord> {
   const existing = await readSeriesRow(queryable, ownerId, seriesId);
-  if (!existing) throw new CurriculumNotFoundError('series not found');
+  if (!existing) throw new CurriculumNotFoundError('课程系列不存在');
 
   const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
-  if (!nextName) throw new CurriculumValidationError('name is required');
-  if (nextName.length > 120) throw new CurriculumValidationError('name is too long');
+  if (!nextName) throw new CurriculumValidationError('name 不能为空');
+  if (nextName.length > 120) throw new CurriculumValidationError('name 过长');
 
   try {
     const result = await queryable.query<SeriesRow>(
@@ -1081,11 +1081,11 @@ export async function updateCurriculumSeries(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('series not found');
+    if (!row) throw new CurriculumNotFoundError('课程系列不存在');
     return mapSeries(row, 0);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('a series with this name already exists');
+      throw new CurriculumConflictError('已存在同名课程系列');
     }
     throw error;
   }
@@ -1101,7 +1101,7 @@ export async function deleteCurriculumSeries(
     'DELETE FROM curriculum_series WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, seriesId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('series not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('课程系列不存在');
 }
 
 /** Create a course. `seriesId` and `stageId` are validated against the owner. */
@@ -1111,8 +1111,8 @@ export async function createCurriculumCourse(
   input: CurriculumCourseInput,
 ): Promise<CurriculumCourseRecord> {
   const title = optionalText(input.title);
-  if (!title) throw new CurriculumValidationError('title is required');
-  if (title.length > 240) throw new CurriculumValidationError('title is too long');
+  if (!title) throw new CurriculumValidationError('title 不能为空');
+  if (title.length > 240) throw new CurriculumValidationError('title 过长');
   await assertSeriesOwned(queryable, ownerId, input.seriesId);
   try {
     const result = await queryable.query<CourseRow>(
@@ -1139,11 +1139,11 @@ export async function createCurriculumCourse(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('course could not be created');
+    if (!row) throw new CurriculumValidationError('课程创建失败');
     return mapCourse(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this stage is already linked to another course');
+      throw new CurriculumConflictError('该课堂已经关联了另一门课程');
     }
     throw error;
   }
@@ -1157,10 +1157,10 @@ export async function updateCurriculumCourse(
   patch: CurriculumCoursePatch,
 ): Promise<CurriculumCourseRecord> {
   const existing = await readCourseRow(queryable, ownerId, courseId);
-  if (!existing) throw new CurriculumNotFoundError('course not found');
+  if (!existing) throw new CurriculumNotFoundError('课程不存在');
 
   const nextTitle = patch.title !== undefined ? optionalText(patch.title) : existing.title;
-  if (!nextTitle) throw new CurriculumValidationError('title is required');
+  if (!nextTitle) throw new CurriculumValidationError('title 不能为空');
   const nextSeriesId = patch.seriesId !== undefined ? patch.seriesId : existing.series_id;
   await assertSeriesOwned(queryable, ownerId, nextSeriesId);
 
@@ -1200,11 +1200,11 @@ export async function updateCurriculumCourse(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('course not found');
+    if (!row) throw new CurriculumNotFoundError('课程不存在');
     return mapCourse(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this stage is already linked to another course');
+      throw new CurriculumConflictError('该课堂已经关联了另一门课程');
     }
     throw error;
   }
@@ -1219,7 +1219,7 @@ export async function deleteCurriculumCourse(
     'DELETE FROM curriculum_course WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, courseId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('course not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('课程不存在');
 }
 
 /** Create (or update the note of) one relation between two owner courses. */
@@ -1229,7 +1229,7 @@ export async function createCurriculumRelation(
   input: CurriculumRelationInput,
 ): Promise<CurriculumRelationRecord> {
   if (input.sourceCourseId === input.targetCourseId) {
-    throw new CurriculumValidationError('a course cannot relate to itself');
+    throw new CurriculumValidationError('课程不能与自身建立关系');
   }
   await assertCourseOwned(queryable, ownerId, input.sourceCourseId);
   await assertCourseOwned(queryable, ownerId, input.targetCourseId);
@@ -1250,7 +1250,7 @@ export async function createCurriculumRelation(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('relation could not be created');
+  if (!row) throw new CurriculumValidationError('关系创建失败');
   return mapRelation(row);
 }
 
@@ -1263,7 +1263,7 @@ export async function deleteCurriculumRelation(
     'DELETE FROM curriculum_course_relation WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, relationId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('relation not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('关系不存在');
 }
 
 /** Create one knowledge point. `seriesId` and `parentId` are owner-validated. */
@@ -1273,8 +1273,8 @@ export async function createKnowledgePoint(
   input: KnowledgePointInput,
 ): Promise<KnowledgePointRecord> {
   const name = optionalText(input.name);
-  if (!name) throw new CurriculumValidationError('name is required');
-  if (name.length > 240) throw new CurriculumValidationError('name is too long');
+  if (!name) throw new CurriculumValidationError('name 不能为空');
+  if (name.length > 240) throw new CurriculumValidationError('name 过长');
   await assertSeriesOwned(queryable, ownerId, input.seriesId);
   await assertKnowledgePointParent(queryable, ownerId, null, optionalText(input.parentId));
 
@@ -1297,7 +1297,7 @@ export async function createKnowledgePoint(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('knowledge point could not be created');
+  if (!row) throw new CurriculumValidationError('知识点创建失败');
   return mapKnowledgePoint(row);
 }
 
@@ -1309,10 +1309,10 @@ export async function updateKnowledgePoint(
   patch: KnowledgePointPatch,
 ): Promise<KnowledgePointRecord> {
   const existing = await readKnowledgePointRow(queryable, ownerId, knowledgePointId);
-  if (!existing) throw new CurriculumNotFoundError('knowledge point not found');
+  if (!existing) throw new CurriculumNotFoundError('知识点不存在');
 
   const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
-  if (!nextName) throw new CurriculumValidationError('name is required');
+  if (!nextName) throw new CurriculumValidationError('name 不能为空');
   const nextSeriesId = patch.seriesId !== undefined ? patch.seriesId : existing.series_id;
   const nextParentId = patch.parentId !== undefined ? patch.parentId : existing.parent_id;
   await assertSeriesOwned(queryable, ownerId, nextSeriesId);
@@ -1350,7 +1350,7 @@ export async function updateKnowledgePoint(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('knowledge point not found');
+  if (!row) throw new CurriculumNotFoundError('知识点不存在');
   return mapKnowledgePoint(row);
 }
 
@@ -1363,7 +1363,7 @@ export async function deleteKnowledgePoint(
     'DELETE FROM curriculum_knowledge_point WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, knowledgePointId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('knowledge point not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('知识点不存在');
 }
 
 /**
@@ -1393,7 +1393,7 @@ export async function setCourseKnowledgePoints(
     const found = new Set(result.rows.map((row) => row.id));
     const missing = ids.filter((id) => !found.has(id));
     if (missing.length > 0) {
-      throw new CurriculumNotFoundError(`knowledge point not found: ${missing.join(', ')}`);
+      throw new CurriculumNotFoundError(`知识点不存在：${missing.join(', ')}`);
     }
   }
 
@@ -1428,7 +1428,7 @@ export async function createKnowledgePointRelation(
   input: KnowledgePointRelationInput,
 ): Promise<KnowledgePointRelationRecord> {
   if (input.sourceKnowledgePointId === input.targetKnowledgePointId) {
-    throw new CurriculumValidationError('a knowledge point cannot relate to itself');
+    throw new CurriculumValidationError('知识点不能与自身建立关系');
   }
   await assertKnowledgePointOwned(queryable, ownerId, input.sourceKnowledgePointId);
   await assertKnowledgePointOwned(queryable, ownerId, input.targetKnowledgePointId);
@@ -1457,7 +1457,7 @@ export async function createKnowledgePointRelation(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('knowledge point relation could not be created');
+  if (!row) throw new CurriculumValidationError('知识点关系创建失败');
   return mapKnowledgePointRelation(row);
 }
 
@@ -1470,7 +1470,7 @@ export async function deleteKnowledgePointRelation(
     'DELETE FROM curriculum_knowledge_point_relation WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, relationId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('knowledge point relation not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('知识点关系不存在');
 }
 
 export async function createCurriculumGenerationJob(
@@ -1493,7 +1493,7 @@ export async function createCurriculumGenerationJob(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('generation job could not be created');
+  if (!row) throw new CurriculumValidationError('生成任务创建失败');
   return mapGenerationJob(row);
 }
 
@@ -1516,7 +1516,7 @@ export async function attachGenerationRunToCurriculumJob(
     [ownerId, jobId, runId],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('generation job not found');
+  if (!row) throw new CurriculumNotFoundError('生成任务不存在');
   return mapGenerationJob(row);
 }
 
@@ -1563,7 +1563,7 @@ export async function bindCurriculumGenerationRunStage(
       stageId = null;
       error = {
         code: 'STAGE_ALREADY_LINKED',
-        message: 'this stage is already linked to another curriculum course',
+        message: '该课堂已经关联了课程台账中的另一门课程',
       };
     } else {
       await queryable.query(
@@ -1667,10 +1667,10 @@ export async function createCurriculumBatch(
   input: CurriculumBatchInput,
 ): Promise<{ batch: CurriculumBatchRecord; items: CurriculumBatchItemRecord[] }> {
   const name = optionalText(input.name);
-  if (!name) throw new CurriculumValidationError('name is required');
-  if (name.length > 160) throw new CurriculumValidationError('name is too long');
-  if (input.items.length === 0) throw new CurriculumValidationError('items must not be empty');
-  if (input.items.length > 50) throw new CurriculumValidationError('items is too large');
+  if (!name) throw new CurriculumValidationError('name 不能为空');
+  if (name.length > 160) throw new CurriculumValidationError('name 过长');
+  if (input.items.length === 0) throw new CurriculumValidationError('items 不能为空');
+  if (input.items.length > 50) throw new CurriculumValidationError('items 数量过多');
 
   const batchId = createId('batch');
   const batchResult = await queryable.query<BatchRow>(
@@ -1680,12 +1680,12 @@ export async function createCurriculumBatch(
     [batchId, ownerId, name],
   );
   const batchRow = batchResult.rows[0];
-  if (!batchRow) throw new CurriculumValidationError('batch could not be created');
+  if (!batchRow) throw new CurriculumValidationError('批次创建失败');
 
   const items: CurriculumBatchItemRecord[] = [];
   for (const [index, item] of input.items.entries()) {
     const title = optionalText(item.title);
-    if (!title) throw new CurriculumValidationError(`items[${index}].title is required`);
+    if (!title) throw new CurriculumValidationError(`items[${index}].title 不能为空`);
     if (item.courseId) await assertCourseOwned(queryable, ownerId, item.courseId);
     const maxAttempts = Math.max(1, Math.min(10, Math.round(item.maxAttempts ?? 1)));
     const result = await queryable.query<BatchItemRow>(
@@ -1705,7 +1705,7 @@ export async function createCurriculumBatch(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError(`items[${index}] could not be created`);
+    if (!row) throw new CurriculumValidationError(`items[${index}] 创建失败`);
     items.push(mapBatchItem(row));
   }
 
@@ -1752,7 +1752,7 @@ export async function claimNextCurriculumBatchItem(
       ownerId,
       JSON.stringify({
         code: 'BATCH_START_INTERRUPTED',
-        message: 'the previous start attempt was interrupted and has been queued again',
+        message: '上一次启动被中断，已重新排队',
       }),
     ],
   );
@@ -1806,7 +1806,7 @@ export async function requeueCurriculumBatchItem(
     [ownerId, itemId, error === null || error === undefined ? null : JSON.stringify(error)],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  if (!row) throw new CurriculumNotFoundError('批次条目不存在');
   await recalculateBatchStatus(queryable, ownerId, row.batch_id);
   return mapBatchItem(row);
 }
@@ -1831,7 +1831,7 @@ export async function markCurriculumBatchItemRunning(
     [ownerId, itemId, jobId, runId],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  if (!row) throw new CurriculumNotFoundError('批次条目不存在');
   await recalculateBatchStatus(queryable, ownerId, row.batch_id);
   return mapBatchItem(row);
 }
@@ -1854,7 +1854,7 @@ export async function failCurriculumBatchItem(
     [ownerId, itemId, JSON.stringify(error)],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('batch item not found');
+  if (!row) throw new CurriculumNotFoundError('批次条目不存在');
   await recalculateBatchStatus(queryable, ownerId, row.batch_id);
   return mapBatchItem(row);
 }
@@ -1935,9 +1935,9 @@ export async function applyCurriculumBatchAction(
     [ownerId, batchId],
   );
   const batch = batchResult.rows[0];
-  if (!batch) throw new CurriculumNotFoundError('batch not found');
+  if (!batch) throw new CurriculumNotFoundError('批次不存在');
   if (batch.status === 'cancelled' && action !== 'retry') {
-    throw new CurriculumConflictError('a cancelled batch cannot be changed');
+    throw new CurriculumConflictError('已取消的批次不能再修改');
   }
 
   if (action === 'pause') {
@@ -2008,7 +2008,7 @@ export async function applyCurriculumBatchAction(
     [ownerId, batchId],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('batch not found');
+  if (!row) throw new CurriculumNotFoundError('批次不存在');
   return mapBatch(row);
 }
 
@@ -2079,7 +2079,7 @@ export async function createCurriculumExportJobs(
       );
       if (existing.rows.length > 0) return existing.rows.map(mapExportJob);
     }
-    throw new CurriculumValidationError('no completed, staged batch items are eligible for export');
+    throw new CurriculumValidationError('没有已完成且已关联课堂的批次条目可供导出');
   }
 
   const created: CurriculumExportJobRecord[] = [];
@@ -2105,7 +2105,7 @@ export async function createCurriculumExportJobs(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('export job could not be created');
+    if (!row) throw new CurriculumValidationError('导出任务创建失败');
     created.push(mapExportJob(row));
   }
 
@@ -2146,7 +2146,7 @@ export async function claimNextCurriculumExportJob(
       ownerId,
       JSON.stringify({
         code: 'EXPORT_WORKER_INTERRUPTED',
-        message: 'the previous browser export attempt was interrupted and has been queued again',
+        message: '上一次浏览器导出被中断，已重新排队',
       }),
     ],
   );
@@ -2187,12 +2187,12 @@ export async function applyCurriculumExportJobAction(
   action: CurriculumExportJobAction,
 ): Promise<CurriculumExportJobRecord> {
   const current = await readExportJobRowForUpdate(queryable, ownerId, exportJobId);
-  if (!current) throw new CurriculumNotFoundError('export job not found');
+  if (!current) throw new CurriculumNotFoundError('导出任务不存在');
   const status = current.status as CurriculumExportJobStatus;
 
   if (action.action === 'attach-render') {
     if (status !== 'building' && status !== 'submitting') {
-      throw new CurriculumConflictError('only a building export can attach a render job');
+      throw new CurriculumConflictError('只有构建中的导出任务才能关联渲染任务');
     }
     const result = await queryable.query<ExportJobRow>(
       `UPDATE curriculum_export_job
@@ -2205,7 +2205,7 @@ export async function applyCurriculumExportJobAction(
       [ownerId, exportJobId, action.renderJobId],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('export job not found');
+    if (!row) throw new CurriculumNotFoundError('导出任务不存在');
     return mapExportJob(row);
   }
 
@@ -2219,7 +2219,7 @@ export async function applyCurriculumExportJobAction(
       [ownerId, exportJobId, action.progress],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('export job not found');
+    if (!row) throw new CurriculumNotFoundError('导出任务不存在');
     return mapExportJob(row);
   }
 
@@ -2236,7 +2236,7 @@ export async function applyCurriculumExportJobAction(
       [ownerId, exportJobId],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('export job not found');
+    if (!row) throw new CurriculumNotFoundError('导出任务不存在');
     return mapExportJob(row);
   }
 
@@ -2252,7 +2252,7 @@ export async function applyCurriculumExportJobAction(
       [ownerId, exportJobId, JSON.stringify(action.error)],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('export job not found');
+    if (!row) throw new CurriculumNotFoundError('导出任务不存在');
     return mapExportJob(row);
   }
 
@@ -2270,7 +2270,7 @@ export async function applyCurriculumExportJobAction(
       [ownerId, exportJobId],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('export job not found');
+    if (!row) throw new CurriculumNotFoundError('导出任务不存在');
     return mapExportJob(row);
   }
 
@@ -2284,7 +2284,7 @@ export async function applyCurriculumExportJobAction(
     [ownerId, exportJobId],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumNotFoundError('export job not found');
+  if (!row) throw new CurriculumNotFoundError('导出任务不存在');
   return mapExportJob(row);
 }
 
@@ -2514,7 +2514,7 @@ async function assertProgramOwned(
 ): Promise<void> {
   if (!programId) return;
   const row = await readProgramRow(queryable, ownerId, programId);
-  if (!row) throw new CurriculumNotFoundError('program not found');
+  if (!row) throw new CurriculumNotFoundError('培养方案不存在');
 }
 
 async function readProgramVersionRow(
@@ -2538,7 +2538,7 @@ async function assertProgramVersionOwned(
 ): Promise<void> {
   if (!programVersionId) return;
   const row = await readProgramVersionRow(queryable, ownerId, programVersionId);
-  if (!row) throw new CurriculumNotFoundError('program version not found');
+  if (!row) throw new CurriculumNotFoundError('培养方案版本不存在');
 }
 
 async function readProgramCourseRow(
@@ -2564,7 +2564,7 @@ async function assertIndicatorOwned(
     'SELECT id FROM curriculum_graduation_indicator WHERE owner_id = $1 AND id = $2',
     [ownerId, indicatorId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('graduation indicator not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('毕业要求指标点不存在');
 }
 
 /** Create a program, or update its metadata when the owner already has one by that name. */
@@ -2574,8 +2574,8 @@ export async function createCurriculumProgram(
   input: CurriculumProgramInput,
 ): Promise<CurriculumProgramRecord> {
   const name = optionalText(input.name);
-  if (!name) throw new CurriculumValidationError('name is required');
-  if (name.length > 240) throw new CurriculumValidationError('name is too long');
+  if (!name) throw new CurriculumValidationError('name 不能为空');
+  if (name.length > 240) throw new CurriculumValidationError('name 过长');
   const result = await queryable.query<ProgramRow>(
     `INSERT INTO curriculum_program
        (id, owner_id, name, code, description, status)
@@ -2596,7 +2596,7 @@ export async function createCurriculumProgram(
     ],
   );
   const row = result.rows[0];
-  if (!row) throw new CurriculumValidationError('program could not be created');
+  if (!row) throw new CurriculumValidationError('培养方案创建失败');
   return mapProgram(row);
 }
 
@@ -2607,9 +2607,9 @@ export async function updateCurriculumProgram(
   patch: CurriculumProgramPatch,
 ): Promise<CurriculumProgramRecord> {
   const existing = await readProgramRow(queryable, ownerId, programId);
-  if (!existing) throw new CurriculumNotFoundError('program not found');
+  if (!existing) throw new CurriculumNotFoundError('培养方案不存在');
   const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
-  if (!nextName) throw new CurriculumValidationError('name is required');
+  if (!nextName) throw new CurriculumValidationError('name 不能为空');
   try {
     const result = await queryable.query<ProgramRow>(
       `UPDATE curriculum_program
@@ -2630,11 +2630,11 @@ export async function updateCurriculumProgram(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('program not found');
+    if (!row) throw new CurriculumNotFoundError('培养方案不存在');
     return mapProgram(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this owner already has a program with that name');
+      throw new CurriculumConflictError('该所有者已存在同名培养方案');
     }
     throw error;
   }
@@ -2649,7 +2649,7 @@ export async function deleteCurriculumProgram(
     'DELETE FROM curriculum_program WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, programId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('program not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('培养方案不存在');
 }
 
 export async function createCurriculumProgramVersion(
@@ -2658,7 +2658,7 @@ export async function createCurriculumProgramVersion(
   input: CurriculumProgramVersionInput,
 ): Promise<CurriculumProgramVersionRecord> {
   const name = optionalText(input.name);
-  if (!name) throw new CurriculumValidationError('name is required');
+  if (!name) throw new CurriculumValidationError('name 不能为空');
   await assertProgramOwned(queryable, ownerId, input.programId);
   try {
     const result = await queryable.query<ProgramVersionRow>(
@@ -2679,11 +2679,11 @@ export async function createCurriculumProgramVersion(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('program version could not be created');
+    if (!row) throw new CurriculumValidationError('培养方案版本创建失败');
     return mapProgramVersion(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this program already has a version with that name');
+      throw new CurriculumConflictError('该培养方案已存在同名版本');
     }
     throw error;
   }
@@ -2696,9 +2696,9 @@ export async function updateCurriculumProgramVersion(
   patch: CurriculumProgramVersionPatch,
 ): Promise<CurriculumProgramVersionRecord> {
   const existing = await readProgramVersionRow(queryable, ownerId, programVersionId);
-  if (!existing) throw new CurriculumNotFoundError('program version not found');
+  if (!existing) throw new CurriculumNotFoundError('培养方案版本不存在');
   const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
-  if (!nextName) throw new CurriculumValidationError('name is required');
+  if (!nextName) throw new CurriculumValidationError('name 不能为空');
   try {
     const result = await queryable.query<ProgramVersionRow>(
       `UPDATE curriculum_program_version
@@ -2725,11 +2725,11 @@ export async function updateCurriculumProgramVersion(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('program version not found');
+    if (!row) throw new CurriculumNotFoundError('培养方案版本不存在');
     return mapProgramVersion(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this program already has a version with that name');
+      throw new CurriculumConflictError('该培养方案已存在同名版本');
     }
     throw error;
   }
@@ -2744,7 +2744,7 @@ export async function deleteCurriculumProgramVersion(
     'DELETE FROM curriculum_program_version WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, programVersionId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('program version not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('培养方案版本不存在');
 }
 
 export async function createGraduationIndicator(
@@ -2754,8 +2754,8 @@ export async function createGraduationIndicator(
 ): Promise<CurriculumGraduationIndicatorRecord> {
   const code = optionalText(input.code);
   const title = optionalText(input.title);
-  if (!code) throw new CurriculumValidationError('code is required');
-  if (!title) throw new CurriculumValidationError('title is required');
+  if (!code) throw new CurriculumValidationError('code 不能为空');
+  if (!title) throw new CurriculumValidationError('title 不能为空');
   await assertProgramVersionOwned(queryable, ownerId, input.programVersionId);
   try {
     const result = await queryable.query<GraduationIndicatorRow>(
@@ -2775,13 +2775,11 @@ export async function createGraduationIndicator(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('indicator could not be created');
+    if (!row) throw new CurriculumValidationError('毕业要求指标点创建失败');
     return mapGraduationIndicator(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError(
-        'this program version already has an indicator with that code',
-      );
+      throw new CurriculumConflictError('该培养方案版本已存在相同 code 的毕业要求指标点');
     }
     throw error;
   }
@@ -2800,11 +2798,11 @@ export async function updateGraduationIndicator(
     [ownerId, indicatorId],
   );
   const existing = existingResult.rows[0];
-  if (!existing) throw new CurriculumNotFoundError('graduation indicator not found');
+  if (!existing) throw new CurriculumNotFoundError('毕业要求指标点不存在');
   const code = patch.code !== undefined ? optionalText(patch.code) : existing.code;
   const title = patch.title !== undefined ? optionalText(patch.title) : existing.title;
-  if (!code) throw new CurriculumValidationError('code is required');
-  if (!title) throw new CurriculumValidationError('title is required');
+  if (!code) throw new CurriculumValidationError('code 不能为空');
+  if (!title) throw new CurriculumValidationError('title 不能为空');
   try {
     const result = await queryable.query<GraduationIndicatorRow>(
       `UPDATE curriculum_graduation_indicator
@@ -2827,13 +2825,11 @@ export async function updateGraduationIndicator(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('graduation indicator not found');
+    if (!row) throw new CurriculumNotFoundError('毕业要求指标点不存在');
     return mapGraduationIndicator(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError(
-        'this program version already has an indicator with that code',
-      );
+      throw new CurriculumConflictError('该培养方案版本已存在相同 code 的毕业要求指标点');
     }
     throw error;
   }
@@ -2848,7 +2844,7 @@ export async function deleteGraduationIndicator(
     'DELETE FROM curriculum_graduation_indicator WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, indicatorId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('graduation indicator not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('毕业要求指标点不存在');
 }
 
 export async function createCurriculumProgramCourse(
@@ -2863,7 +2859,7 @@ export async function createCurriculumProgramCourse(
     const course = await readCourseRow(queryable, ownerId, input.courseId);
     title = course?.title ?? null;
   }
-  if (!title) throw new CurriculumValidationError('title is required');
+  if (!title) throw new CurriculumValidationError('title 不能为空');
   try {
     const result = await queryable.query<ProgramCourseRow>(
       `INSERT INTO curriculum_program_course
@@ -2887,11 +2883,11 @@ export async function createCurriculumProgramCourse(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('program course could not be created');
+    if (!row) throw new CurriculumValidationError('计划课程创建失败');
     return mapProgramCourse(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this course is already in the program version');
+      throw new CurriculumConflictError('该课程已存在于培养方案版本中');
     }
     throw error;
   }
@@ -2904,7 +2900,7 @@ export async function updateCurriculumProgramCourse(
   patch: CurriculumProgramCoursePatch,
 ): Promise<CurriculumProgramCourseRecord> {
   const existing = await readProgramCourseRow(queryable, ownerId, programCourseId);
-  if (!existing) throw new CurriculumNotFoundError('program course not found');
+  if (!existing) throw new CurriculumNotFoundError('计划课程不存在');
   const nextCourseId = patch.courseId !== undefined ? patch.courseId : existing.course_id;
   if (nextCourseId) await assertCourseOwned(queryable, ownerId, nextCourseId);
   let nextTitle = patch.title !== undefined ? optionalText(patch.title) : existing.title;
@@ -2912,7 +2908,7 @@ export async function updateCurriculumProgramCourse(
     const course = await readCourseRow(queryable, ownerId, nextCourseId);
     nextTitle = course?.title ?? null;
   }
-  if (!nextTitle) throw new CurriculumValidationError('title is required');
+  if (!nextTitle) throw new CurriculumValidationError('title 不能为空');
   try {
     const result = await queryable.query<ProgramCourseRow>(
       `UPDATE curriculum_program_course
@@ -2943,11 +2939,11 @@ export async function updateCurriculumProgramCourse(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumNotFoundError('program course not found');
+    if (!row) throw new CurriculumNotFoundError('计划课程不存在');
     return mapProgramCourse(row);
   } catch (error) {
     if ((error as { code?: string }).code === '23505') {
-      throw new CurriculumConflictError('this course is already in the program version');
+      throw new CurriculumConflictError('该课程已存在于培养方案版本中');
     }
     throw error;
   }
@@ -2962,7 +2958,7 @@ export async function deleteCurriculumProgramCourse(
     'DELETE FROM curriculum_program_course WHERE owner_id = $1 AND id = $2 RETURNING id',
     [ownerId, programCourseId],
   );
-  if (!result.rows[0]) throw new CurriculumNotFoundError('program course not found');
+  if (!result.rows[0]) throw new CurriculumNotFoundError('计划课程不存在');
 }
 
 /**
@@ -2976,7 +2972,7 @@ export async function setCourseIndicatorSupports(
   supports: CourseIndicatorSupportInput[],
 ): Promise<CourseIndicatorSupportRecord[]> {
   const programCourse = await readProgramCourseRow(queryable, ownerId, programCourseId);
-  if (!programCourse) throw new CurriculumNotFoundError('program course not found');
+  if (!programCourse) throw new CurriculumNotFoundError('计划课程不存在');
   for (const support of supports) {
     await assertIndicatorOwned(queryable, ownerId, support.indicatorId);
   }
@@ -2991,7 +2987,7 @@ export async function setCourseIndicatorSupports(
       [ownerId, indicatorIds, programCourse.program_version_id],
     );
     if (mismatched.rows.length > 0) {
-      throw new CurriculumValidationError('indicator does not belong to this program version');
+      throw new CurriculumValidationError('毕业要求指标点不属于该培养方案版本');
     }
   }
   await queryable.query(
@@ -3016,7 +3012,7 @@ export async function setCourseIndicatorSupports(
       ],
     );
     const row = result.rows[0];
-    if (!row) throw new CurriculumValidationError('support could not be created');
+    if (!row) throw new CurriculumValidationError('指标点支撑创建失败');
     inserted.push(mapCourseIndicatorSupport(row));
   }
   return inserted;
@@ -3094,19 +3090,19 @@ export async function importCurriculumProgramPlan(
 
   if (mode === 'replace') {
     if (!input.programVersionId) {
-      throw new CurriculumValidationError('programVersionId is required when mode is replace');
+      throw new CurriculumValidationError('mode 为 replace 时 programVersionId 不能为空');
     }
     versionRow = await readProgramVersionRow(queryable, ownerId, input.programVersionId);
-    if (!versionRow) throw new CurriculumNotFoundError('program version not found');
+    if (!versionRow) throw new CurriculumNotFoundError('培养方案版本不存在');
     programRow = await readProgramRow(queryable, ownerId, versionRow.program_id);
-    if (!programRow) throw new CurriculumNotFoundError('program not found');
+    if (!programRow) throw new CurriculumNotFoundError('培养方案不存在');
   } else {
     if (input.programVersionId) {
-      throw new CurriculumValidationError('programVersionId is only used in replace mode');
+      throw new CurriculumValidationError('programVersionId 仅在 replace 模式下使用');
     }
     if (input.programId) {
       programRow = await readProgramRow(queryable, ownerId, input.programId);
-      if (!programRow) throw new CurriculumNotFoundError('program not found');
+      if (!programRow) throw new CurriculumNotFoundError('培养方案不存在');
     } else {
       const createdProgram = await createCurriculumProgram(queryable, ownerId, {
         name: document.program.name,
@@ -3115,7 +3111,7 @@ export async function importCurriculumProgramPlan(
         status: document.program.status,
       });
       programRow = await readProgramRow(queryable, ownerId, createdProgram.id);
-      if (!programRow) throw new CurriculumValidationError('program could not be created');
+      if (!programRow) throw new CurriculumValidationError('培养方案创建失败');
     }
     const createdVersion = await createCurriculumProgramVersion(queryable, ownerId, {
       programId: programRow.id,
@@ -3127,7 +3123,7 @@ export async function importCurriculumProgramPlan(
       targetCredits: document.programVersion.targetCredits,
     });
     versionRow = await readProgramVersionRow(queryable, ownerId, createdVersion.id);
-    if (!versionRow) throw new CurriculumValidationError('program version could not be created');
+    if (!versionRow) throw new CurriculumValidationError('培养方案版本创建失败');
   }
 
   if (mode === 'replace') {
@@ -3156,7 +3152,7 @@ export async function importCurriculumProgramPlan(
     // The version row was read before the updates; refresh the metadata so the
     // response reflects the values that were just written.
     versionRow = await readProgramVersionRow(queryable, ownerId, versionRow.id);
-    if (!versionRow) throw new CurriculumNotFoundError('program version not found');
+    if (!versionRow) throw new CurriculumNotFoundError('培养方案版本不存在');
   }
 
   const indicators: CurriculumGraduationIndicatorRecord[] = [];
@@ -3196,7 +3192,7 @@ export async function importCurriculumProgramPlan(
       const indicator = indicatorByCode.get(support.indicatorCode);
       if (!indicator) {
         throw new CurriculumValidationError(
-          `indicator "${support.indicatorCode}" does not belong to this program version`,
+          `毕业要求指标点「${support.indicatorCode}」不属于该培养方案版本`,
         );
       }
       return { indicatorId: indicator.id, weight: support.weight, note: support.note };

@@ -27,7 +27,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
   try {
     body = await req.json();
   } catch {
-    return curriculumJsonError(400, 'CURRICULUM_INVALID', 'request body must be JSON');
+    return curriculumJsonError(400, 'CURRICULUM_INVALID', '请求体必须是 JSON');
   }
   const parsed = parseCurriculumExportJobAction(body);
   if (!parsed.ok) return curriculumJsonError(400, 'CURRICULUM_INVALID', parsed.message);
@@ -49,7 +49,7 @@ export async function PATCH(req: NextRequest, context: { params: Promise<{ id: s
       return curriculumJsonError(
         500,
         'CURRICULUM_EXPORT_UPDATE_FAILED',
-        'Failed to update the export job',
+        '更新导出任务失败',
         responseHeaders,
       );
     }
