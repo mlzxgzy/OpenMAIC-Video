@@ -16,7 +16,7 @@ import { withRequestOwner } from '@/lib/server/identity/with-owner';
 export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
-  if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
+  if (!isServerPersistenceConfigured()) return new Response('未找到', { status: 404 });
 
   return withRequestOwner(req, async ({ ownerId }, responseHeaders) => {
     try {

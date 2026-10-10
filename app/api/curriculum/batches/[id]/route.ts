@@ -16,7 +16,7 @@ export const runtime = 'nodejs';
 const ACTIONS = ['pause', 'resume', 'cancel', 'retry'] as const;
 
 export async function PATCH(req: NextRequest, context: { params: Promise<{ id: string }> }) {
-  if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
+  if (!isServerPersistenceConfigured()) return new Response('未找到', { status: 404 });
   const { id } = await context.params;
   let body: unknown;
   try {

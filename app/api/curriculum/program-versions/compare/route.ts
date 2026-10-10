@@ -20,7 +20,7 @@ import { withRequestOwner } from '@/lib/server/identity/with-owner';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
+  if (!isServerPersistenceConfigured()) return new Response('未找到', { status: 404 });
 
   const params = new URL(req.url).searchParams;
   const baseVersionId = params.get('baseVersionId')?.trim();

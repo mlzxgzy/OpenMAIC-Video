@@ -17,7 +17,7 @@ import { withRequestOwner } from '@/lib/server/identity/with-owner';
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {
-  if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
+  if (!isServerPersistenceConfigured()) return new Response('未找到', { status: 404 });
   const programVersionId = new URL(req.url).searchParams.get('programVersionId')?.trim();
   if (!programVersionId) {
     return curriculumJsonError(400, 'CURRICULUM_INVALID', '查询参数 programVersionId 为必填');

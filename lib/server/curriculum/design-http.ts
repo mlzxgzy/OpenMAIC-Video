@@ -150,7 +150,7 @@ export async function runDesignRoute(
   params: Promise<Record<string, string>> | undefined,
   handler: DesignHandler,
 ): Promise<Response> {
-  if (!isServerPersistenceConfigured()) return new Response('Not found', { status: 404 });
+  if (!isServerPersistenceConfigured()) return new Response('未找到', { status: 404 });
 
   return withRequestOwner(req, async ({ ownerId }, headers) => {
     const resolved = (await params) ?? {};

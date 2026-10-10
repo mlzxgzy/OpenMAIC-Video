@@ -23,6 +23,9 @@
  *   - `.push('...')` — the phase gaps and the export blockers
  *   - `throw new <Something>Error('...')` — the stores' typed refusals
  *   - `curriculumJsonError(status, code, '...')` — the route-level failures
+ *   - `new Response('<body>', ...)` — the not-configured 404 every route answers
+ *     before it touches a store; that body is the entire explanation a person
+ *     gets when the workspace has no database behind it
  *
  * Deliberately out of scope: text inside `${...}` interpolations (identifiers
  * and author data), developer-facing `console.*` output, error `code` values
@@ -80,7 +83,14 @@ interface Literal {
   file: string;
   line: number;
   text: string;
+  /** Which position shape found it, so a marker that stopped matching is visible. */
+  kind: LiteralKind;
 }
+
+/** Every position shape this policy knows how to find. */
+const LITERAL_KINDS = ['message', 'push', 'throw', 'jsonError', 'response'] as const;
+
+type LiteralKind = (typeof LITERAL_KINDS)[number];
 
 function discoverModules(): string[] {
   const files: string[] = [];
@@ -176,28 +186,46 @@ function literalArgument(
 function collectLiterals(file: string): Literal[] {
   const source = readFileSync(resolve(repositoryRoot, file), 'utf8');
   const found: Literal[] = [];
-  const at = (index: number, text: string | null) => {
+  const at = (index: number, text: string | null, kind: LiteralKind) => {
     if (text === null) return;
-    found.push({ file, line: source.slice(0, index).split('\n').length, text });
+    found.push({ file, line: source.slice(0, index).split('\n').length, text, kind });
   };
   const openParenOf = (match: RegExpMatchArray) => match.index! + match[0].length - 1;
 
   for (const match of source.matchAll(/\bmessage:/g)) {
     let i = match.index! + match[0].length;
     while (i < source.length && /\s/.test(source[i])) i += 1;
-    at(match.index!, readLiteral(source, i)?.text ?? null);
+    at(match.index!, readLiteral(source, i)?.text ?? null, 'message');
   }
 
   for (const match of source.matchAll(/\.push\(/g)) {
-    at(match.index!, literalArgument(source, callArguments(source, openParenOf(match))[0]));
+    at(match.index!, literalArgument(source, callArguments(source, openParenOf(match))[0]), 'push');
   }
 
   for (const match of source.matchAll(/throw new \w*Error\(/g)) {
-    at(match.index!, literalArgument(source, callArguments(source, openParenOf(match))[0]));
+    at(
+      match.index!,
+      literalArgument(source, callArguments(source, openParenOf(match))[0]),
+      'throw',
+    );
   }
 
   for (const match of source.matchAll(/\bcurriculumJsonError\(/g)) {
-    at(match.index!, literalArgument(source, callArguments(source, openParenOf(match))[2]));
+    at(
+      match.index!,
+      literalArgument(source, callArguments(source, openParenOf(match))[2]),
+      'jsonError',
+    );
+  }
+
+  // The whole body of the not-configured 404. A `new Response(JSON.stringify(…))`
+  // is not a bare literal, so it is skipped rather than mis-read as one.
+  for (const match of source.matchAll(/\bnew (?:Next)?Response\(/g)) {
+    at(
+      match.index!,
+      literalArgument(source, callArguments(source, openParenOf(match))[0]),
+      'response',
+    );
   }
 
   return found;
@@ -208,11 +236,15 @@ describe('human-facing API messages', () => {
   const literals = modules.flatMap(collectLiterals);
   const english = literals.filter((literal) => isUntranslatedProse(literal.text));
 
-  it('discovers the modules and scans a meaningful number of message positions', () => {
+  it('finds a message at every position shape it knows about', () => {
     // Guards the guard: a marker that silently stopped matching would make the
-    // policy test below pass by checking nothing at all.
+    // policy test below pass by checking nothing at all. Counting per shape,
+    // rather than only in total, is what makes *that* marker — not just the
+    // policy — fail loudly when it stops matching.
     expect(modules.length).toBeGreaterThanOrEqual(30);
     expect(literals.length).toBeGreaterThanOrEqual(150);
+    const kinds = [...new Set(literals.map((literal) => literal.kind))].sort();
+    expect(kinds).toEqual([...LITERAL_KINDS].sort());
   });
 
   it('writes every one of them in Chinese', () => {
