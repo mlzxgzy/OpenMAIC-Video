@@ -98,3 +98,15 @@ e2e/__screenshots-619/
 
 # Operator model configuration (see openmaic.yml in RFC #1701); it names secrets via ${VAR}
 /openmaic.yml
+
+# Output of the live verification harnesses in scripts/verification/: screenshots,
+# console logs and full test-runner dumps. Regenerable by re-running the harness,
+# so it is evidence for a review, not source.
+/artifacts/
+
+# Verification scripts that were one-off explorations, each superseded by a walk or
+# a test that replaced it: design-render-check -> design-workbench-walk,
+# ux-recon -> ux-course-walk + ux-design-walk, tmp-english -> human-facing-messages.test.ts
+/scripts/verification/design-render-check.mjs
+/scripts/verification/ux-recon.mjs
+/scripts/verification/tmp-english.mjs
