@@ -44,7 +44,6 @@ console.log(`\n[A] 什么都没选          submit disabled=${await submit.isDis
 await source.selectOption({ index: 1 });
 await target.selectOption({ index: 1 });
 await page.waitForTimeout(400);
-const bodyText = await page.locator('body').innerText();
 console.log(`[B] 两端同一个知识点      submit disabled=${await submit.isDisabled()}`);
 const sentence = (await page.locator('body').innerText()).match(/关系的两端现在都是[^\n]{0,120}/);
 console.log(`    页面上的解释句：${sentence ? sentence[0] : '（找不到）'}`);

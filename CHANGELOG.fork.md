@@ -26,6 +26,25 @@
 
 ## [Unreleased]
 
+（暂无）
+
+## [1.2.0-video.3] - 2026-10-11
+
+基线是上游 `ccdc88a5`（**本版未同步上游**：`v1.2.0-video.2` 之后没有再做
+`git merge upstream/main`）。本节收录自 `v1.2.0-video.2` 以来的 **36 个**二开提交，
+它们几乎全部落在同一个方向上：**课程产品层**——从「课程台账」长到「成果导向课程
+设计」的一个完整子系统（约 2.8 万行、60 个 API 路由、27 张表）。视频链路本版只动
+了一处（渲染分块并行）。
+
+**版本号说明**：沿用 `1.2.0-video.N` 版本线，本次递增到 `1.2.0-video.3`。
+本版**未改动 `packages/@openmaic/` 下任何文件**（`git diff --name-only
+v1.2.0-video.2..HEAD -- packages/` 为空），因此不发 `npm` 包、不消耗
+`@openmaic/*` 版本号，也不触发 `publish-packages.yml`。
+
+**读法**：本次改动量大，条目按「数据层 → 审核与闸门 → 工具与 skill → HTTP 与界面
+→ 可用性修补」的顺序排列，与提交顺序一致。**课程产品层的整体设计与分阶段落地记录**
+另见 `docs/curriculum-redesign/COURSE-DESIGN-REFACTOR.md`。
+
 ### Added
 
 - **独立课程序列页**：新增 `/curriculum/series`，用卡片展示每个系列的名称、描述、
@@ -271,6 +290,316 @@
   SSR 200 且包含“培养方案版本对比与同步”。
 
 
+- **课程体系入口与六步工作流导航**：主页左上角新增常驻「课程体系」按钮
+  （`app/page.tsx`，`BookOpen` 图标）跳 `/curriculum`；工作台页头改为「返回首页 /
+  去单课生成 / 刷新」，标题下加一条吸顶导航，把原来纯长滚动的页面按生产顺序串成
+  六步：课程台账 → 知识体系 → 培养方案 → 课程组装 → 批量生成 → 视频导出
+  （`WORKFLOW_STEPS`，点击用 `scrollToSection` 调 `scrollIntoView`）。同时把生成结果
+  变成可点深链：批量队列里已有课堂的行、课程组装器的 `stageId`、课程台账与
+  「已有 stage」列表都指向 `/classroom/<stageId>`
+  （`components/curriculum/batch-queue-panel.tsx`、`course-assembler-panel.tsx`、
+  `curriculum-workspace.tsx`）。
+
+  验证：入口按钮与 `batch-queue-panel.tsx:329`、`course-assembler-panel.tsx` 的
+  `/classroom/${stageId}` 链接可在源码核对；`tests/` 下没有任何文件引用
+  `curriculum-workspace` / `batch-queue-panel` / `course-assembler-panel`（grep 无命中），
+  本提交无配套测试。
+
+
+- **课程产品独立详情页**：新增路由 `app/curriculum/courses/[id]/page.tsx`
+  （`export const dynamic = 'force-dynamic'`）与 `components/curriculum/course-workspace.tsx`，
+  把一门课的全部操作从台账页搬进五个页签「基本信息 / 知识点 / 课程关系 /
+  组装与生成 / 课堂与视频」（`COURSE_TABS`）。台账页因此只保留新建：删掉
+  `editingCourseId`、`editCourse` 与「编辑 / 取消编辑」按钮，课程标题与「打开课程」
+  按钮都指向 `/curriculum/courses/<id>`，删除按钮改为图标按钮。配套给
+  `CourseAssemblerPanel` 增加 `initialCourseId` / `targetCourseId`（`bootstrappedRef`
+  保证只预填一次；保存走 PATCH，生成请求的 `courseId` 指向该课程，按钮文案区分
+  「保存为课程草稿」与「保存课程信息与知识点」），给 `KnowledgePointsPanel` 增加
+  `defaultCourseId` 以便挂载时选中该课程。
+
+  验证：两个新文件均存在；`curriculum-workspace.tsx` 中已无 `editingCourseId` /
+  `editCourse`；`course-assembler-panel.tsx:73-75,203`、`knowledge-points-panel.tsx:28,101,119`
+  的新 prop 可在源码核对；`tests/` 无对应测试。
+
+
+- **课程详情改读聚焦快照，页签同步到 URL**：新增 `GET /api/curriculum/courses/[id]`
+  （`app/api/curriculum/courses/[id]/route.ts`）与 `getCurriculumCourseDetail()`
+  （`lib/server/curriculum/store.ts`），返回与 `CurriculumSnapshot` 同形的聚焦快照：
+  全量 `curriculum_series` 与 `curriculum_course`（供下拉与关系编辑）、该课程所属系列
+  的知识点，以及**只属于该课程**的关系边、知识点绑定、`curriculum_generation_job`、
+  `curriculum_batch_item`、`curriculum_export_job`；培养方案与批量层留空
+  （`knowledgePointRelations: []`、`batches: []`、program* 为空）；课程不存在时抛
+  `CurriculumNotFoundError` 走既有 404 映射。课程页此前拉全量 `/api/curriculum`，
+  现改拉该端点。五个页签同时与 `?tab=` 双向同步（`parseCourseTab` / `currentCourseTab` /
+  `handleTabChange` + `popstate` 监听 + `router.replace`，默认 `profile` 时删除参数），
+  刷新与分享链接落在同一页签。
+
+  验证：`app/api/curriculum/courses/[id]/route.ts:38` 的 `GET` 与
+  `lib/server/curriculum/store.ts:904` 的 `getCurriculumCourseDetail` 在当前源码中存在；
+  `tests/` 中没有任何测试引用 `getCurriculumCourseDetail`（grep 无命中），该 GET 路由
+  没有专门的 HTTP 测试。
+
+
+- **从入口到导出的课程生产引导**：新增展示型组件
+  `components/curriculum/course-production-flow.tsx`（`CourseProductionStep` /
+  `CourseProductionFlow`，`aria-label="课程生产流程"`），把一门课的生产拆成
+  「设计课程 → 生成大纲 → 生成课堂 → 导出视频」四步，带完成态对勾与百分比进度条。
+  课程详情页据此计算 `productionSteps`（知识点数、生成任务数、`stageId`、成功导出数）
+  与 `activeProductionStep`，点击卡片按 `PRODUCTION_STEP_TABS` 切页签；各页签底部加
+  「下一步」按钮（知识点为空时禁用），组装页提示进度看「课堂与视频」。首页 hero 下方
+  给出两条互斥入口：快速生成单课（聚焦输入框）与「进入课程序列」（跳
+  `/curriculum/series`，入口名由 `49e451ef` 再收敛）。工作台页签同步到 `?tab=` 短别名
+  （`WORKFLOW_TAB_PARAM` / `WORKFLOW_TAB_ALIASES`：`ledger` / `knowledge` / `program` /
+  `assembly` / `batch` / `export`），并在 `popstate` 回读；「新建课程产品」改为
+  「创建并打开课程」，创建成功后 `router.push` 到新课程详情页。
+
+  验证：`components/curriculum/course-production-flow.tsx` 存在并导出
+  `CourseProductionStep` / `CourseProductionFlowProps`；`course-workspace.tsx:110-119,305-329,360`
+  与 `curriculum-workspace.tsx:131-154` 的上述标识符可在源码核对；`tests/` 无对应测试。
+
+
+- **成果导向课程设计数据层（S1）**：课程设计不再以「章 / 节大纲」为基底，而是从可验证
+  的学习成果正向推进：成果 → 证据 → 知识 / 技能节点 → 依赖 DAG → 大纲 → 教 / 练 / 考。
+  章、节降级为呈现与分类，教学内容落在目（`curriculum_unit`）上。
+
+  新增 curriculum migration **v8–v12**（`design_foundation` / `design_graph` /
+  `design_outline` / `design_assessment` / `design_audit`）与 12 张表：
+  `curriculum_task`、`curriculum_objective`、`curriculum_evidence`、
+  `curriculum_learning_node`、`curriculum_node_objective`、`curriculum_dependency`、
+  `curriculum_unit`、`curriculum_unit_coverage`、`curriculum_unit_dependency`、
+  `curriculum_question`、`curriculum_lab_task`、`curriculum_audit_finding`；旧的知识点 /
+  课程账本表保留，两层并存。领域类型在 `lib/curriculum/design-types.ts`。两个决定写进
+  类型：成果分四型（`knowledge` / `skill` / `competency` / `task`），`competency` 属于
+  成果层而不是知识点类型；参考解 `LabReferenceStep` 与判分规则 `LabVerifyRule` 是两个
+  独立类型，避免把「一种解法」当成「判分标准」，从类型上挡住照路径判分。
+
+  数据库约束承担模型的硬边界：`verifiable` 的 CHECK 要求 `expected_behavior` 非空且
+  `min_criteria` 至少一项，并用 `jsonb_typeof(...) = 'array'` 而不是会抛错的
+  `jsonb_array_length()`（坏列被拒绝为一次写入，不会变成 500）；考试型证据被约束为
+  无提示、独立完成；「章不得承载教学内容」用 plpgsql 触发器 `curriculum_coverage_item_only`
+  实现，因为 CHECK 无法跨表查询 `curriculum_unit`。
+
+  `lib/server/curriculum/design-store.ts` 提供 CRUD、阶段机、端点归属与环检测。阶段
+  `task → outcomes → graph → outline → teaching → assessment → review` 只能逐级前进且
+  每级有门槛，`advanceCurriculumTaskPhase` 借 `phaseCompletionGaps` 说明还缺什么；写入侧
+  `assertPhase` 按阶段加锁，但**编辑不设门槛**——修订中的课程不该被冻结在它最初到达的
+  阶段。顺带修掉继承来的环检测方向 bug：递归 CTE 从新边的 target 反向行走，导致在既有
+  `base → injection` 之上再加 `injection → base` 被静默接受；方向已在
+  `design-store.ts:1620` 修正。
+
+  **行为改变**：`curriculum_unit_coverage` 的三条独立记录取代旧的单值
+  `knowledge_point.coverage_level`（后者把教 / 练 / 考三个正交维度压成一个），并移除
+  知识点的 `competency` 类型。
+
+  验证：新增 `tests/persistence/curriculum-design-schema.test.ts`（14 项 PGlite 约束断言，
+  含「标记 verifiable 但无预期行为 / 无最低标准被拒绝」）、
+  `tests/persistence/curriculum-design-schema.pg.test.ts`（7 项真实 PostgreSQL）、
+  `tests/persistence/curriculum-design-store.test.ts`（17 项 store 行为）；提交信息记录
+  38 项通过（PGlite 31 + 真实 PostgreSQL 7）、typecheck / lint / prettier 干净，并更新
+  `tests/persistence/schema-migration-checksums.test.ts` 中 v8–v12 的金标。
+
+
+- **成果导向设计审核与生产闸门（S2）**：`lib/curriculum/audit.ts` 以 **21 条规则**、对一份
+  `CurriculumDesignSnapshot` 做纯函数审核，因此同一套规则在测试、API 路由与编辑器里跑出
+  同一结果，不会各写一份。规则表 `CURRICULUM_AUDIT_RULES` 从设计文档的 13 条扩到 21 条，
+  补的都是原清单无法表达的缺陷：`evidence_no_artifact`（声明了 lab 证据却没有实操产物，
+  闭环真正断掉的地方）、`dependency_out_of_order`（依赖图正确不等于教学顺序正确，属跨层
+  缺陷）、`node_unsupported` / `chapter_with_content` / `unit_orphan` / `brief_incomplete`，
+  以及 `lab_verify_grades_by_path`（判分规则照抄参考解，等于用错误的方式藏起「没有判分
+  规则」）。
+
+  `evaluateCurriculumQuality` 按九层链路顺序（`CURRICULUM_QUALITY_LAYERS`，从
+  `outcomes_clear` 到 `traceable`）报告 `firstBrokenLayer`，而不是平铺问题列表：修好后层而
+  前层仍断，覆盖报告会指向错误的东西。`assertCurriculumDesignExportable` **重新跑审核**
+  而不是读取已存结论——审核通过后设计可能被改坏，陈旧的「通过」会把未闭合的闭环放进生产
+  ——并且抛错而非返回布尔值，调用方无法忽略结果。
+
+  `lib/curriculum/traceability.ts` 提供双向追踪 `traceFromObjective` / `traceFromUnit` 与
+  `buildTraceabilityMatrix`；`lib/curriculum/design-coverage.ts` 的 `buildDesignCoverage`
+  按目标给出教 / 练 / 考三态、闭环计数与「最不完整优先」的 `gaps`，`summariseCoverage`
+  给出闭环判定。旧 `coverage.ts` 因知识关系页仍在调用而保留，由 design-coverage 取代。
+
+  三处对设计文档的修正：`objective_missing_prereq` 改为检查教学设计是否点名该目标的
+  primary 支撑节点（原定义与 `objective_untaught` 重复）；`lab_verify_grades_by_path` 收紧为
+  精确匹配（子串匹配会把正确的 `file_read('/flag')` 判成按路径判分，误报会让规则被忽略）；
+  父子成果去重的 `a.parentId && (...)` 短路 bug 修正为两个方向独立判断。
+
+  另记一个坑：`CurriculumTeachingDesign` 里 `nodes` / `prerequisites` 是 ID 列表，而 `core` /
+  `brief` / `mention` / `omit` 是自由文本主题；把后者当节点 ID 扫描会让先修规则在每个正确
+  设计上误报，也会让 `traceFromUnit` 返回主题文本当节点 ID。
+
+  验证：新增 `tests/curriculum/design-audit.test.ts`（43 项）与
+  `tests/curriculum/design-traceability.test.ts`（19 项），
+  `tests/persistence/curriculum-design-store.test.ts` 增至 24 项；提交信息记录 69 项新测试
+  （43 审核 + 19 追踪 + 7 store），并说明 `asset-collector-schedule.test.ts` 的 2 项失败在改动
+  stash 前后同样复现（先于本次工作存在）。
+
+
+- **设计阶段驱动工具、技能与课件生成（S3）**：`lib/server/agent-runtime/design-tools.ts`
+  新增 **21 个**设计工具，覆盖 S1 全部写入面：`get_course_design` 一次返回整张设计快照，
+  其余为细粒度写（任务、成果、证据、节点、节点-成果关联、依赖、章 / 目、覆盖行、目级顺序、
+  题目、实操任务、追踪、审核、导出断言）。每个工具按任务当前阶段加锁并限定单个 owner；
+  阶段锁是重点——agent 在成果存在之前无法写章节，拒绝会点名当前阶段与还欠的简报字段。
+
+  新增 **11 个单职责 skill**（`skills/agent-runtime/` 下 `course-analysis`、`outcome-design`、
+  `knowledge-decomposition`、`dependency-builder`、`outline-designer`、`teaching-designer`、
+  `deck-designer`、`practice-designer`、`exam-designer`、`content-producer`、`course-auditor`），
+  每个 skill 首段即阶段锁。教学设计与课件设计刻意拆成两个 skill：合并会让一次调用同时决定
+  「讲什么」与「分成哪几页」，而那正是讲课设计退化成标题列表的路径。
+
+  `deck_design` 从自由文本 `requirement` 升级为教学意图与 slide 生成器之间的**类型化契约**：
+  `lib/types/generation.ts` 新增 `DeckDesign` / `DeckDesignPage`，
+  `lib/server/generation/steps/deck-design-contract.ts` 的 `buildDeckDesignBlock` 把页面计划
+  渲染成 prompt 块，由 `lib/server/generation/steps/outline.ts` 追加到 system prompt（不改共享
+  模板字节，ad-hoc 路径字节不变）。页序按 `order` 排；缺 `goal` / `coreInfo` 的页显式标
+  `⚠ MISSING` 而不是静默透传，否则会产出看起来合理、却追溯不到任何教学决策的课件。
+
+  `verifiable` 不再依赖调用方记得设置，而由工具层从 `expectedBehavior` 与 `minCriteria` 推导
+  （`verifiabilityOf`，与 DB CHECK 同规则但计算而非仅校验）。此前每个由 AI 写出的成果都会
+  永远停在「不可验证」，而工具还在反复要求补上已经填好的字段。
+
+  **行为改变**：`understanding-by-design` 降级为
+  `skills/agent-runtime/outcome-design/references/understanding-by-design.md`（「持久理解」
+  没有通过 / 不通过条件，进不了证据链，因此是设计输入而非产物），4 个引用它的 skill 已重新
+  指向。工具集在 `lib/server/agent-runtime/runner.ts` 无条件注册
+  （`buildCurriculumDesignTools`、`CURRICULUM_DESIGN_ALLOWLIST`、`CURRICULUM_DESIGN_TOOLS_PROMPT`），
+  provider 惰性解析，没有 curriculum schema 的部署仍能正常启动。
+
+  验证：新增 `tests/agent-runtime/design-tools.test.ts`（12 项）、
+  `tests/agent-runtime/design-skills.test.ts`（10 项）、
+  `tests/generation/deck-design-contract.test.ts`（8 项）、
+  `tests/agent-runtime/runner-skills-registration.test.ts`（6 项）与
+  `tests/agent-runtime/runner-voice-registration.test.ts`（3 项）；前三个文件共 30 项断言
+  （12 工具 + 10 skill + 8 契约）。提交信息未记录 tsc / lint 结果，故未据此断言。
+
+
+- **设计 HTTP 接口与目标 × 目热力矩阵（S4）**：`app/api/curriculum/design/` 下 **25 个**路由
+  文件覆盖 S1 整个写入面加派生报告——任务 CRUD 与阶段机（`GET .../phase` 返回当前阶段、
+  下一阶段与阻塞推进的具体 `gaps`，`POST .../phase` 前进一级）、成果 / 证据 / 节点 /
+  节点-成果关联 / 依赖图、章 / 目 / 覆盖行与教学顺序、题目与实操任务、审核（GET 只评估
+  不写，POST 记录）、finding 状态、覆盖率、导出闸门与双向追踪。
+
+  `lib/server/curriculum/design-validation.ts` 补回路由丢失的那份 schema：工具层有 TypeBox，
+  路由什么都没有，而 store 把枚举直接交给 SQL，拼错会变成约束冲突即 500；更糟的是 JSONB
+  内部的枚举（如 `verify_rules[].kind`）没有任何约束兜底，`{kind:'flg'}` 能存下却在判分时
+  永远不匹配——现在这是 400。`lib/server/curriculum/design-http.ts` 把管道集中一处：持久化
+  闸门、owner fence、阶段拒绝 409（带 `details{current, required}`），以及可达数据库约束到
+  400 的映射（保留约束名以便诊断）。
+
+  审核的 GET 是**纯读**：会写库的 GET 会让每个预取和重试都成为一次变更，答案取决于谁最后
+  问的。`evaluateCurriculumDesign` 从持久化包装中拆出，`describeCurriculumExportBlockers`
+  与导出断言共用，两者无法漂移。
+
+  三个被工作逼出来的修复：`setCurriculumNodeObjectives` 按 `objective_id` 单独去重，而表主键
+  是 `(node_id, objective_id)`，导致「多个知识节点支撑同一个成果」被静默压成一个；章带教学
+  角色、依赖 `strength` 超出 0..1 只由 CHECK 兜底，普通编写错误返回 500，角色规则现在由
+  store 的 `assertUnitRoleShape` 表述；`verifiable` 的调用方推导残留被移除，改由
+  `deriveVerifiability` 在 store 的 create 与 patch（按合并后字段）统一推导，工具与路由两处
+  的推导删除。
+
+  页面 `components/curriculum/design-heatmap.tsx` 与
+  `components/curriculum/design-task-list.tsx` 落在 `/curriculum/design` 与
+  `/curriculum/design/[id]`：行是学习目标、列是目，单元格标 `教` / `练` / `考`，标题下统计
+  闭环数量，`gaps` 最坏优先（从未被考核的成果排在只缺第二次练习的成果之前）；质量条是实时
+  计算，findings 列表是上次审核记录，两者不一致正是设计已变动的信号。
+
+  验证：新增 `tests/curriculum/design-routes.test.ts`（36 项，PGlite 上跑真实 store，只替换
+  provider 接线与 owner 解析）；提交信息记录 36 项路由测试通过，并说明无关套件中 42 项既有
+  失败（缺 provider key）在改动前后逐字节相同。
+
+
+- **设计条目自己决定生成什么**：新增
+  `POST /api/curriculum/design/tasks/[id]/units/[unitId]/generate`，把一个已设计的条目生产成
+  一次生成运行。此前装配器对所有课程硬编码 `sceneTypes: ['slide']`，于是练习条目和考试条目
+  都只出幻灯片；`deck_design` 契约只活在渲染器里，`GenerationRunInput` 没有该字段、
+  `parseRunInput` 把它丢掉，设计好的课程实际仍按散文生成。新增
+  `lib/server/curriculum/unit-role-run.ts`：`UNIT_ROLE_SCENE_TYPES` 让 `unit_role` 决定场景类型
+  （`lecture` → `slide`；`practice` → `slide`/`quiz`/`interactive`；`exam` → `slide`/`quiz`，任何
+  角色都不给 `pbl`），`unitRoleRunModes` 从同一来源推导 `interactive` 与 `taskEngine`，避免两者
+  漂移；`deckDesignForRole` 只把计划交给 `lecture`，空计划视为没有计划；`describeDesignedItem`
+  用条目所服务的 outcome 行为拼出 requirement。`GenerationRunInput` 新增 `deckDesign`、
+  `curriculumTaskId`、`curriculumUnitId`，由 `runRequirements` 原样带给大纲步骤；
+  `parseRunInput` 按 `MAX_DECK_PAGES`（60）与每页 4000 字符校验，缺 `goal`/`coreInfo`/`mode`
+  的页面逐字段点名。路由先跑导出闸门再启动运行，拒绝时不会留下已计费的孤儿运行；`stage_id`
+  仍由 `lib/server/curriculum/generation-hooks.ts` 在运行提交场景时写入。
+
+  验证：`tests/curriculum/unit-role-run.test.ts` 断言角色→场景类型、`interactive`/`taskEngine`
+  的组合、`pbl` 对任何角色都不出现、计划只随 `lecture` 传递、requirement 由 outcome 行为拼成
+  而非条目标题；`tests/generation/deck-design-plumbing.test.ts` 断言计划经 `parseRunInput` →
+  `runRequirements` 贯通、无计划的即席运行逐字节不变、缺字段 / 超长 / 空计划被拒；
+  `tests/curriculum/design-routes.test.ts` 覆盖新路由的 404/400 与 owner 隔离。
+
+
+- **按设计生产与按知识点组装在同一个面板里分岔**：新增
+  `lib/curriculum/production-path.ts` 的 `chooseProductionPath` 作为分岔点。任务进入 `outline`
+  及以后（`outline`/`teaching`/`assessment`/`review`）就走设计路径：先跑导出闸门、由
+  `unit_role` 决定允许的场景类型、requirement 由条目所服务的 outcome 行为构造。`outline`
+  之前没有可执行的目标闭环，于是提供装配器并明确标注为设计之前的路径。
+  `ProductionPathChoice.blockedReason` 保证每条不可用的路径都带一句「该做什么」，不留没有
+  理由的灰按钮。同一次改动补上两个让工作台可达的入口：任务列表新增建任务表单（没有 brief
+  的任务无法离开 `task` 阶段，所以此前没有任何东西可点），热力矩阵改为读
+  `GET /api/curriculum/design/tasks/[id]/phase`，把具体缺口显示在推进按钮旁。改动文件：
+  `components/curriculum/course-assembler-panel.tsx`、`design-heatmap.tsx`、
+  `design-task-list.tsx`。
+
+  验证：`tests/curriculum/production-path.test.ts` 6 例，逐阶段断言走哪条路径、只有章节时
+  不算「有可生产内容」、以及每条被拒路径都给出理由。
+
+
+- **条目顺序审核规则**：`curriculum_unit_dependency` 此前有写入口、有删入口、**没有读者**
+  ——作者声明「B 在 A 之后」会被记录然后忽略；路由注释声称「the audit compares the two」，
+  而这是假的，正因文档断言了它，没人看出这里缺东西。`lib/curriculum/audit.ts` 新增两条规则：
+  `unit_dependency_out_of_order`（声明的先修被排在需要它的条目之后，落在 `dependency_valid`
+  层，因此会挡住导出）与 `unit_dependency_cycle`（声明的顺序成环，没有第一个条目）。只有
+  `prerequisite` 边被当作顺序声明（`UNIT_ORDERING_EDGES`），`related` 与 `follow-up` 是标注、
+  不施加顺序；检查的是作者自己那条边，与比较目标图和交付顺序的 `dependency_out_of_order`
+  是两条独立规则码。环检测 DFS 抽成 `findCycles`，与目标图共用。`rule_code` 是无约束 TEXT，
+  不需要迁移。
+
+  验证：`tests/curriculum/design-audit.test.ts` 新增 12 例（正向 5、负向 7），覆盖错误顺序、
+  相邻的正确顺序、忽略 `related`/`follow-up`/章节/悬空 id、成环与不重复报环，并断言错误顺序
+  会破坏 `dependency_valid`、干净设计仍可导出；提交信息记录双向变异测试（注销规则失败 4 例、
+  反转比较失败 5 例）与活体 26/26。
+
+
+- **设计工作台可编辑 UI**：设计页面此前只能读、审、推进，什么都输入不了，每一行都得由 agent
+  工具或手写 POST 产生。新增 `components/curriculum/design-workbench.tsx`、
+  `design-workbench-forms.tsx`、`design-task-shell.tsx` 与 `lib/curriculum/design-editing.ts`。
+  `DESIGN_AUTHORING_GATES` 用一张表登记每种记录受哪个阶段闸门约束（`outcomes`/`evidence`/
+  `nodes`/`node-objectives`/`dependencies`/`units`/`coverage`/`unit-dependencies`/`questions`/
+  `lab-tasks`），`authoringAvailability` 给出「能不能建 + 先做哪个阶段」的句子。规则与 store
+  一致：只有创建受阶段闸门限制，`update*`/`delete*` 永不设闸，所以 `review` 阶段仍能删掉写错的
+  目标。覆盖关系统一走 PUT（`setCurriculumUnitCoverage`）整体保存，因为 store 在一个事务里
+  替换全量，写一半会让矩阵显示不存在的闭环。外键一律从真实行里选（题目选目标与条目、节点
+  勾选目标、依赖选图里的行），不是手填 id。活体走查修了两处单测与类型检查都放过的缺陷：
+  编辑器的刷新只重读快照不重读阶段，导致从编辑器之外推进的任务永久锁死；以及条目建出来后
+  无法录入教学设计，使 `objective_missing_prereq` 在界面上无法修复。
+
+  验证：`tests/curriculum/design-editing.test.ts` 用真实 store 函数在每个阶段逐一核对表：
+  断言表与 `assertPhase` 一致、闸门是「到达或已过」（`review` 仍可修正）、被关闭的种类说出
+  要到达的阶段、以及 coverage 的 PUT 有闸门而 POST 孪生没有；提交信息记录活体 28/28 与
+  curriculum 套件 181 例通过。
+
+
+- **实操任务可在工作台录入**：工作台能建其他所有评价记录，唯独没有实操任务的表单，于是
+  「有实验证据却没有产物」这条 finding 在浏览器里无法清除。新增
+  `lib/curriculum/lab-authoring.ts`，把两处「错了也不报错」的规则做成带测试的纯函数：
+  `labVerifyFieldFor` / `labVerifyRuleFrom` 让验证规则只写进它的 kind 真正读取的字段
+  （`file_read`/`file_write` → `path`，`env_state` → `key`，`process_exec` → `argv`，
+  `flag`/`http_request` → `value`，`custom` → `expression`），表单只问一个目标而不是给七个
+  字段的选择器；`examStrictGaps` / `examStrictRefusal` 把表约束 `curriculum_lab_exam_strict`
+  的三项要求（`hintPolicy: 'forbidden'`、`allowRetry: false`、非空 `timeLimitSec`）说成 store
+  自己的话，`createCurriculumLabTask` 与 `updateCurriculumLabTask` 按合并后的行检查，
+  `EXAM_FORCED_VALUES` 给出表单选择 exam 时应提交的值。数据库约束仍是兜底，测试直接绕过
+  store 写一行以确认它还在。活体走查还修了 shell 的共享刷新不重读编辑器快照的问题——在编辑器
+  之外新建的单元或目标对需要选中它的表单一律不可见。
+
+  验证：`tests/curriculum/lab-authoring.test.ts` 逐 kind 钉死字段映射、空目标返回 `null` 而不落
+  一条什么都不验的规则、`note` 不作为条件、条件写进错字段后读回为空、practice 不受 exam 规则
+  约束、exam 一次列出三项缺口、store 与数据库都拒绝「温室考试」；提交信息记录 24 例新增单测
+  （三方向变异核对）与活体 36/36。
+
+
 ### Changed
 - **将已配置的 Qwen TTS 从工作区设置持久化到部署层**：设置里的 TTS provider/slot 原本只写在 `workspace_model_config`（owner `anon:704cd355…`），服务端生成课程时看不到。现已把 provider `qwen-tts`、slot `tts: qwen-tts:qwen3-tts-instruct-flash` 写入本机 `openmaic.yml`，密钥引用 `.env.local` 新增的 `QWEN_TTS_API_KEY`；配置层解析已验证为 `status=assigned`。重启服务后生效。
 
@@ -305,6 +634,295 @@
   `container-config` / `resource-profile` / `config` 共 24 例全绿——其中
   `container-config` 断言了 `mem_limit` 默认值，本次随改动更新，并新增一例覆盖
   两份 Compose 的分块默认值（此前只有生产栈被断言覆盖）。
+
+- **课程工作台由长滚动改为六页签 + 进度**：把上一提交引入的吸顶锚点导航换成
+  `Tabs`（`@/components/ui/tabs`），六个步骤各自成为 `TabsContent`（保留
+  `id="curriculum-*"`），用 `activeTab` 与 `tabContentClass` 控制显隐；顶部新增
+  「课程体系建设进度」卡片，`workflow` memo 按当前系列统计课程数、知识点与绑定数、
+  培养方案版本 / 计划课程、已生成课堂、批次完成项、已导出视频，算出 `completedSteps` /
+  `percent`，用 `Progress`（`@/components/ui/progress`）展示，已完成页签标 `CheckCircle2`
+  并显示各自 meta。为支撑统计新增 `visibleCourseIds` 与 `scopedCourseKnowledgePoints` /
+  `scopedKnowledgePoints` / `scopedGenerationJobs` / `scopedBatchItems` / `scopedBatches` /
+  `scopedExportJobs` 一组按系列收敛的 memo。
+
+  验证：`components/ui/tabs.tsx`、`components/ui/progress.tsx` 都是本仓库既有组件
+  （对两者执行 `git log --diff-filter=A` 只返回仓库初始提交），本提交没有新增依赖或
+  基础组件；`tests/` 不覆盖该工作台组件，故没有断言进度计算的测试。
+
+
+- **课程序列成为课程体系主入口，工作台按系列收敛**：主页两处入口由 `/curriculum` 改指
+  `/curriculum/series`，文案改为「课程序列 / 进入课程序列」；新增
+  `app/curriculum/series/[id]/page.tsx` 渲染 `<CurriculumWorkspace seriesId={id} />`。
+  `CurriculumWorkspace` 因此接受可选 `seriesId`：`isSeriesScoped` 为真时把
+  `selectedSeriesId` 钉在该系列、`handleSeriesChange` 直接返回、不再渲染「课程系列」
+  新建卡与「系列列表」，左栏换成只读的「当前系列」卡（描述、课程数、「切换 / 管理系列」、
+  「查看全部课程」）；加载完成（`loaded`）后系列不存在则整页换成「没有找到这个课程序列」
+  卡片。`series-workspace.tsx` 的「进入系列」由 `/curriculum?tab=ledger&series=<id>` 改为
+  `/curriculum/series/<id>`，其返回按钮改指首页、原「课程体系」按钮改标「全部课程」；
+  课程详情页的返回目标也改为所属系列（`backHref` / `backLabel`），删除课程后回到该系列。
+
+  验证：`app/curriculum/series/[id]/page.tsx`、`series-workspace.tsx:469`
+  （`href={`/curriculum/series/${series.id}`}`）、`app/page.tsx` 两处 `/curriculum/series`、
+  `course-workspace.tsx:282-285` 的 `backHref` / `backLabel` 均可在当前源码核对；无自动化
+  测试。
+
+
+- **序列工作台只呈现本序列的数据**：上一提交只把页面钉在某个系列，面板仍收到全量
+  `snapshot`；本次让可见集合成为唯一输入：新增 `visibleRelations`（两端都在可见课程内的
+  关系）与 `scopedStages`（本序列课程关联的 stage，加上生成任务与导出任务涉及的 stage），
+  `KnowledgePointsPanel`、`KnowledgeRelationsPanel`、`CourseAssemblerPanel`、
+  `BatchQueuePanel`、`BatchExportPanel` 一律改用 `visibleCourses` / `scopedKnowledgePoints` /
+  `scopedCourseKnowledgePoints` / `scopedGenerationJobs` / `scopedBatchItems` /
+  `scopedExportJobs`，关系编辑的两个下拉也由 `snapshot.courses` 改为 `visibleCourses`。
+  `ProgramPlanPanel` 新增 `seriesId` prop，内部派生 `scopedCourses` / `scopedKnowledgePoints`
+  供计划课程与导出预览使用。左栏卡片改为「本序列进度」，列出课程 / 知识点 / 已生成课堂 /
+  已导出视频四项计数；序列内去掉「全部系列」按钮与「当前系列」过滤条（仅在非 scoped 模式
+  保留），「已有 stage」改为「本序列的课堂」并补空状态文案。
+
+  验证：`curriculum-workspace.tsx:359`（`visibleRelations`）、`:376`（`scopedStages`）、
+  `:753`（本序列进度）与 `program-plan-panel.tsx:37,100,138-161` 的 `seriesId` /
+  `scopedCourses` / `scopedKnowledgePoints` 均可在当前源码核对；无自动化测试。
+
+
+- **API 面向人的消息改为中文，面向调用方的标识符不变**：课程面上每条消息都会在工作台里
+  原样渲染，英文拒绝是老师得到的唯一解释。本轮把审核规则、两个 store、两个验证器、路由层、
+  program 导入导出与导出闸门共 **511 行**文案改成中文。机器读的那半保持原样：`error.code`、
+  `rule` 码、`details` 键、阶段名、枚举值与 JSON payload 字段名。新增守卫测试
+  `tests/curriculum/human-facing-messages.test.ts`，按位置形状（`message:`、`.push('...')`、
+  `throw new ...Error('...')`、`curriculumJsonError(...)`）在源码里找人话，文件按
+  `lib/curriculum`、`lib/server/curriculum`、`app/api/curriculum` 三个目录递归发现，任何
+  读起来像英文散文的字面量都会失败，同时放行机器 token 与
+  `lib/server/curriculum/unit-role-run.ts` 里给生成模型的提示词（单独列在 `PROMPT_MODULES`，
+  因为那里的英文是内容生成输入而不是 UI 文案）。同时把质量层标签抽到
+  `lib/curriculum/quality-labels.ts`（`CURRICULUM_QUALITY_LAYER_LABELS` 用 `satisfies` 保证
+  新增层不写标签即类型错误），导出闸门原先打印原始标识符 `outcomes_verifiable`，现在打印
+  「目标可验证」。
+
+  验证：守卫测试断言扫描模块数 ≥30、位置字面量 ≥150、英文散文列表为空、
+  `CURRICULUM_AUDIT_RULES` 仍是 `^[a-z_]+$`、每个质量层都有中文标签且键集合与
+  `CURRICULUM_QUALITY_LAYERS` 完全一致；提交信息记录活体 24/24（真实 HTTP 的
+  400/404/409/gaps/blockers 两半）与 `tsc`/`eslint`/`prettier` 干净。另有一个独立的
+  「只改文本」核验脚本 `scripts/verification/prose-only-check.mjs`：把注释、字符串、正则
+  剥掉后比对骨架，55 个文件中 52 个逐字节相同，3 个例外逐条写明。
+
+
+- **活体校验脚本纳入版本库，产物不入库**：`scripts/verification/` 下 10 个脚本与 `README.md`
+  进入版本库：`design-api-walk.py`、`design-workbench-walk.mjs`、`item-order-walk.py`、
+  `lab-task-walk.mjs`、`message-language-walk.mjs`、`prose-only-check.mjs`、
+  `s5-production-walk.py`、`ux-course-walk.mjs`、`ux-design-walk.mjs`、`ux-probe-gate.mjs`。
+  README 逐个说明每个脚本回答什么问题、都需要运行中的 dev server、都不在 CI 里跑，并记录
+  退出码约定：6 个（`design-api-walk.py`、`design-workbench-walk.mjs`、`item-order-walk.py`、
+  `lab-task-walk.mjs`、`message-language-walk.mjs`、`prose-only-check.mjs`）会让自己的运行
+  失败退出非零，4 个只报告并退出 0。`.gitignore` 新增 `/artifacts/`（截图、console 日志与
+  完整 runner 输出，可由重跑再生），以及 3 个被后续走查或测试取代的一次性脚本，取代关系
+  写在规则旁。脚本入库前实跑，修掉四个**都在检查自身**的缺陷：`design-api-walk.py` 断言了
+  一条已被中文化改动改掉的 `audience` 列文案，却只打印 FAIL、退出 0（因此整整一个提交都在
+  断言假的东西）；`item-order-walk.py` 仍引用两条英文 finding；`ux-probe-gate.mjs` 把
+  `sourceId`/`targetId` 发给读 `sourceKnowledgePointId`/`targetKnowledgePointId` 的路由，从未
+  走到它要测的自环规则；`prose-only-check.mjs` 硬编码了写下它那一轮的允许清单，改成
+  `path=reason` 参数。
+
+  验证：`scripts/verification/README.md` 逐个列出脚本、问题与退出码；`.gitignore` 中
+  `/artifacts/` 与三个一次性脚本的忽略规则可见；`ux-probe-gate.mjs` 现在确实发送
+  `sourceKnowledgePointId`/`targetKnowledgePointId`（`git show 7775833b --
+  scripts/verification/ux-probe-gate.mjs`），`item-order-walk.py` 的中文 finding 与
+  `tests/curriculum/design-audit.test.ts` 钉的短语一致（README 明写）。10 个脚本入库前逐个
+  实跑，全部通过。
+
+### Fixed
+
+- **删除课程时学习者 runtime 的级联并入同一条删除事务**：此前浏览器端 `deleteStageData`
+  在文档删除后单独调 `beginStageRuntimeDeletionSafely(stageId)` 级联清理学习者运行数据，
+  而 runtime 的 HTTP 契约里 `DELETE /runtime/stages/:id` 是需要 `authorizeAdmin` 的管理员
+  能力（本应用不授予任何人），所以这条客户端级联实际只会被 `403 FORBIDDEN_ADMIN` 拒绝，
+  并在每次删课时留下警告；它还会为等这次级联而保留排他锁。现在级联放在服务端：
+  `OwnerBoundDocumentStore.deleteDocument()` 在已对 `stage_meta` 行 `FOR UPDATE` 并确认
+  owner 之后，用同一事务里的 `pinnedRuntimeStore` 调 `deleteStageRuntime(stageId)`，因此
+  文档墓碑、资产回收与 runtime 清理在同一次提交里生效，任何一半回滚都不会留下「课程已删、
+  资产 / runtime 仍在」的中间态。新增的接线是 `OwnerBoundDocumentStoreOptions.runtimeStoreIn`
+  （`lib/persistence/owner-bound-document-store.ts`）与
+  `ServerPersistenceProvider.runtimeStoreIn(queryable)`（`lib/persistence/server-provider.ts`，
+  把 `PgRuntimeStore` 钉在传入的 `Queryable` 上、不挂 create hook），并由
+  `app/api/persistence/[...path]/route.ts` 与 `lib/server/agent-runtime/owner-scoped-documents.ts`
+  （请求侧与后台运行侧）透传。级联是 learner-agnostic 的（runtime 行只带 stageId），语义上
+  正是「课程退役后不对任何学习者保留运行数据」，且只在服务端锁内可达，不会退化成跨 owner
+  删除。`lib/utils/stage-storage.ts` 的 `performStageDeletion` 删除该客户端级联及为它保留的
+  锁，仅留注释说明原因。
+
+  验证：`tests/persistence/owner-runtime-assets.test.ts` 在 PGlite 内存库上跑真实 persistence
+  路由——既有用例「reads as absent and refuses writes once the course is tombstoned」改为在
+  `DELETE /documents/<stageId>` 后直接查库断言按 `stage_id` 的 `runtime_sessions` 与按
+  `session_id` 的 `runtime_records` 均为空；新增用例「reclaims a deleted course's runtime for
+  every learner, not just the deleter」让 alice / bob 各建一条 session，alice 删课后断言该
+  stage 的 `runtime_sessions` 一行不剩（同文件另有既有用例改为直接 `UPDATE stage_meta SET
+  deleted_at` 造墓碑，以保留「隐藏但仍在」的场景）。`tests/runtime/stage-delete-wiring.test.ts`
+  移除了 `beginStageRuntimeDeletionSafely` 的 mock 与调用断言，保留
+  `withRuntimeStorageExclusiveLockUntilSettled` 一次、`deleteDocument('stage-7')`、
+  `clearCurrentScene`、`clearAllForScene` 的断言；`tests/playback/stage-delete.test.ts`、
+  `tests/utils/stage-storage-deletion.test.ts` 同样移除该 mock。除
+  `lib/persistence/runtime-tombstone-guard.ts` 的透传包装外，当前唯一调用 `deleteStageRuntime`
+  的删除路径是 `lib/persistence/owner-bound-document-store.ts:475`；`deleteStageRuntimeSafely`
+  仍作为导出保留（`tests/lib/whiteboard/runtime-store.test.ts` 等仍在用）。
+
+
+- **工作流页签被基础样式压住、文字显示不全**：页签排版被 `components/ui/tabs.tsx` 的基础类
+  顶住——`TabsList` 带 `group-data-horizontal/tabs:h-9`，`TabsTrigger` 带
+  `h-[calc(100%-1px)]` 与 `whitespace-nowrap`，后写的普通 `h-auto` / `whitespace-normal` 在
+  生成后的优先级里压不过它们，于是页签高度被锁在 36px 上下、第二行 meta 易被截、窗口一窄
+  六列挤在一行。现在改用重要修饰符逐条覆盖（`grid! h-auto! min-h-0 w-full! justify-stretch!
+  overflow-visible bg-transparent! p-0!`、`h-auto! min-h-20 min-w-0 flex-col items-start!
+  justify-start! whitespace-normal!`），列数改为 `grid-cols-1 sm:grid-cols-2 xl:grid-cols-3
+  2xl:grid-cols-6`，每个页签补上步骤序号徽章，meta 字号由 `text-[10px]` 提到 `text-xs`；
+  `course-workspace.tsx` 的五个页签沿用同一套覆盖（`2xl:grid-cols-5`）。
+
+  验证：`components/ui/tabs.tsx` 中基础类确为 `group-data-horizontal/tabs:h-9`、
+  `h-[calc(100%-1px)]`、`whitespace-nowrap`；`curriculum-workspace.tsx:710-718` 与
+  `course-workspace.tsx:595-603` 中即是上述覆盖类。仓库内没有针对页签布局宽度的自动化测试，
+  布局结论无法用测试断言复核。
+
+
+- **统一阶段拒绝形状，并让教学顺序可以撤回**：S4 路由的活体走查发现两处缺陷。
+
+  其一，阶段机把「还没做完」与「还没到这一步」拒绝成了两种形状：写入超前阶段抛
+  `CurriculumPhaseError` → 409 带 `details{current, required}`，而边界未满足时推进抛
+  `CurriculumDesignValidationError` → 400 只带目标阶段。两者是同一种拒绝，`design-http.ts`
+  的文档注释本来就把它们描述成一种。现在 `advanceCurriculumTaskPhase` 也抛
+  `CurriculumPhaseError`，客户端处理一种即可；`design-tools` 的 `guarded` 本就按错误类型
+  分支，因此会提示模型先完成当前阶段，而不再报成「请求格式错误」。测试从断言 400 改为断言
+  错误类型、阶段对，以及消息仍然点名具体缺口。
+
+  其二，`curriculum_unit_dependency` 能写不能撤：POST 是对 `(source, target, edge_type)` 的
+  upsert，可以重述一条顺序主张却无法移除，而边是独立行而非字段，大纲阶段记错的教学顺序在
+  此前只能删掉整个任务、连带丢掉设计。新增 `deleteCurriculumUnitDependency` 与
+  `DELETE /api/curriculum/design/tasks/[id]/unit-dependencies/[unitDependencyId]`，与既有 5 条
+  DELETE 路由一致：owner 限定，非本人 id 返回 404。
+
+  需要说明这条修复「不是」什么：此时没有任何东西读取 `unitDependencies`。审核的
+  `dependency_out_of_order` 从 `unit.order_index` 加 `teach` 覆盖推导交付顺序，再与**目标**
+  依赖图比较，从不与这张表比较；因此边是记录性元数据，删除它不改变任何报告或闸门。也正因
+  如此没有新增 agent 工具——现有设计工具都是写入，没有删除；是否要让该主张真正生效是另一个
+  决定。这一点写在 store 的文档注释里，而不是留给下一个读者自己发现。（`5a9bda14` 之后这张
+  表才真正有了读者，见上方「条目顺序审核规则」。）
+
+  顺带记录了为什么 `assessment` 边界重复 `teaching` 的判定：不是复制粘贴。任务停在
+  `teaching` 阶段时仍可继续编写成果，而那类成果还没有被任何目教过；在这里重新检查，才能
+  阻止在没有教学支撑的成果之上开始出题。
+
+  验证：`tests/persistence/curriculum-design-store.pg.test.ts` 新增 2 项真实 PostgreSQL 断言
+  （`refuses an incomplete boundary with the phase pair, and does not move the task`、
+  `withdraws a teaching order, upserts it, and fences it by owner`）；
+  `tests/curriculum/design-routes.test.ts` 增至 38 项（新增「以 409 加两个阶段拒绝推进，而不是
+  当作格式错误」与「记录并可撤回教学顺序」），`tests/persistence/curriculum-design-store.test.ts`
+  为 25 项；提交信息记录 65 项测试通过（25 项 store PGlite + 38 项路由 + 2 项真实 PostgreSQL），
+  `tests/curriculum`、`tests/agent-runtime`、`tests/generation` 零新增失败（前后同为按名相同的
+  37 项 provider key 失败），tsc / eslint / prettier 干净。
+
+
+- **被拒绝的运行启动按拒绝上报，不再是 500**：S5 的生产路由在设计的通用 catch 里调用
+  `startGenerationRun`，而该 catch 只映射设计 store 的错误类型，于是启动器能抛的每一种拒绝
+  （owner 的活跃运行上限、素材缺失、未知 agent、部署不可用的 workspace 端点）都变成 500
+  `CURRICULUM_DESIGN_FAILED`。上限那条在正常使用中就会踩到：一门课有多个条目、每次生成启
+  一个运行，生产整门课走到第三个条目就撞上 `maxActiveRunsPerOwner`（默认 2）——那是普通的
+  临时状态，报成 500 会被读成服务器坏了，而正文里也没有「稍后再试」。改动后该路由复用
+  `POST /api/generation-runs` 的 `startRefusal` 映射：上限类返回 429 并在消息里点名数字，其余
+  映射为对应的 400；导出闸门仍先跑，未映射的错误仍然 500。
+
+  验证：`tests/curriculum/design-routes.test.ts` 新增两例——mock 启动器抛真实的
+  `ActiveRunLimitError(2)`，断言 429、`code` 为 `ACTIVE_RUN_LIMIT`（不是
+  `CURRICULUM_DESIGN_FAILED`）且消息含 `2`；抛 `ClassroomMaterialsRejectedError` 断言 400
+  `INVALID_REQUEST`。
+
+
+- **课程流程从「能写入」改为「能操作」**：以人的身份在浏览器里走完一个系列、一门课、六个
+  步骤各一条，发现四处记录了工作却无法操作的地方，以及一个承诺背后的真 bug。
+  `parseCourseAssemblyInput` 拒绝 `hours: null`，而它自己返回的消息说 null 可接受——表单留空
+  时发的正是这个值，占位文字写着「留空按知识点数量估算」，于是文档化的留空路径是 400。现在
+  `null` 表示「未给出」、由装配器估算（`buildCourseAssembly` 对缺失键本来就这么做），零与负数
+  仍被拒。「创建并开始设计」不再只把任务插进下方列表：创建后直接进入该设计
+  （`useRouter().push('/curriculum/design/<id>')`），任务仍停在 `task` 阶段。阶段推进控件原来
+  在矩阵页头，与表单所在的编辑器分处两个标签页，现在阶段状态与按钮上移到
+  `components/curriculum/design-task-shell.tsx`、位于两个标签之上，矩阵里自己那份控件删除
+  （`design-heatmap.tsx` 里的 `PhasePayload` 与 `/phase` 请求一并移除），只剩一个控件、一处
+  读取。两处拒绝改为说出理由：知识点在两端选中同一个点时，按钮为什么关闭现在由
+  `knowledge-relations-panel.tsx` 的 `relationRefusal` 点名那个知识点；
+  `lib/curriculum/design-coverage.ts` 的 `summariseCoverage` 句子（矩阵页头第一行，也是导出
+  闸门的 blocker）在中文界面里是英文，它是唯一解释为什么不能生产的一行，现在在产生它的地方
+  措辞，两个界面因此一致。
+
+  验证：提交信息记录六标签浏览器走查端到端无 console 错误、设计走查创建并授权一个设计、
+  S5 工作台走查 28/28、探针在页面上显示同点句、curriculum 套件 207 例通过、宽回归失败集合
+  与 stash 基线一致；`tests/curriculum/assembly.test.ts` 新增两例断言 `hours: null` 被接受且
+  `value.hours` 为 `undefined`、`0` 与负数仍被拒并各自返回原消息。
+
+
+- **未配置持久化的 404 也改为中文**：没有 `DATABASE_URL` 时每个课程路由在碰到 store 之前返回
+  纯文本 404，那段正文是人能得到的全部解释，也是 API 里最后剩下的英文串：**35 个文件共
+  43 处**（42 处内联守卫加 `lib/server/curriculum/design-http.ts` 的 `runDesignRoute` 里共享的
+  一处），现在都返回 `未找到`。守卫测试新增 `new Response('<body>')` 这一位置形状，并改为按
+  形状分别断言而不是只断言总数——某个标记悄悄失配后策略「什么都没检查」也算通过，正是要防
+  的那种失败。
+
+  验证：`tests/curriculum/persistence-gate-messages.test.ts` 走 `app/api/curriculum` 目录发现
+  路由、删掉 `DATABASE_URL`（即 `isServerPersistenceConfigured()` 读的那个变量）后调用全部
+  HTTP handler（61 个 route.ts / 80 个导出 handler），断言每个都返回 404 且正文为 `未找到`；
+  `tests/curriculum/human-facing-messages.test.ts` 断言五种位置形状都被识别。提交信息记录
+  两半都做了变异测试（还原单个站点会让测试点名文件与行号）。
+
+### `1.2.0-video.3` 的验证状态
+
+**通过**（本机，本次发布提交之前）：`tsc --noEmit`（exit 0）、`eslint`（**0 error**，
+18 个既有 warning）、`prettier --check`（改动文件，含 `CHANGELOG.fork.md` / `AGENT.md` /
+本设计文档）、`pnpm check:i18n-keys`（12 语包）、`pnpm check:node-engine`、
+`node scripts/check-package-version-bumps.mjs v1.2.0-video.2`、`pnpm build`（exit 0）。
+
+**本版未改动 `packages/@openmaic/`**：`git diff --name-only v1.2.0-video.2..HEAD -- packages/`
+为空，因此不发 `npm` 包、不提 `@openmaic/*` 版本号、不触发 `publish-packages.yml`。
+这与 `1.2.0-video.2` 恰好相反（那一版改了 `@openmaic/generation`）。
+
+**单元测试**（本版主体）：`tests/curriculum/` **16 个文件、213 例全绿**；S1–S3 另有
+`tests/persistence/curriculum-design-*.test.ts`（PGlite 与真实 PostgreSQL 两套）、
+`tests/agent-runtime/design-tools.test.ts`、`design-skills.test.ts`、
+`tests/generation/deck-design-contract.test.ts`。
+
+**活体校验**（10 个脚本，均需运行中的 dev server；本版起纳入版本库）：
+
+| 脚本 | 结果 |
+| --- | --- |
+| `message-language-walk.mjs` | 24 passed / 0 failed |
+| `design-api-walk.py` | TOTAL 88 · PASS 88 · FAIL 0 |
+| `item-order-walk.py` | 26/26 |
+| `design-workbench-walk.mjs` | 28 passed / 0 failed |
+| `lab-task-walk.mjs` | 36 passed / 0 failed |
+| `s5-production-walk.py` | TOTAL 33 · PASS 33 · FAIL 0 |
+| `ux-course-walk.mjs` | 26 步全 ok |
+| `ux-design-walk.mjs` | 8 步全 ok |
+| `ux-probe-gate.mjs` | 4 情形（含绕过界面直接 POST 自环 → 400） |
+| `prose-only-check.mjs` | 本次改动不含 `.ts`，报告 0 个文件（见下方说明） |
+
+全部 **0 console 错误、0 FAIL**，10 个脚本退出码全为 0。`ux-probe-gate.mjs` 的关键一行：
+两端选同一个知识点时按钮禁用，页面上给出「关系的两端现在都是「KP-01 · SQL 注入原理」…
+先修、后继、包含、相关都描述两个知识点之间的关系，请把其中一端换成另一个知识点。」；
+绕过界面直接 `POST` 自环得到 400 `CURRICULUM_INVALID` /「知识点不能与自身建立关系」。
+
+> `prose-only-check.mjs` 比对的是**工作区相对 `HEAD` 的 `.ts/.tsx` 改动**，而本次发布提交
+> 只改了文档、版本号与一个校验脚本，所以它这次什么也没检查到。它的实际战绩在
+> `2673ef3e`（中文化）那次：55 个文件里 52 个骨架逐字节相同，3 个例外逐条声明。
+
+**全量 `pnpm test` 的读法**：本机 `openmaic.yml` 仍缺 provider key，全量本身就是红的，
+所以沿用**同环境基线对比**（`git stash` 后在改动前的 HEAD 上跑同一套，比对失败**集合**
+而不是失败**数量**）：
+
+| | 测试数 | 失败数 |
+| --- | --- | --- |
+| 基线 | 10894 | 324 |
+| 本版 | 10895 | 325 |
+
+关键在于差集：唯一「只在一边失败」的是 `round-trip/insert` 的远程图片用例（该用例注释
+明写依赖网络），**单独跑 3/3 通过**，属并行负载下的抖动。**本版真实引入的失败为 0。**
+（这次基线对比在本版开发期间完成；本次发布提交只动文档、版本号与一个校验脚本，不影响它。）
+
+**未做**：E2E（`pnpm test:e2e`，需另起 3002 端口整套环境）；没有跑耗模型额度的整门课
+真实生成与 MP4 渲染（按验收时点击触发）。
 
 ## [1.2.0-video.2] - 2026-10-06
 
@@ -704,8 +1322,9 @@ hooks 测试（`tests/server/generation-run-hooks*`、`outline-host-failure`、
 
 ## 本版本的验证状态
 
-（`1.2.0-video.1` 发版当时的记录，留档备查；**本次 `1.2.0-video.2` 的验证见下方
-「`1.2.0-video.2` 的验证状态」**。）
+（`1.2.0-video.1` 发版当时的记录，留档备查。**`1.2.0-video.2` 与 `1.2.0-video.3`
+的验证记录各自在对应发布节的末尾**：前者见「`1.2.0-video.2` 的验证状态」，
+后者见「`1.2.0-video.3` 的验证状态」。）
 
 **通过**：`tsc --noEmit`、`eslint`（0 error，18 个既有 warning）、`prettier --check`、
 `pnpm check:i18n-keys`（12 语包）、`pnpm check:node-engine`、
@@ -862,10 +1481,46 @@ lib/i18n/locales/*.json                           （12 个语包，各 25 个�
    （`setSpeechTextClearAudioById` / `setAudioIdById`）与同一条 TTS 链，
    不会产生两套语义。
 
+### 第四处非视频偏离：课程产品层与成果导向课程设计
+
+`1.2.0-video.3` 起，本 fork 在视频链路之外长出了第二个完整子系统——**课程产品层**
+（系列 / 课程 / 章目 / 知识点台账 / 组装器 / 批量生成 / 批量导出 MP4 / 培养方案与
+指标点矩阵）以及其上的**成果导向课程设计**（Brief → 目标 → 证据 → 知识技能节点 →
+依赖图 → 章目讲练考）。落点：
+
+```
+lib/curriculum/                        纯函数（coverage / assembly / program* / audit / design-* / traceability）
+lib/server/curriculum/                 服务端 store、阶段机、HTTP 中间件、批量 runner
+lib/persistence/curriculum.ts          curriculum schema v1–v12，27 张 curriculum_* 表
+lib/persistence/schema-stores.ts       APP_SCHEMA_STORES 启动校验（已登记）
+app/api/curriculum/**                  60 个 API 路由
+app/curriculum/**                      6 个页面（系列 / 课程 / 设计）
+components/curriculum/**               15 个面板与工作台组件
+tests/curriculum/**                    16 个测试文件
+skills/agent-runtime/*                 新增 11 个设计 skill
+instrumentation.ts                     generation-run 钩子 + 批量 runner + schema 校验
+```
+
+**这是有意的偏离**：它不是视频链路，也不属于 §6 宿主扩展钩子能覆盖的范围
+（钩子只覆盖鉴权 / 课程库 / 资产存储），只能在 L4 落地。它与第一、二、三处偏离的
+**性质不同**——前三处是在既有文件上追加，这一处是**新增一个子系统**。
+
+**代价与后续动作**（同步上游 `1.2.x` 之后）：
+
+1. 冲突热点是 `instrumentation.ts` 与 `lib/persistence/schema-stores.ts`：上游也
+   常改这两处。合并时优先保住上游的注册顺序，本 fork 的 hook 注册是**追加**。
+2. `lib/persistence/curriculum.ts` 的 migration 数组**只能追加、不能改动已发布
+   的版本条目**——迁移 checksum 有金标测试（`tests/persistence/`），改老条目会
+   直接红。
+3. 上游若调整 `owner-bound-document-store.ts` 的写锁顺序或 `OwnerAuthMethodResult`
+   语义，`lib/server/curriculum/*` 的所有写路径都要复核（§5.2）。
+4. 本子系统**不复用上游任何 `packages/@openmaic/*` 导出**，因此 L3 层没有漂移风险；
+   反过来它也**不会**随上游 SDK 升级自动受益，升级后要手测。
+
 ### 上游同步
 
-`upstream` 远端已配置（`2026-10-06`），首次同步见 `[Unreleased]`。
-日后同步：
+`upstream` 远端已配置（`2026-10-06`），唯一一次同步（`ccdc88a5`）见
+`[1.2.0-video.2]` 发布节；`1.2.0-video.3` **未同步上游**。日后同步：
 
 ```bash
 git fetch upstream
@@ -874,7 +1529,7 @@ git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
 git merge upstream/main
 ```
 
-**不要用 `rebase` 同步**：二开有 18 个提交、已发布 `v1.2.0-video.1`、
+**不要用 `rebase` 同步**：二开有 53 个提交、已发布 `v1.2.0-video.1`、
 `v1.2.0-video.2`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 `merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
 
@@ -894,24 +1549,31 @@ git merge upstream/main
 
 ### 二开提交一览
 
-| commit | 说明 |
-| --- | --- |
-| `939c9027` | docs: 新增 AGENT.md 二开上下文文档 |
-| `98e2f06c` | docs: 新增 CHANGELOG.fork.md 记录二开变更 |
-| `0ce27191` | feat(generation): 首页可筛选大纲的场景类型 |
-| `6e893061` | docs: 在二开 changelog 补记已提交的 commit 列表 |
-| `3b73ab23` | feat(generation): 大纲审阅页可用 AI 对话修改大纲 |
-| `879f99c6` | docs: 二开 changelog 补记 AI 修改大纲提交 |
-| `9b8d9b40` | build(docker): 添加 render-service 服务 |
-| `0add1c4b` | feat(classroom): 讲稿逐句编辑 + 独立重新生成语音面板 |
-| `（本提交）` | release: 二开首个独立版本 1.2.0-video.1 |
-| `（本提交）` | chore: 配置 upstream 远端并合并上游 `ccdc88a5` |
+**这一节不再逐条抄 commit。** 它原来是一张 10 行的手抄表，随后就漂了：
+`1.2.0-video.2` 发布时没有更新它，`1.2.0-video.3` 的 36 个提交也全部不在里面。
+手抄 `git log` 没有信息增量，而且保证会再次失同步——要看列表直接跑：
 
-用 `git log --oneline ccdc88a5..HEAD` 可随时核对这份列表是否与历史同步。
+```bash
+git log --oneline ccdc88a5..HEAD                  # 新 → 旧
+git log --oneline --reverse ccdc88a5..HEAD        # 旧 → 新
+git log --oneline --first-parent ccdc88a5..HEAD   # 只看主干（上游 sync 的 merge 算一次）
+```
+
+按发布阶段数（`--first-parent` 口径，含本次发布提交）：
+
+| 阶段 | 提交数 |
+| --- | --- |
+| 基线 `ccdc88a5` → 首个独立版本 `v1.2.0-video.1`（`fb94ab3c`） | 9 |
+| `v1.2.0-video.1` → `v1.2.0-video.2`（`57a35712`，含一次上游 `git merge upstream/main`） | 7 |
+| `v1.2.0-video.2` → `v1.2.0-video.3`（本提交） | 36 |
+| **合计** | **53** |
+
+本仓库第一个二开提交是 `939c9027`（docs: 新增 AGENT.md 二开上下文文档）。
 
 > **发布提交的 hash 无法自引用**：提交无法预知自身 hash，`--amend` 也会改写它。
-> 表里用 `（本提交）` 占位的那一条，核对时 `git log` 会比本表**多出这最后一条**，
-> 这是预期结果，不是表失同步。下一个提交若只是要补记它的 hash，请用 `--amend`
-> 并入**它自己**而不是新开一个 docs 提交——但那样 hash 会再次改变，所以对
-> **发布提交**而言这个占位是终点，下一个提交直接开始记自己的 hash 即可。
+> 所以本文件提到本次发布提交时一律写「本提交」，核对时 `git log` 会比文字描述
+> **多出这最后一条**，这是预期结果。下一个提交若只是想补记它的 hash，用 `--amend`
+> 并入**它自己**而不是新开一个 docs 提交即可（但那样 hash 会再次改变）；对
+> **发布提交**而言这个占位就是终点，下一个提交直接开始记自己的 hash 即可。
+
 

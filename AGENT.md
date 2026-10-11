@@ -12,11 +12,11 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交） |
-| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`，tag `v1.2.0-video.2`） |
+| 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交；`1.2.0-video.3` 未再同步上游） |
+| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`，tag `v1.2.0-video.3`） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
-| 二开方向 | **视频化**：视频导出 / 渲染服务 / 视频生成能力 |
-| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4） |
+| 二开方向 | **视频化**（视频导出 / 渲染服务 / 视频生成能力）+ **课程产品层**（系列 → 课程 → 成果导向设计 → 讲/练/考闭环 → 生成 → 导出） |
+| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 2.8 万行 / 60 个 API 路由 / 27 张表，见 **§9**） |
 | 变更记录 | 二开自己的改动写 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)；上游变更仍看 `CHANGELOG.md` |
 
 ### 1.1 与上游的关系（重要）
@@ -26,7 +26,7 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 19 个提交并发布了 `v1.2.0-video.1`、
+  - **用 merge，不要用 rebase**：二开已有 53 个提交并发布了 `v1.2.0-video.1`、
     `v1.2.0-video.2`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
@@ -35,6 +35,16 @@
     L4 本就是「改生成流水线、场景类型、UI」的既定层，宿主扩展钩子（§6）覆盖不到，
     所以这是有意为之的偏离。同步上游时的冲突热点与后续动作记在
     [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#与上游的差异)。
+  - **已有例外里最大的一处：课程产品层与成果导向课程设计**（`1.2.0-video.3`
+    起，约 2.8 万行）。它是**课程生成**方向，不是视频链路，具体分层见 **§9**：
+    `lib/curriculum/`、`lib/server/curriculum/`、`lib/persistence/curriculum.ts`（v1–v12
+    migration）、`app/api/curriculum/`（60 个路由）、`app/curriculum/`、
+    `components/curriculum/`、`tests/curriculum/`、`skills/agent-runtime/*`（新增 11 个）。
+    它**不是**在既有文件里加钩子能接住的：新增了 27 张表、一整套 HTTP 面和一个
+    工作台。同步上游时的冲突热点因此是 `instrumentation.ts`（钩子注册 + schema
+    启动校验）与 `lib/persistence/schema-stores.ts`（`APP_SCHEMA_STORES`）。
+    偏离说明与后续动作见
+    [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#第四处非视频偏离课程产品层与成果导向课程设计)。
   - 后续再有非视频方向的功能，照此先在 `CHANGELOG.fork.md` 记录偏离理由再动手。
   - **注意：视频链路的源码是上游的**。上列目录在基线 `636fab0d` 就已存在
     （`git ls-tree 636fab0d -- lib/video-export lib/video-export-app render-service`
@@ -272,3 +282,68 @@ readonly writesOutsideRegistryDatabase?: true              // 见上文红线
 **输出风格**：先给结论，再展开；用表格 + 简短摘要；引用具体 `文件:行号`；不确定的地方明说"未查到"，**不要编造行号或 API**。
 
 **改文案**：界面支持 12 种语言/区域，改完跑 `pnpm check:i18n-keys`。
+
+---
+
+## 9. 课程产品层与成果导向课程设计（第二个主战场）
+
+这是本 fork 在视频链路之外**最大的自研子系统**（约 **2.8 万行**、**60 个 API 路由**、
+**27 张 `curriculum_*` 表**、**16 个测试文件**），`1.2.0-video.3` 起成形。
+它回答的不是「怎么把课导出成视频」（那是 §4），而是「**一门课该教什么、怎么算教会了**」。
+
+### 9.1 一条课的完整链路
+
+```text
+/curriculum/series            系列（课程体系的入口，卡片展示四步进度）
+  ▼
+/curriculum/courses/<id>      课程（章 / 目 / 学时 / 学分 / 学期 / stage 关联）
+  ▼
+/curriculum/design/<id>       成果导向设计（六个设计阶段，左→右 = 设计顺序）
+      Brief → 学习目标 → 评价证据 → 知识/技能节点 → 依赖图 → 章/目（讲 | 练 | 考）
+  ▼
+生成（一键 / 批量队列）        → stage 回写 curriculum_course.stage_id
+  ▼
+/classroom/<stageId>          → 导出 MP4（§4 的链路）
+```
+
+**审核闸门在导出前重新读取**讲/练/考闭环，未闭环不给导出——闸门不信任"上一次
+的审核结果"。
+
+### 9.2 分层落点
+
+| 层 | 位置 | 说明 |
+| --- | --- | --- |
+| schema | `lib/persistence/curriculum.ts` | **v1–v12 migration**，27 张 `curriculum_*` 表；checksum 有金标测试 |
+| 服务端 | `lib/server/curriculum/{design-store,store,http,design-http,design-validation,batch,batch-runner,generation,generation-hooks,unit-role-run,validation}.ts` | owner 隔离、阶段机、批量 runner |
+| 纯函数 | `lib/curriculum/*.ts` | `coverage` / `assembly` / `program{,-io,-diff}` / `audit` / `design-{coverage,editing,types}` / `traceability` / `quality-labels` / `lab-authoring` / `production-path` |
+| HTTP | `app/api/curriculum/**`（60 个路由） | 页面与批量 runner 共用同一套入口 |
+| UI | `app/curriculum/**`（6 个页面）、`components/curriculum/**`（15 个组件） | 工作台、设计编辑器、目标×目热力矩阵、批量面板 |
+| skill | `skills/agent-runtime/*/SKILL.md` | 新增 11 个，**按设计阶段**组织而不是按数据表 |
+
+### 9.3 两条不变量（改动时最容易破）
+
+1. **编辑永不设闸，新增才设闸**。`create*` / `set*` 有 `assertPhase`，
+   `update*` / `delete*` 一个都没有——停在 `review` 的任务里有一条写错的目标，
+   必须能删掉它。两条阶段拒绝路径形状一致：**409 +
+   `details{current, required}`**（`CURRICULUM_DESIGN_PHASE_LOCKED`）。
+2. **API 消息对人说中文，对调用方保留标识符**。`message` / `gaps` / `blockers`
+   是给作者看的散文；`code` / `rule` / `details` / 阶段名 / 枚举 / 字段名是协议，
+   一字不动。守卫测试按**位置形状**扫描源码防止回退
+   （`tests/curriculum/human-facing-messages.test.ts`）。
+
+### 9.4 设计记录与验证
+
+- **设计与分阶段落地记录**：`docs/curriculum-redesign/COURSE-DESIGN-REFACTOR.md`
+  （方案 + S1–S3 落地记录：相对方案的修正、测试抓到的真实 bug、尚未做）。
+  该文件在上游忽略的 `/docs` 下，本 fork 用 `git add -f` 纳入版本库。
+- **活体校验脚本**：`scripts/verification/`（10 个 python / mjs 脚本，跑法与前置条件
+  见该目录 `README.md`），需要**一个在跑的 dev server**。改消息文案后必须重跑其中
+  断言文本的那几个。
+- **单测**：`tests/curriculum/`（16 个文件）、`tests/agent-runtime/design-skills.test.ts`。
+
+### 9.5 同步上游时的冲突热点
+
+`instrumentation.ts`（钩子注册 + schema 启动校验）与
+`lib/persistence/schema-stores.ts`（`APP_SCHEMA_STORES`）——上游也常改这两处。
+偏离说明与后续动作见
+[`CHANGELOG.fork.md`](./CHANGELOG.fork.md#第四处非视频偏离课程产品层与成果导向课程设计)。
