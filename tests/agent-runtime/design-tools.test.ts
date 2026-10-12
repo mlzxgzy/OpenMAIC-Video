@@ -113,6 +113,10 @@ describe('outcome-first design tools (PGlite)', () => {
   async function advanceTo(target: (typeof CURRICULUM_DESIGN_PHASES)[number]): Promise<string> {
     const id = await createTask();
     if (target === 'task') return id;
+    // 0 step 1: the direction is agreed before the brief may be left. This is a
+    // real gate, not a formality — the confirm tool refuses an incomplete brief
+    // and the phase tool refuses an unconfirmed one, and both are pinned below.
+    await call(tools, 'confirm_course_direction', { taskId: id });
     // 1 task -> outcomes
     await call(tools, 'advance_course_design_phase', { taskId: id });
     if (target === 'outcomes') return id;
@@ -161,7 +165,7 @@ describe('outcome-first design tools (PGlite)', () => {
     it('registers every design tool and keeps the allowlist in step', () => {
       const names = [...tools.keys()].sort();
       expect(names).toEqual([...CURRICULUM_DESIGN_ALLOWLIST].sort());
-      expect(names.length).toBe(21);
+      expect(names.length).toBe(22);
     });
   });
 
@@ -181,6 +185,54 @@ describe('outcome-first design tools (PGlite)', () => {
       // The message must name what is missing, or the model retries blindly.
       expect(refused.text).toContain('授课对象');
       expect(refused.text).toContain('Cannot enter "outcomes"');
+    });
+
+    it('refuses to confirm a direction whose required slots are empty', async () => {
+      const bare = await call(tools, 'create_course_task', { title: '空课程' });
+      const id = bare.details!.taskId as string;
+      const refused = await call(tools, 'confirm_course_direction', { taskId: id });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain('Cannot confirm the course direction yet');
+      expect(refused.text).toContain('授课对象');
+      // And the step really is still open: the advance stays refused.
+      const advance = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(advance.isError).toBe(true);
+      expect(advance.text).toContain('课程方向还没有确认');
+    });
+
+    it('confirms a complete direction, then lets the design leave the brief', async () => {
+      const id = await createTask();
+      const confirmed = await call(tools, 'confirm_course_direction', { taskId: id });
+      expect(confirmed.isError).toBeFalsy();
+      expect(confirmed.details!.confirmedBy).toBe('assistant');
+      // The confirmed card comes back, so the transcript says what was agreed.
+      expect(confirmed.text).toContain('CTF 综合实战');
+      const advanced = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(advanced.details!.designPhase).toBe('outcomes');
+    });
+
+    it('re-opens the step when the brief changes after it was confirmed', async () => {
+      const id = await createTask();
+      await call(tools, 'confirm_course_direction', { taskId: id });
+      // A restatement of the same value must not revoke the sign-off: the flow
+      // writes most of the card on every turn, and revoking on a no-op rewrite
+      // would revoke the confirmation the user just gave.
+      await call(tools, 'patch_course_task', { taskId: id, durationHours: 54 });
+      expect(
+        (await call(tools, 'advance_course_design_phase', { taskId: id })).details!.designPhase,
+      ).toBe('outcomes');
+
+      const reopened = await call(tools, 'patch_course_task', { taskId: id, durationHours: 48 });
+      expect(reopened.isError).toBeFalsy();
+      const refused = await call(tools, 'advance_course_design_phase', { taskId: id });
+      // Already past the boundary, so this advance is refused by a later gate
+      // (outcomes need evidence) — what matters is that the *brief* gate is no
+      // longer the reason, and that the snapshot says so.
+      const design = (await call(tools, 'get_course_design', { taskId: id })).details!.design as {
+        confirmations: { step: string }[];
+      };
+      expect(design.confirmations).toEqual([]);
+      expect(refused.isError).toBe(true);
     });
   });
 

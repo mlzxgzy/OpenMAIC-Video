@@ -65,6 +65,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
 import {
   CreateForm,
   InlineEdit,
@@ -448,6 +449,21 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           {notice}
         </div>
       )}
+
+      {/* ── Step 1: the course direction and its sign-off ──────────────────── */}
+      {/* Above outcomes because it is the phase this task is actually in when it
+          is created, and because the confirmation — not the fields — is what
+          opens the outcomes section. */}
+      <DesignDirectionCard
+        task={snapshot.task}
+        confirmation={snapshot.confirmations.find((entry) => entry.step === 'task') ?? null}
+        run={run}
+        busy={busy}
+        onRefresh={async () => {
+          await load();
+          await onChanged();
+        }}
+      />
 
       {/* ── Outcomes and evidence ──────────────────────────────────────────── */}
       <Card>

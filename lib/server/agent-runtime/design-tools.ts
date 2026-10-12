@@ -40,6 +40,7 @@ import type { Queryable } from '@openmaic/storage/document/pg';
 
 import {
   CURRICULUM_DESIGN_PHASES,
+  nextCurriculumDesignPhase,
   type CurriculumDesignPhase,
   type CurriculumDesignSnapshot,
   type LabKeyBehavior,
@@ -47,12 +48,18 @@ import {
   type LabVerifyRule,
 } from '@/lib/curriculum/design-types';
 import { CURRICULUM_QUALITY_LAYERS } from '@/lib/curriculum/audit';
+import {
+  directionGaps,
+  directionValuesOf,
+  formatDirectionCard,
+} from '@/lib/curriculum/design-direction';
 import { traceFromObjective } from '@/lib/curriculum/traceability';
 import {
   CurriculumDesignNotFoundError,
   CurriculumDesignValidationError,
   CurriculumPhaseError,
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumDependency,
   createCurriculumEvidence,
   createCurriculumLabTask,
@@ -812,6 +819,18 @@ function renderSnapshot(snapshot: CurriculumDesignSnapshot): string {
     `  problem: ${task.problemStatement ?? '—'}`,
   );
 
+  // Step 1 is not "brief filled in" but "brief agreed to", so the snapshot has to
+  // say which of the two holds: a model that cannot see the confirmation will
+  // keep advancing into a refusal it does not understand.
+  const directionConfirmation = snapshot.confirmations.find((entry) => entry.step === 'task');
+  lines.push(
+    `  course direction: ${
+      directionConfirmation
+        ? `CONFIRMED (${directionConfirmation.confirmedBy === 'user' ? 'by the user' : 'in the conversation'})`
+        : `NOT CONFIRMED — ${directionGaps(directionValuesOf(task)).join('；') || 'the card is complete, ask the user to confirm'}`
+    }`,
+  );
+
   const phaseIndex = CURRICULUM_DESIGN_PHASES.indexOf(task.designPhase);
   if (phaseIndex < CURRICULUM_DESIGN_PHASES.length - 1) {
     const next = CURRICULUM_DESIGN_PHASES[phaseIndex + 1]!;
@@ -969,7 +988,7 @@ export function buildCurriculumDesignTools(
     name: 'patch_course_task',
     label: 'Update course brief',
     description:
-      'Update the course brief. Required fields must be present before the design may advance past the brief.',
+      'Update the course brief — step 1 of the design, and the only phase whose writes are not gated. Write every fact the user states; a change to the brief re-opens the step, so confirm_course_direction has to be called again after it. Required slots (course direction, audience, scope, hours) must be present before the design may advance past the brief.',
     parameters: PatchTaskParams,
     executionMode: 'sequential',
     async execute(_id, params, signal) {
@@ -1043,6 +1062,52 @@ export function buildCurriculumDesignTools(
         previousPhase: current,
         nextPhase: next,
       });
+    },
+  };
+
+  const confirmCourseDirection: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_direction',
+    label: 'Confirm course direction',
+    description:
+      'Record that the user has agreed to the course direction for this task. Step 1 of the design is not finished when the brief is filled in: it is finished when the user has read the card and said yes, and the phase machine refuses to leave "task" until then. Call this only after the user plainly agrees (「确认」「可以」「就这个」); an incomplete brief is refused here, so fill it with patch_course_task first.',
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const gaps = directionGaps(directionValuesOf(snapshot.task));
+      if (gaps.length > 0) {
+        return toolResult(
+          `Cannot confirm the course direction yet: ${gaps.join('；')}. Write those slots with patch_course_task, show the card to the user, and confirm once they agree.`,
+          { error: 'direction-incomplete', gaps },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'task',
+        'assistant',
+      );
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Course direction confirmed by the user (step 1 of 7). The card, as confirmed:\n` +
+          formatDirectionCard(directionValuesOf(snapshot.task), confirmation.confirmedBy) +
+          '\n' +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing the brief first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
     },
   };
 
@@ -1646,6 +1711,7 @@ export function buildCurriculumDesignTools(
     listCourseTasks,
     createCourseTask,
     patchCourseTask,
+    confirmCourseDirection,
     getCourseDesign,
     advancePhase,
     createOutcome,
@@ -1718,6 +1784,7 @@ export const CURRICULUM_DESIGN_ALLOWLIST: ReadonlySet<string> = new Set([
   'list_course_tasks',
   'create_course_task',
   'patch_course_task',
+  'confirm_course_direction',
   'get_course_design',
   'advance_course_design_phase',
   'create_learning_outcome',
@@ -1743,6 +1810,7 @@ export const CURRICULUM_DESIGN_TOOL_PHASES: Readonly<Record<string, CurriculumDe
   list_course_tasks: 'task',
   create_course_task: 'task',
   patch_course_task: 'task',
+  confirm_course_direction: 'task',
   get_course_design: 'task',
   advance_course_design_phase: 'task',
   create_learning_outcome: 'outcomes',
@@ -1776,6 +1844,7 @@ export const CURRICULUM_DESIGN_TOOLS_PROMPT = [
   'course task (brief) → learning outcomes → evidence → knowledge/skill nodes → dependency graph → outline → teaching & deck design → questions and labs → review.',
   'Never create a chapter or item before the outcomes it serves exist, and never create a learning node before the outcome that needs it.',
   'The store enforces this order and refuses writes that skip a phase, naming what is missing.',
+  'Step 1 is the course direction (the brief): settle who is trained, what the course covers and for how long, then let the user confirm. Ask at most two questions per turn instead of interviewing slot by slot; write every fact the user states with `patch_course_task` as it arrives; and call `confirm_course_direction` only after the user plainly agrees to the card. `get_course_design` says whether the direction is confirmed, and the phase machine refuses to leave the brief until it is.',
   'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete.',
   'An outcome is verifiable only when it has an expected behavior and at least one minimum criterion; the store refuses to mark one verifiable otherwise, and every outcome needs evidence before the graph phase opens.',
   'A chapter classifies; it carries no content. An item is a lecture, practice or exam, and the design may not assume a practice and an exam after every lecture — decide from the outcome and its evidence.',

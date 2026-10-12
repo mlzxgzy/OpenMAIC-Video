@@ -114,6 +114,7 @@ function makeSnapshot(): CurriculumDesignSnapshot {
   const exam = makeUnit('unit-3', 'Injection exam', 3, 'exam');
 
   return {
+    confirmations: [],
     task: {
       id: 'task-1',
       seriesId: null,

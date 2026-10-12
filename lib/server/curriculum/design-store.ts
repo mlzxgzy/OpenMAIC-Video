@@ -26,12 +26,14 @@ import type {
   CurriculumAuditFindingRecord,
   CurriculumAuditFindingStatus,
   CurriculumAuditSeverity,
+  CurriculumConfirmationActor,
   CurriculumCoverageDepth,
   CurriculumCoverageKind,
   CurriculumDeckDesign,
   CurriculumDependencyEdgeType,
   CurriculumDependencyKind,
   CurriculumDependencyRecord,
+  CurriculumDesignConfirmationRecord,
   CurriculumDesignPhase,
   CurriculumDesignSnapshot,
   CurriculumDifficulty,
@@ -70,6 +72,7 @@ import {
   type CurriculumAuditFinding,
 } from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
+import { changedDirectionKeys, directionValuesOf } from '@/lib/curriculum/design-direction';
 import { deriveVerifiability, nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
 import { examStrictRefusal } from '@/lib/curriculum/lab-authoring';
 import { curriculumQualityLayerLabel } from '@/lib/curriculum/quality-labels';
@@ -493,6 +496,15 @@ interface AuditFindingRow extends Row {
   updated_at: Date | string;
 }
 
+interface ConfirmationRow extends Row {
+  id: string;
+  task_id: string;
+  step: string;
+  confirmed_by: string;
+  note: string | null;
+  confirmed_at: Date | string;
+}
+
 // ── Column lists ────────────────────────────────────────────────────────────
 
 const TASK_COLUMNS = `id, series_id, title, audience, learner_level, training_scenario,
@@ -539,6 +551,8 @@ const LAB_TASK_COLUMNS = `id, task_id, unit_id, objective_id, evidence_id, asses
 
 const AUDIT_FINDING_COLUMNS = `id, task_id, rule_code, severity, message, ref_kind, ref_id,
        ref_ids, status, created_at, updated_at`;
+
+const CONFIRMATION_COLUMNS = `id, task_id, step, confirmed_by, note, confirmed_at`;
 
 // ── Provider ────────────────────────────────────────────────────────────────
 
@@ -853,6 +867,17 @@ function mapAuditFinding(row: AuditFindingRow): CurriculumAuditFindingRecord {
   };
 }
 
+function mapConfirmation(row: ConfirmationRow): CurriculumDesignConfirmationRecord {
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    step: row.step as CurriculumDesignPhase,
+    confirmedAt: iso(row.confirmed_at),
+    confirmedBy: row.confirmed_by as CurriculumConfirmationActor,
+    note: row.note,
+  };
+}
+
 // ── Phase machine ───────────────────────────────────────────────────────────
 
 /**
@@ -1060,7 +1085,113 @@ export async function updateCurriculumTask(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
-  return mapTask(row);
+  const updated = mapTask(row);
+  // A confirmation belongs to the values it confirmed. Editing the brief after
+  // the user signed it off therefore re-opens the step, or the gate would open
+  // onto a card nobody agreed to. Only a real change counts: the AI restates most
+  // of the card on every write, and revoking on a no-op rewrite would revoke the
+  // confirmation the user just gave.
+  const changed = changedDirectionKeys(
+    directionValuesOf(mapTask(current)),
+    directionValuesOf(updated),
+  );
+  if (changed.length > 0) {
+    await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'task');
+  }
+  return updated;
+}
+
+// ── Step confirmation ───────────────────────────────────────────────────────
+
+/**
+ * Record that the user signed off a design step, so the phase machine may leave
+ * it. Re-confirming replaces the previous row (the table is unique per step), and
+ * {@link withdrawCurriculumDesignStep} deletes it — there is no history table,
+ * because the only question the design ever asks is "is this step signed off
+ * *now*".
+ *
+ * `actor` is deliberately caller-supplied rather than assumed: the confirmation
+ * button and the AI conversation both confirm, and the record has to keep them
+ * apart (see {@link CurriculumConfirmationActor}). It is not a security boundary
+ * — both open the gate — it is the difference between "the user clicked" and "a
+ * model said the user said so".
+ */
+export async function confirmCurriculumDesignStep(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  step: CurriculumDesignPhase,
+  actor: CurriculumConfirmationActor,
+  note?: string | null,
+): Promise<CurriculumDesignConfirmationRecord> {
+  const exists = await queryable.query<{ id: string }>(
+    'SELECT id FROM curriculum_task WHERE owner_id = $1 AND id = $2',
+    [ownerId, taskId],
+  );
+  if (!exists.rows[0]) throw new CurriculumDesignNotFoundError('课程任务不存在');
+
+  const result = await queryable.query<ConfirmationRow>(
+    `INSERT INTO curriculum_design_confirmation
+       (id, owner_id, task_id, step, confirmed_by, note, confirmed_at)
+     VALUES ($1, $2, $3, $4, $5, $6, now())
+     ON CONFLICT (owner_id, task_id, step) DO UPDATE
+       SET confirmed_by = EXCLUDED.confirmed_by,
+           note = EXCLUDED.note,
+           confirmed_at = now()
+     RETURNING ${CONFIRMATION_COLUMNS}`,
+    [createId('confirm'), ownerId, taskId, step, actor, optionalText(note)],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignValidationError('确认记录写入失败');
+  return mapConfirmation(row);
+}
+
+/**
+ * Drop a step's confirmation. Returns whether a row was there, so a route can
+ * answer 404 for "there was nothing to withdraw" rather than pretending.
+ */
+export async function withdrawCurriculumDesignStep(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  step: CurriculumDesignPhase,
+): Promise<boolean> {
+  const result = await queryable.query<{ id: string }>(
+    `DELETE FROM curriculum_design_confirmation
+      WHERE owner_id = $1 AND task_id = $2 AND step = $3
+      RETURNING id`,
+    [ownerId, taskId, step],
+  );
+  return result.rows.length > 0;
+}
+
+export async function getCurriculumDesignStepConfirmation(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  step: CurriculumDesignPhase,
+): Promise<CurriculumDesignConfirmationRecord | null> {
+  const result = await queryable.query<ConfirmationRow>(
+    `SELECT ${CONFIRMATION_COLUMNS} FROM curriculum_design_confirmation
+      WHERE owner_id = $1 AND task_id = $2 AND step = $3`,
+    [ownerId, taskId, step],
+  );
+  const row = result.rows[0];
+  return row ? mapConfirmation(row) : null;
+}
+
+export async function listCurriculumDesignConfirmations(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<CurriculumDesignConfirmationRecord[]> {
+  const result = await queryable.query<ConfirmationRow>(
+    `SELECT ${CONFIRMATION_COLUMNS} FROM curriculum_design_confirmation
+      WHERE owner_id = $1 AND task_id = $2
+      ORDER BY confirmed_at`,
+    [ownerId, taskId],
+  );
+  return result.rows.map(mapConfirmation);
 }
 
 /**
@@ -1133,6 +1264,21 @@ export async function phaseCompletionGaps(
     if (!row.audience) gaps.push('课程简介缺少授课对象');
     if (!row.problem_statement) gaps.push('课程简介缺少要解决的问题');
     if (row.duration_hours === null) gaps.push('课程简介缺少培训时长');
+    // The brief being filled in is not the same fact as the user having agreed
+    // to it, and the AI-assisted flow is exactly where the two come apart: the
+    // model writes the card in one turn, and until the author reads it back the
+    // course is the model's plan rather than the author's. Every later phase
+    // builds on this card, so the sign-off is checked here rather than left to
+    // the UI — a client that POSTs the phase route directly meets the same gate.
+    const confirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'task',
+    );
+    if (!confirmation) {
+      gaps.push('课程方向还没有确认（确认后才会进入学习成果阶段）');
+    }
   }
 
   if (next === 'graph') {
@@ -2501,6 +2647,7 @@ export async function getCurriculumDesignSnapshot(
 
   return {
     task,
+    confirmations: await listCurriculumDesignConfirmations(queryable, ownerId, taskId),
     objectives: objectiveResult.rows.map((row) => mapObjective(row as ObjectiveRow)),
     evidence: evidenceResult.rows.map((row) => mapEvidence(row as EvidenceRow)),
     nodes: nodeResult.rows.map((row) => mapNode(row as NodeRow)),

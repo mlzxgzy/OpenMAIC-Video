@@ -555,7 +555,13 @@ describe('shipped course-design skills', () => {
     for (const relative of mdFiles) {
       const content = readFileSync(join(root, relative), 'utf8');
       for (const legacy of legacyNames) {
-        expect(content, `${relative}: ${legacy}`).not.toContain(legacy);
+        // Whole-token, not substring: `patch_course_task` is a LIVE tool the
+        // design skills are supposed to name, and it contains the retired
+        // `patch_course` as a prefix. A substring rule would ban the current
+        // name in order to catch the old one. `\b` treats `_` as a word
+        // character, so the retired name still fails wherever it stands alone —
+        // which is the case this guard exists for.
+        expect(content, `${relative}: ${legacy}`).not.toMatch(new RegExp(`\\b${legacy}\\b`));
       }
     }
     // quiz.md is covered by the sweep above; these two pins hold its

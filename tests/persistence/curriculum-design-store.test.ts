@@ -14,6 +14,7 @@ import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import type { CurriculumTaskRecord } from '@/lib/curriculum/design-types';
 import {
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumDependency,
   createCurriculumEvidence,
   createCurriculumLabTask,
@@ -30,10 +31,13 @@ import {
   CurriculumPhaseError,
   assertCurriculumDesignExportable,
   getCurriculumDesignSnapshot,
+  getCurriculumDesignStepConfirmation,
   listCurriculumTasks,
   reviewCurriculumTaskDesign,
   setCurriculumNodeObjectives,
+  updateCurriculumTask,
   updateCurriculumUnit,
+  withdrawCurriculumDesignStep,
 } from '@/lib/server/curriculum/design-store';
 
 const OWNER = 'owner:design-store';
@@ -88,7 +92,8 @@ describe('reverse-design store (PGlite)', () => {
     phase: 'task' | 'outcomes' | 'graph' | 'outline' | 'teaching' | 'assessment',
   ): Promise<void> {
     if (phase === 'task') return;
-    // → outcomes
+    // → step 1 closes on the sign-off, then outcomes
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'outcomes') return;
 
@@ -158,6 +163,58 @@ describe('reverse-design store (PGlite)', () => {
     expect((failure as Error).message).toContain('授课对象');
   });
 
+  /**
+   * Step 1: the brief being filled in is not the same as the user agreeing to it.
+   *
+   * The gate is the whole point of the AI-assisted flow — the model writes the
+   * card, and the design may not build on it until the author has read it back —
+   * so these four cases pin the condition, its revocation, and its ownership.
+   */
+  it('refuses to leave the brief on a complete brief that nobody confirmed', async () => {
+    // The brief is complete in `beforeEach`. Confirmation is a second, separate
+    // condition rather than a consequence of the fields.
+    const failure = await advanceCurriculumTaskPhase(pool, OWNER, task.id).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(CurriculumPhaseError);
+    expect((failure as Error).message).toContain('课程方向还没有确认');
+    expect(task.designPhase).toBe('task');
+  });
+
+  it('leaves the brief once the user confirms, and reports who confirmed', async () => {
+    const confirmation = await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
+    expect(confirmation).toMatchObject({ taskId: task.id, step: 'task', confirmedBy: 'user' });
+    const advanced = await advanceCurriculumTaskPhase(pool, OWNER, task.id);
+    expect(advanced.designPhase).toBe('outcomes');
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    expect(snapshot.confirmations.map((entry) => entry.step)).toEqual(['task']);
+  });
+
+  it('re-opens the step on a real brief edit but not on a restatement', async () => {
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
+    // The AI restates most of the card on every turn; a no-op write must not
+    // revoke the sign-off the user just gave.
+    await updateCurriculumTask(pool, OWNER, task.id, { durationHours: 54 });
+    expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'task')).not.toBeNull();
+
+    await updateCurriculumTask(pool, OWNER, task.id, { durationHours: 48 });
+    expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'task')).toBeNull();
+    // And the gate closes again, on a brief that is still complete.
+    await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toThrow(
+      /课程方向还没有确认/,
+    );
+  });
+
+  it('withdraws a confirmation idempotently and fences it by owner', async () => {
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
+    expect(await withdrawCurriculumDesignStep(pool, OTHER, task.id, 'task')).toBe(false);
+    expect(await withdrawCurriculumDesignStep(pool, OWNER, task.id, 'task')).toBe(true);
+    expect(await withdrawCurriculumDesignStep(pool, OWNER, task.id, 'task')).toBe(false);
+    await expect(
+      confirmCurriculumDesignStep(pool, OTHER, task.id, 'task', 'user'),
+    ).rejects.toBeInstanceOf(CurriculumDesignNotFoundError);
+  });
+
   it('refuses to author an outcome before the task has left the brief phase', async () => {
     await expect(
       createCurriculumObjective(pool, OWNER, task.id, {
@@ -168,6 +225,7 @@ describe('reverse-design store (PGlite)', () => {
   });
 
   it('refuses to build the graph before every outcome has evidence', async () => {
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     await createCurriculumObjective(pool, OWNER, task.id, {
       title: '能够利用 SQL 注入读取指定数据',
@@ -191,6 +249,7 @@ describe('reverse-design store (PGlite)', () => {
   });
 
   it('refuses to build the graph before any outcome exists at all', async () => {
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toThrow(
       /还没有定义任何学习目标/,
@@ -223,6 +282,7 @@ describe('reverse-design store (PGlite)', () => {
       problemStatement: '另一件事',
       durationHours: 1,
     });
+    await confirmCurriculumDesignStep(pool, OWNER, otherTask.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, otherTask.id);
     const foreign = await createCurriculumObjective(pool, OWNER, otherTask.id, {
       title: '别处的目标',

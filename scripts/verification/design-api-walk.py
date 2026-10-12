@@ -110,13 +110,53 @@ st, body = req(owner, "PATCH", f"/api/curriculum/design/tasks/{task_id}", {
     "problemStatement": "能独立完成一道基础 SQL 注入 CTF 题"})
 check("PATCH /tasks/[id] -> 200", st, 200)
 
+# Step 1 has a second condition. A filled-in brief is not an agreed one: the
+# design may not build outcomes on a card the author has not read back.
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("GET /direction -> 200", st, 200)
+check("card is complete", body["gaps"], [])
+check("card is not yet confirmed", body["confirmed"], False)
+check("not ready while unconfirmed", body["readyToAdvance"], False)
+check("phase report names the missing sign-off",
+      any("课程方向还没有确认" in gap for gap in body["phaseGaps"]), True)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("advance on an unconfirmed card -> 409", st, 409)
+check("refusal names the sign-off",
+      "课程方向还没有确认" in body.get("error", {}).get("message", ""), True)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("POST /direction (confirm) -> 200", st, 200)
+check("confirmation records the user", body["confirmation"]["confirmedBy"], "user")
+first_confirmation = body["confirmation"]["id"]
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("re-confirming replaces the row rather than stacking", body["confirmation"]["id"],
+      first_confirmation)
+
 st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/phase")
-check("gaps clear once brief filled", body["gaps"], [])
+check("gaps clear once the brief is filled AND confirmed", body["gaps"], [])
 check("readyToAdvance true", body["readyToAdvance"], True)
 
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
 check("advance task -> outcomes", st, 200)
 check("phase now 'outcomes'", body["task"]["designPhase"], "outcomes")
+
+# Editing the card afterwards re-opens the step: the signature belonged to the
+# old text, and the workspace has to show the step as open again.
+st, body = req(owner, "PATCH", f"/api/curriculum/design/tasks/{task_id}",
+               {"problemStatement": "能独立完成两道基础 SQL 注入 CTF 题"})
+check("PATCH after confirm -> 200", st, 200)
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("editing the card withdraws the confirmation", body["confirmed"], False)
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("re-confirm after the edit -> 200", st, 200)
+st, body = req(owner, "DELETE", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("DELETE /direction -> 200", st, 200)
+check("withdrawn", body["confirmed"], False)
+st, body = req(owner, "DELETE", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("withdrawing twice -> 404", st, 404)
+# Put it back: the rest of the walk treats this task as past step 1.
+req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/direction")
 
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/objectives", {
     "code": "O1", "title": "能够利用 SQL 注入获取指定数据", "objectiveType": "competency",
@@ -365,6 +405,58 @@ st, body = req(stranger, "POST", f"/api/curriculum/design/tasks/{task_id}/phase"
 check("stranger advance phase -> 404", st, 404)
 st, body = req(stranger, "GET", "/api/curriculum/design/tasks")
 check("stranger sees no tasks", body.get("tasks"), [])
+
+# The sign-off is owner-scoped like every other route: a guessed task id must not
+# let a stranger confirm or un-confirm someone else's course.
+st, body = req(stranger, "GET", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("stranger GET direction -> 404", st, 404)
+st, body = req(stranger, "POST", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("stranger confirm -> 404", st, 404)
+st, body = req(stranger, "DELETE", f"/api/curriculum/design/tasks/{task_id}/direction")
+check("stranger withdraw -> 404", st, 404)
+
+# ── Step 1 as a conversation, against the real model ────────────────────────
+# The answer is model-dependent, so this pins the pipeline rather than the
+# wording: the turn writes the card, only the seven known slots come back, and
+# the button path can then close the step. A deployment with no model configured
+# is reported as a skip, not as a failure.
+print()
+print("-" * 72)
+print("STEP 1 CONVERSATION (live model)")
+st, body = req(owner, "POST", "/api/curriculum/design/direction", {
+    "instruction": "给大二信息安全专业学生上一门 CTF 综合实战课，48 学时，"
+                   "范围是 6 个方向各 3 个案例，只做 slide 理论与 Docker 实操",
+})
+if st == 400 and body.get("error", {}).get("code") == "MISSING_MODEL":
+    print("SKIP  no language model configured for the design slot")
+else:
+    check("POST /direction -> 200", st, 200)
+    check("model answered with a message", len(body.get("message", "")) > 0, True)
+    show("model message", body.get("message", ""), 300)
+    ai_task = body.get("task")
+    check("the turn created a task row", ai_task is not None, True)
+    known = {"title", "audience", "learnerLevel", "trainingScenario",
+             "durationHours", "applicationScene", "problemStatement"}
+    check("card carries only the seven known slots",
+          set(body.get("values", {}).keys()) - known, set())
+    if ai_task:
+        print(f"    ai task_id={ai_task['id']}")
+        # Whatever the model left out, the author fills in; the button then
+        # closes the step and the phase machine opens.
+        st, state = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_task['id']}/direction")
+        fill = {}
+        if state.get("values", {}).get("audience") is None:
+            fill["audience"] = "大二信息安全专业学生"
+        if state.get("values", {}).get("problemStatement") is None:
+            fill["problemStatement"] = "6 方向 × 3 案例，只做 slide 理论与 Docker 实操"
+        if state.get("values", {}).get("durationHours") is None:
+            fill["durationHours"] = 48
+        if fill:
+            req(owner, "PATCH", f"/api/curriculum/design/tasks/{ai_task['id']}", fill)
+        st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_task['id']}/direction")
+        check("the card can then be confirmed -> 200", st, 200)
+        st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_task['id']}/phase")
+        check("a conversation-built course can leave step 1", st, 200)
 
 st, snap = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}")
 check("GET snapshot -> 200", st, 200)

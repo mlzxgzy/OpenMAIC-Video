@@ -3,6 +3,12 @@
 /**
  * The design task list: the way into the heat matrix.
  *
+ * Two ways in. 「用 AI 新建课程」runs step 1 as a conversation — the model writes
+ * the course direction, the user confirms it, and the design inherits a card the
+ * user has actually read. The manual form below is kept because not everyone
+ * wants to talk to a model to type a title, and because a static path that works
+ * is what proves the AI path is not the only one that can create a task.
+ *
  * Deliberately a list of *designs*, not of courses. A design that has not
  * closed its outcome loop is not a course yet, and showing both in one table
  * is how a half-designed thing starts looking finished. The phase badge is the
@@ -17,12 +23,13 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, Loader2, Plus, RotateCcw } from 'lucide-react';
+import { AlertTriangle, Loader2, Plus, RotateCcw, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { DesignDirectionDialog } from '@/components/curriculum/design-direction-dialog';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import type { CurriculumDesignPhase, CurriculumTaskRecord } from '@/lib/curriculum/design-types';
@@ -96,6 +103,7 @@ export function DesignTaskList() {
   const [brief, setBrief] = useState<BriefForm>(EMPTY_BRIEF);
   const [creating, setCreating] = useState(false);
   const [showForm, setShowForm] = useState(false);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -165,9 +173,12 @@ export function DesignTaskList() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button size="sm" onClick={() => setAiOpen(true)}>
+            <Sparkles />用 AI 新建课程
+          </Button>
           <Button size="sm" variant="outline" onClick={() => setShowForm((current) => !current)}>
             <Plus />
-            新建课程设计
+            手动新建
           </Button>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
             <RotateCcw />
@@ -181,7 +192,7 @@ export function DesignTaskList() {
           <CardHeader>
             <CardTitle className="text-base">新课程设计</CardTitle>
             <CardDescription>
-              下面三项是进入学习成果阶段的硬性条件：没有培训对象、要解决的问题和时长，课程就只能停在这里。
+              下面三项是进入学习成果阶段的硬性条件；此外还要在课程方向卡片上点一次「确认课程方向」——填好不等于确认过。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -283,6 +294,15 @@ export function DesignTaskList() {
         </Link>
         让模型驱动整个设计过程。
       </p>
+
+      <DesignDirectionDialog
+        open={aiOpen}
+        onOpenChange={setAiOpen}
+        taskId={null}
+        onTaskChange={() => void load()}
+        onChanged={() => void load()}
+        onOpenTask={(id) => router.push(`/curriculum/design/${id}`)}
+      />
     </div>
   );
 }

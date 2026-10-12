@@ -280,6 +280,7 @@ describe('skills runner registration', () => {
       'list_course_tasks',
       'create_course_task',
       'patch_course_task',
+      'confirm_course_direction',
       'get_course_design',
       'advance_course_design_phase',
       'create_learning_outcome',
@@ -314,6 +315,7 @@ describe('skills runner registration', () => {
     expect([...(options.allowedToolNames ?? [])].sort()).toEqual([
       'ask_user',
       'clip_audio',
+      'confirm_course_direction',
       'create_folder',
       'advance_course_design_phase',
       'assert_course_design_exportable',

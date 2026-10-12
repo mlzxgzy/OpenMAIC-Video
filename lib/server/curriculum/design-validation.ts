@@ -332,6 +332,73 @@ export function parseTaskPatch(body: unknown): ParseResult<PatchOf<CurriculumTas
   return r.result(readTask(r, true));
 }
 
+// ── Course-direction conversation ───────────────────────────────────────────
+
+/** The user's turn and the assistant's replies, as the dialog accumulates them. */
+export const DIRECTION_TURN_ROLES = ['user', 'assistant'] as const;
+
+export interface DirectionTurn {
+  role: (typeof DIRECTION_TURN_ROLES)[number];
+  content: string;
+}
+
+/**
+ * Caps on the conversation a caller may send.
+ *
+ * The body is spent on a paid model call, so an unbounded transcript is an
+ * unbounded bill — and the useful context is the last few turns anyway (the
+ * card carries the state; the transcript only carries the intent). The caps are
+ * refusals rather than silent truncation: quietly dropping the user's earlier
+ * sentences changes what the model answers, and the user would have no way to
+ * tell why.
+ */
+export const DIRECTION_MAX_TURNS = 24;
+export const DIRECTION_MAX_TURN_CHARS = 4000;
+
+/**
+ * `{ taskId?, instruction, history? }` for `POST /api/curriculum/design/direction`.
+ *
+ * `history` excludes the instruction: the dialog sends what came before, and the
+ * route passes the instruction to the prompt as its own variable. Keeping them
+ * apart is what lets the confirmation guard count turns truthfully — the count
+ * is `history.length + 1`, with no parsing of the transcript.
+ */
+export function parseDirectionTurnRequest(body: unknown): ParseResult<{
+  taskId?: string;
+  instruction: string;
+  history: DirectionTurn[];
+}> {
+  const parsed = parseJsonObject(body);
+  if (!parsed.ok) return parsed;
+  const r = new Reader(parsed.value);
+  const instruction = r.text('instruction', { required: true });
+  const taskId = r.text('taskId');
+  const history = r.objectList<DirectionTurn>('history', (entry, index) => {
+    const role = entry.oneOf('role', DIRECTION_TURN_ROLES, { required: true });
+    const content = entry.text('content', { required: true });
+    if (content !== undefined && content.length > DIRECTION_MAX_TURN_CHARS) {
+      entry.fail(`history[${index}].content 超过 ${DIRECTION_MAX_TURN_CHARS} 字`);
+      return undefined;
+    }
+    if (role === undefined || content === undefined) return undefined;
+    return { role, content };
+  });
+  if (history !== undefined && history.length > DIRECTION_MAX_TURNS) {
+    r.fail(`history 最多 ${DIRECTION_MAX_TURNS} 轮`);
+  }
+  // `instruction ?? ''` never survives into an accepted value: a missing or blank
+  // one is already an error on the reader, and the early return below is what
+  // keeps the empty string from being mistaken for a real turn.
+  const result = r.result({
+    ...(taskId !== undefined ? { taskId } : {}),
+    instruction: instruction ?? '',
+    history: history ?? [],
+  });
+  if (!result.ok) return result;
+  if (instruction === undefined) return { ok: false, message: 'instruction 为必填' };
+  return { ok: true, value: { ...result.value, instruction } };
+}
+
 // ── Learning outcome ────────────────────────────────────────────────────────
 
 function readObjective(r: Reader, partial: boolean): PatchOf<CurriculumObjectiveInput> {

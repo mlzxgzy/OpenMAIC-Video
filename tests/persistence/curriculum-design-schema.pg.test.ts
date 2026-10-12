@@ -65,15 +65,18 @@ describe.skipIf(!contractUrl)('reverse-design schema (PostgreSQL)', () => {
   }
 
   it('records every migration version exactly once', async () => {
+    // Deliberately the exact number rather than "at least": the point of this
+    // case is that a re-run records nothing new, and a hard-coded expectation is
+    // what makes adding a migration an intentional edit here too.
     const { rows } = await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM openmaic_schema_migrations WHERE store = 'curriculum'`,
     );
-    expect(Number(rows[0].count)).toBe(12);
+    expect(Number(rows[0].count)).toBe(13);
     await ensureCurriculumSchema(pool);
     const again = await pool.query<{ count: string }>(
       `SELECT count(*)::text AS count FROM openmaic_schema_migrations WHERE store = 'curriculum'`,
     );
-    expect(Number(again.rows[0].count)).toBe(12);
+    expect(Number(again.rows[0].count)).toBe(13);
   });
 
   it('refuses an objective marked verifiable with no behavior or criteria', async () => {

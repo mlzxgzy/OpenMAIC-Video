@@ -18,9 +18,11 @@ import {
   CurriculumDesignNotFoundError,
   CurriculumPhaseError,
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumUnitDependency,
   deleteCurriculumUnitDependency,
   getCurriculumDesignSnapshot,
+  withdrawCurriculumDesignStep,
 } from '@/lib/server/curriculum/design-store';
 
 const contractUrl = process.env.PG_CONTRACT_URL;
@@ -78,7 +80,16 @@ describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
   });
 
   it('refuses an incomplete boundary with the phase pair, and does not move the task', async () => {
-    // The brief is complete, so the boundary into `outcomes` is satisfied.
+    // The brief is complete — and that is no longer sufficient on its own. The
+    // step-1 sign-off is a second, independent condition, and this is the case
+    // that proves the production engine reads it rather than the fields alone.
+    const unconfirmed = await advanceCurriculumTaskPhase(queryable, OWNER, TASK).catch(
+      (error: unknown) => error,
+    );
+    expect(unconfirmed).toBeInstanceOf(CurriculumPhaseError);
+    expect((unconfirmed as Error).message).toContain('课程方向还没有确认');
+
+    await confirmCurriculumDesignStep(queryable, OWNER, TASK, 'task', 'user');
     await expect(advanceCurriculumTaskPhase(queryable, OWNER, TASK)).resolves.toMatchObject({
       designPhase: 'outcomes',
     });
@@ -97,6 +108,40 @@ describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
       [TASK],
     );
     expect(after.rows[0]?.design_phase).toBe('outcomes');
+  });
+
+  it('replaces a repeated confirmation, and keeps the row owner-scoped', async () => {
+    // Its own task, seeded raw like the rest of this file: sharing the first
+    // test's row would make this case depend on test order.
+    await pool.query(
+      `INSERT INTO curriculum_task (id, owner_id, title, audience, duration_hours, problem_statement)
+       VALUES ('task-pg-confirm', $1, 'CTF 综合实战', '安全运维岗新人', 4, '学员无法独立完成基础 Web CTF')`,
+      [OWNER],
+    );
+    const id = 'task-pg-confirm';
+
+    const first = await confirmCurriculumDesignStep(
+      queryable,
+      OWNER,
+      id,
+      'task',
+      'user',
+      '手动确认',
+    );
+    const again = await confirmCurriculumDesignStep(queryable, OWNER, id, 'task', 'assistant');
+    // One row per step: re-confirming replaces rather than accumulating, which is
+    // what makes "confirm again" and "withdraw" the same row moving.
+    expect(again.id).toBe(first.id);
+    expect(again.confirmedBy).toBe('assistant');
+    expect((await getCurriculumDesignSnapshot(queryable, OWNER, id)).confirmations).toHaveLength(1);
+
+    // Another owner sees nothing and can delete nothing.
+    await expect(withdrawCurriculumDesignStep(queryable, OTHER, id, 'task')).resolves.toBe(false);
+    expect((await getCurriculumDesignSnapshot(queryable, OWNER, id)).confirmations).toHaveLength(1);
+
+    await expect(withdrawCurriculumDesignStep(queryable, OWNER, id, 'task')).resolves.toBe(true);
+    await expect(withdrawCurriculumDesignStep(queryable, OWNER, id, 'task')).resolves.toBe(false);
+    expect((await getCurriculumDesignSnapshot(queryable, OWNER, id)).confirmations).toEqual([]);
   });
 
   it('withdraws a teaching order, upserts it, and fences it by owner', async () => {

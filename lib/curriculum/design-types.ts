@@ -70,6 +70,41 @@ export interface CurriculumTaskRecord {
   updatedAt: string;
 }
 
+/**
+ * Who a step's confirmation came from.
+ *
+ * `user` is the card's own 确认 button; `assistant` is the user confirming inside
+ * the AI conversation (the loose mode the author asked for). They are kept apart
+ * because they are different evidence: one is a click on a card the user can see,
+ * the other is a sentence relayed by a model. Both open the gate; only one of them
+ * is worth showing back as "由你在对话中确认".
+ */
+export const CURRICULUM_CONFIRMATION_ACTORS = ['user', 'assistant', 'system'] as const;
+export type CurriculumConfirmationActor = (typeof CURRICULUM_CONFIRMATION_ACTORS)[number];
+
+/**
+ * A design step the user has signed off, so the phase machine may move past it.
+ *
+ * This exists because "the fields are filled in" and "the user agreed to them"
+ * are different facts, and the phase gate used to accept the first as proof of
+ * the second. A row here is scoped to one `step` (a phase name) rather than one
+ * column per step, so the next six steps need no schema change.
+ *
+ * Deleting a row is what re-opens the step: `updateCurriculumTask` does that when
+ * a brief field actually changes, because a confirmation belongs to the values it
+ * confirmed. A row that survived an edit would be a confirmation of something the
+ * user never saw.
+ */
+export interface CurriculumDesignConfirmationRecord {
+  id: string;
+  taskId: string;
+  step: CurriculumDesignPhase;
+  confirmedAt: string;
+  confirmedBy: CurriculumConfirmationActor;
+  /** Free text from the caller, e.g. what the user said in the conversation. */
+  note: string | null;
+}
+
 // ── Learning outcomes ───────────────────────────────────────────────────────
 
 /**
@@ -540,6 +575,13 @@ export interface CurriculumAuditFindingRecord {
  */
 export interface CurriculumDesignSnapshot {
   task: CurriculumTaskRecord;
+  /**
+   * Which design steps the user has signed off. Read beside `task.designPhase`:
+   * the phase says how far the design has got, these say which steps the user
+   * has actually agreed to, and the two can disagree — an edit re-opens a step
+   * without moving the phase back.
+   */
+  confirmations: CurriculumDesignConfirmationRecord[];
   objectives: CurriculumObjectiveRecord[];
   evidence: CurriculumEvidenceRecord[];
   nodes: CurriculumLearningNodeRecord[];

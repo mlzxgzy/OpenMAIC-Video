@@ -12,6 +12,10 @@
 > 小节**已过时**，请以 [`CHANGELOG.fork.md`](../../CHANGELOG.fork.md) 的
 > `[1.2.0-video.3]` 发布节为准。
 >
+> **S6（第一步的 AI 流程）已落地**，落地记录见 [第十二节](#十二s6-落地记录已完成第一步改成-ai-对话--用户签收)：
+> 新建课程改为「AI 对话填写 + 用户签收」，新增 `curriculum_design_confirmation`
+> 表与 `updateCurriculumTask` 的改动即撤回确认规则。
+>
 > 本文件在上游忽略的 `/docs` 目录下，本 fork 用 `git add -f` 将它纳入版本库。
 
 ---
@@ -815,6 +819,7 @@ S2  逻辑层    audit.ts（11 类规则）+ traceability.ts（正反向追踪�
 S3  AI 层     11 个 skill 的 SKILL.md + 阶段锁 + 工具集
 S4  页面层    设计工作台 6 阶段 + 双视角 + 审核面板
 S5  流程层    deck_design → outline 输入契约 + 实操目生成 + 质量门
+S6  流程层    第一步课程方向 = AI 对话填写 + 用户签收门禁
 ```
 
 **S1→S2 可以立刻产生价值**：即使 UI 全不动，`audit.ts` 跑一遍现有 CTF 数据就能立刻告出"哪些目标没考、哪些知识点是孤儿"。
@@ -1042,6 +1047,79 @@ store 的 `teaching` 阶段同时包含教学设计和 PPT 设计，所以
 - 审核面板与目标×目热力矩阵页面（S4）
 - `buildCourseAssembly` 废弃（S5）
 - 旧 `curriculum_knowledge_point` 迁移脚本
+
+---
+
+# 十二、S6 落地记录（已完成）：第一步改成 AI 对话 + 用户签收
+
+S1–S5 把设计系统做出来了，但**第一步没法用**：七个 brief 字段（`title` /
+`audience` / `learnerLevel` / `trainingScenario` / `durationHours` /
+`applicationScene` / `problemStatement`）只有两个入口——列表页那个一次性静态表单，
+和 agent 工具——**创建之后就再也改不了**。`design-task-list.tsx` 的注释写着"创建后
+在任务本身上编辑"，而那个编辑界面并不存在。
+
+## 交付内容
+
+| 文件 | 内容 |
+|---|---|
+| [lib/curriculum/design-direction.ts](../../lib/curriculum/design-direction.ts) | 七槽位的唯一定义、缺口、模型回答清洗、确认的确定性守卫 |
+| [lib/server/curriculum/direction-step.ts](../../lib/server/curriculum/direction-step.ts) + [course-direction](../../lib/prompts/templates/course-direction/system.md) | 一次对话轮次 → 一次卡片写入 |
+| [app/api/curriculum/design/direction/route.ts](../../app/api/curriculum/design/direction/route.ts) | 对话轮次，直接入库 |
+| [app/api/curriculum/design/tasks/[id]/direction/route.ts](../../app/api/curriculum/design/tasks/[id]/direction/route.ts) | 状态 / 确认 / 撤回 |
+| [design-direction-dialog.tsx](../../components/curriculum/design-direction-dialog.tsx) · [design-direction-card.tsx](../../components/curriculum/design-direction-card.tsx) | 新建对话框；工作台里的七格编辑 |
+| [lib/persistence/curriculum.ts](../../lib/persistence/curriculum.ts) | migration v13：`curriculum_design_confirmation` |
+| [lib/server/curriculum/design-store.ts](../../lib/server/curriculum/design-store.ts) | 确认 / 撤回 / 读取；`phaseCompletionGaps` 增加一条门禁 |
+
+## 「填好了」不等于「用户同意了」
+
+这是本次唯一真正新的设计事实。此前阶段机只能看到"brief 填了没有"，看不到
+"作者认没认"——而在 AI 流程里这两件事必然分开：模型一轮就把卡片写完了，作者
+还没读过，于是这门课是**模型的计划**而不是**作者的计划**，而后面六个阶段全都
+建在这张卡片上。
+
+所以新增 `curriculum_design_confirmation`（一行一步，`step` 复用阶段词表：要确认
+的正是要离开的那个阶段），`phaseCompletionGaps('outcomes')` 多一条：课程方向未
+确认则拒绝离开 `task` 阶段，409 + 具体缺口。**门禁在 store 里而不是在 UI 里**，
+所以直接 POST 阶段路由的客户端会遇到同一道门。
+
+作者选了**宽松确认**：对话里说"确认"也算数，卡片按钮是另一个入口。宽松不等于
+没有底线，两条确定性底线写在 `shouldConfirmDirection()` 里：
+
+1. **用户的第一句话不能确认**——那时还没有可确认的对象。数的是**用户轮次**而不是
+   总轮次：对话框开场那条助手寒暄不是模型对卡片的回答，把它算成一轮会让这条
+   底线失效。
+2. **必填项没齐不能确认**——确认一张门禁仍然会拒绝的卡片，会让作者以为已经越过
+   了这一步。
+
+两条都不依赖模型自述，所以模型"过于自信"时也越不过去。
+
+## 改动卡片会撤回确认，但重述不会
+
+`updateCurriculumTask` 比较七个槽位的**真实变化**再决定是否撤回确认行。这条
+规则来自一句具体的抱怨——"用户对某个或对所有有意见就分析具体的"：模型每次写入
+都会重述五格只为改一格，按"写入次数"撤回确认的话，作者点完确认后模型再说一次话
+就被撤销了。比较值而不是计数，才让"确认"有确定的对象。
+
+## 七槽位只有一份定义
+
+`as const satisfies` + 编译期穷尽检查：`CurriculumDirectionKey` 里加一个槽位而
+不在下面的表里定义，**构建就失败**，而不是等到运行时在某个先读到定义的界面上
+崩。同一条规则被抄三份，漂移的那份不会报错——它只会让某个入口悄悄放行，所以
+提示词、校验、卡片渲染、门禁都从同一份定义读。
+
+## 模型输出是不可信输入
+
+`sanitizeDirectionFields` 做三件事，各对应一种真实的坏输入：**未知键丢弃并记日志**
+（模型爱加 `notes` / `courseName` 这类自造键，拦在写库之前比事后发现便宜）；
+**时长接受 `"48 学时"`**（中文对话里模型经常带单位，把整条丢掉会让作者看到"AI 说
+改了但卡片没变"）；**空串算 null**（模型用 `""` 表示"这格我不知道"，那就该留空
+让门禁继续拦着，而不是存一个看起来填过的空格子）。
+
+## 尚未做（S7 起）
+
+- 第二步「学习目标与考核标准」的 AI 对话 + 签收（复用本步的骨架）
+- 第三步起的六个步骤
+- 浏览器端驱动验证（Playwright 的 chromium 版本期望 1208，本机是 1148 且缺可执行文件）
 
 ---
 

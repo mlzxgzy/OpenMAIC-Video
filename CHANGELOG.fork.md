@@ -26,7 +26,68 @@
 
 ## [Unreleased]
 
-（暂无）
+### Added
+
+- **课程设计第一步「课程方向」改成 AI 对话 + 用户确认**：新建课程现在可以从
+  「用 AI 新建课程」开始聊——模型把七个槽位（`title` / `audience` /
+  `learnerLevel` / `applicationScene` / `problemStatement` / `durationHours` /
+  `trainingScenario`）写进 `curriculum_task`，对话框旁边实时显示卡片和缺口，
+  用户点「确认课程方向」才进入下一阶段。
+
+  关键的一点是**「填好了」不再等于「用户同意了」**。新增
+  `curriculum_design_confirmation` 表（migration 13，一行一步），
+  `phaseCompletionGaps('outcomes')` 现在多检查一条：课程方向未确认则拒绝离开
+  `task` 阶段（409 + 具体缺口）。确认有三个入口，都留痕：
+  卡片按钮 / 对话里说「确认」（宽松模式，记 `confirmed_by='assistant'`）/
+  agent 工具 `confirm_course_direction`。**改动卡片会撤回确认**（只比对七个字段
+  的真实变化，重述同一张卡片不会撤销），因为它确认的是那一次的内容。
+
+  - 规则层 `lib/curriculum/design-direction.ts`：七槽位只有一份定义（`as const`
+    + 编译期穷尽检查）、缺口、模型回答的清洗（未知键丢弃并记日志、`"48 学时"`
+    解析成 48、空串清空）、以及确认的确定性守卫（首轮不能确认、必填没齐不能
+    确认）。
+  - AI 步骤 `lib/server/curriculum/direction-step.ts` + 提示词
+    `course-direction`：一次对话轮次 → 一次卡片写入；不做状态机改动，写库由路由做。
+  - 路由：`POST /api/curriculum/design/direction`（对话轮次，直接入库）、
+    `GET/POST/DELETE /api/curriculum/design/tasks/[id]/direction`（状态/确认/撤回）。
+  - 界面：`DesignDirectionDialog`（对话 + 卡片 + 确认）、`DesignDirectionCard`
+    （工作台里的七格编辑 + 确认/撤回 + 打开对话），列表页新增「用 AI 新建课程」。
+    顺带补上一个真实的洞：**任务创建之后，七个字段此前在界面上根本改不了**。
+  - skill：`skills/agent-runtime/course-analysis/SKILL.md` 增加「签收 brief」一节，
+    明确「字段填完 ≠ 用户同意」，要求先 `confirm_course_direction` 再
+    `advance_course_design_phase`。
+
+  顺带修掉一个守卫测试的假阳性：`tests/agent-runtime/skills.test.ts` 的
+  「退役工具名不得出现在 skill 里」用的是子串匹配，而 `patch_course_task` 是
+  **现役**工具、恰好以退役名 `patch_course` 开头，于是 skill 一旦写出正确的新
+  名字就会被判违规。改成整词匹配（`\b`）后，退役名单独出现仍然会被抓住，现役名
+  不再误伤。
+
+  验证：
+
+  - 改动相关套件 **402 项全绿**（`tests/curriculum` 253 项含新增
+    `design-direction` / `direction-route`，加上 store / 路由 / agent 工具 /
+    skill 守卫）；`tsc --noEmit`、`eslint`、`prettier --check` 全绿。
+  - 真 PostgreSQL 契约套件 `PG_CONTRACT_URL=… vitest run
+    tests/persistence/curriculum-design-*.pg.test.ts` **10/10 通过**——新表与
+    确认行在生产引擎上验过（含重复确认只留一行、跨 owner 撤回返回 false）。
+  - 回归 `tests/curriculum + agent-runtime + generation`：**零新增失败**，前后
+    同为 37 个失败且名称逐条相同。
+  - 活体 walk `scripts/verification/design-api-walk.py` 在运行中的 dev server 上
+    **113/113 通过**（含真实模型的一次「第一步」对话：模型产出七槽位卡片、
+    按钮确认、该课程成功离开第一步），证据在
+    `artifacts/regression/design-walk-step1.txt`。列表页入口 `/curriculum/design`
+    在 SSR HTML 里能读到「用 AI 新建课程」。
+
+  注意：migration 13 需要 dev server 重启（或按 bootstrap 应用）后才生效——长跑
+  的 dev server 把 schema bootstrap 缓存在进程里，新的迁移不会自动补上，直接请求
+  会 500（`relation "curriculum_design_confirmation" does not exist`）。本次已在
+  开发库上按 app 自己的 `ensureCurriculumSchema` 应用了 migration 13。
+
+  未做浏览器端驱动验证：仓库里 Playwright 期望的 chromium 版本是 1208，本机缓存
+  的是 1148 且缺少可执行文件，`npx playwright install chromium` 在 7 分钟内没有
+  下载成功。工作台卡片与对话框的验证来自 tsc / eslint / 代码评审与接口层活体
+  walk，界面效果请在浏览器里确认。
 
 ## [1.2.0-video.3] - 2026-10-11
 

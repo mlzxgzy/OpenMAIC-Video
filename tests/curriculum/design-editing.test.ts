@@ -40,6 +40,7 @@ import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
   CurriculumPhaseError,
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumDependency,
   createCurriculumEvidence,
   createCurriculumLabTask,
@@ -182,6 +183,8 @@ describe('design workbench authoring gates', () => {
     });
     if (phase === 'task') return task.id;
 
+    // Step 1 closes on the user's sign-off, not on the fields being filled.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → outcomes
     if (phase === 'outcomes') return task.id;
 

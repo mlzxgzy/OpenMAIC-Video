@@ -942,6 +942,39 @@ CREATE INDEX IF NOT EXISTS curriculum_audit_finding_owner_rule_idx
   ON curriculum_audit_finding (owner_id, rule_code, status);
 `;
 
+/**
+ * Phase 13: the user's sign-off on a design step.
+ *
+ * The phase machine could tell "the brief is filled in" from nothing, but not
+ * "the user agreed to the brief" — and the AI-assisted flow makes those two
+ * different facts rather than the same one: the model writes the card, the user
+ * reads it, and only then may the design move on. One row per (task, step), so
+ * the remaining six steps cost no further migration. `step` reuses the phase
+ * vocabulary on purpose: the thing being confirmed is the phase being left.
+ */
+const CURRICULUM_DESIGN_CONFIRMATION_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_design_confirmation (
+  id           TEXT PRIMARY KEY,
+  owner_id     TEXT NOT NULL,
+  task_id      TEXT NOT NULL REFERENCES curriculum_task(id) ON DELETE CASCADE,
+  step         TEXT NOT NULL,
+  confirmed_by TEXT NOT NULL,
+  note         TEXT,
+  confirmed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_design_confirmation_step_known CHECK
+    (step IN ('task','outcomes','graph','outline','teaching','assessment','review')),
+  CONSTRAINT curriculum_design_confirmation_actor_known CHECK
+    (confirmed_by IN ('user','assistant','system')),
+  -- One confirmation per step. Re-confirming replaces it, which is what makes
+  -- "withdraw" and "confirm again" the same row moving rather than accumulating
+  -- history nobody reads.
+  CONSTRAINT curriculum_design_confirmation_step_unique UNIQUE (owner_id, task_id, step)
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_design_confirmation_owner_task_idx
+  ON curriculum_design_confirmation (owner_id, task_id);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -1013,6 +1046,14 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 12,
       name: 'design_audit',
       up: CURRICULUM_DESIGN_AUDIT_SCHEMA,
+      transaction: true,
+    },
+    // The AI-assisted flow's missing half: the phase machine can see that a
+    // step is filled in, and only this table lets it see that the user agreed.
+    {
+      version: 13,
+      name: 'design_confirmation',
+      up: CURRICULUM_DESIGN_CONFIRMATION_SCHEMA,
       transaction: true,
     },
   ],

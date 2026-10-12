@@ -35,6 +35,7 @@ import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
   CurriculumDesignValidationError,
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumEvidence,
   createCurriculumLabTask,
   createCurriculumLearningNode,
@@ -241,6 +242,7 @@ describe('the store and the database both refuse a warm exam', () => {
       problemStatement: '学员无法独立完成基础 Web CTF',
       durationHours: 4,
     });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → outcomes
 
     const objective = await createCurriculumObjective(pool, OWNER, task.id, {

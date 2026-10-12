@@ -97,12 +97,18 @@ import {
 } from '@/app/api/curriculum/design/tasks/[id]/review/route';
 import { PATCH as patchFinding } from '@/app/api/curriculum/design/tasks/[id]/findings/[findingId]/route';
 import { GET as getCoverageReport } from '@/app/api/curriculum/design/tasks/[id]/coverage/route';
+import {
+  DELETE as withdrawDirection,
+  GET as getDirection,
+  POST as confirmDirection,
+} from '@/app/api/curriculum/design/tasks/[id]/direction/route';
 import { GET as getExportGate } from '@/app/api/curriculum/design/tasks/[id]/export-gate/route';
 import { GET as getTrace } from '@/app/api/curriculum/design/tasks/[id]/trace/route';
 
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
   advanceCurriculumTaskPhase,
+  confirmCurriculumDesignStep,
   createCurriculumEvidence,
   createCurriculumLabTask,
   createCurriculumLearningNode,
@@ -110,6 +116,8 @@ import {
   createCurriculumTask,
   createCurriculumUnit,
   createCurriculumUnitCoverage,
+  getCurriculumDesignSnapshot,
+  getCurriculumDesignStepConfirmation,
   setCurriculumNodeObjectives,
 } from '@/lib/server/curriculum/design-store';
 
@@ -192,6 +200,9 @@ describe('design routes (PGlite)', () => {
   async function advanceTo(
     phase: 'outcomes' | 'graph' | 'outline' | 'teaching' | 'assessment',
   ): Promise<void> {
+    // Step 1 first: the brief is complete in `beforeEach`, but the design may not
+    // leave it until the direction is signed off.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'outcomes') return;
     const objective = await createCurriculumObjective(pool, OWNER, task.id, {
@@ -383,7 +394,31 @@ describe('design routes (PGlite)', () => {
       expect(body.gaps.join(' ')).toContain('授课对象');
     });
 
-    it('advances once the brief is complete', async () => {
+    it('advances once the brief is complete AND the direction is confirmed', async () => {
+      // A complete brief is no longer enough: the AI-assisted flow has to be
+      // able to stop here, or "the model filled the card" would silently become
+      // "the user agreed to the card".
+      const blocked = await advancePhase(
+        post(`/api/curriculum/design/tasks/${task.id}/phase`),
+        taskParams(task.id),
+      );
+      expect(blocked.status).toBe(409);
+      const blockedBody = await read<{ error: { message: string } }>(blocked);
+      expect(blockedBody.error.message).toContain('课程方向还没有确认');
+
+      const confirmed = await confirmDirection(
+        post(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(confirmed.status).toBe(200);
+      const confirmedBody = await read<{
+        confirmed: boolean;
+        confirmation: { confirmedBy: string };
+      }>(confirmed);
+      expect(confirmedBody.confirmed).toBe(true);
+      // The button path records a person, not the model.
+      expect(confirmedBody.confirmation.confirmedBy).toBe('user');
+
       const response = await advancePhase(
         post(`/api/curriculum/design/tasks/${task.id}/phase`),
         taskParams(task.id),
@@ -429,8 +464,149 @@ describe('design routes (PGlite)', () => {
     });
   });
 
+  describe('course direction sign-off', () => {
+    /**
+     * The card's own contract. Step 1 is the one step where the phase machine
+     * reads a second condition — the user's sign-off — so the route that records
+     * it is the only way past the boundary that does not come from the agent.
+     */
+    it('reports a complete card that is still unconfirmed as not ready to advance', async () => {
+      const response = await getDirection(
+        fetch_(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(response.status).toBe(200);
+      const body = await read<{
+        values: Record<string, unknown>;
+        gaps: string[];
+        confirmed: boolean;
+        readyToAdvance: boolean;
+        phaseGaps: string[];
+      }>(response);
+      expect(body.values.title).toBe('CTF 综合实战');
+      // The card itself is fine; the missing piece is the signature.
+      expect(body.gaps).toEqual([]);
+      expect(body.confirmed).toBe(false);
+      expect(body.readyToAdvance).toBe(false);
+      expect(body.phaseGaps.join(' ')).toContain('课程方向还没有确认');
+    });
+
+    it('refuses to confirm an incomplete card, naming the empty slots', async () => {
+      const bare = await createCurriculumTask(pool, OWNER, { title: '未澄清的课程' });
+      const response = await confirmDirection(
+        post(`/api/curriculum/design/tasks/${bare.id}/direction`),
+        taskParams(bare.id),
+      );
+      // Confirming here would tell the user step 1 is done while the advance
+      // button still says otherwise.
+      expect(response.status).toBe(400);
+      const body = await read<{ error: { message: string } }>(response);
+      expect(body.error.message).toContain('授课对象');
+      expect(await getCurriculumDesignStepConfirmation(pool, OWNER, bare.id, 'task')).toBeNull();
+    });
+
+    it('records a user confirmation and opens the gate, idempotently', async () => {
+      const first = await confirmDirection(
+        post(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(first.status).toBe(200);
+      const body = await read<{
+        confirmed: boolean;
+        confirmation: { id: string; confirmedBy: string };
+        readyToAdvance: boolean;
+      }>(first);
+      expect(body.confirmed).toBe(true);
+      expect(body.confirmation.confirmedBy).toBe('user');
+      expect(body.readyToAdvance).toBe(true);
+
+      // Re-confirming replaces the row rather than accumulating one per click.
+      const second = await confirmDirection(
+        post(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      const secondBody = await read<{ confirmation: { id: string } }>(second);
+      expect(secondBody.confirmation.id).toBe(body.confirmation.id);
+      expect((await getCurriculumDesignSnapshot(pool, OWNER, task.id)).confirmations).toHaveLength(
+        1,
+      );
+    });
+
+    it('withdraws the confirmation, and answers 404 when there is none', async () => {
+      const nothing = await withdrawDirection(
+        remove(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(nothing.status).toBe(404);
+
+      await confirmDirection(
+        post(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      const withdrawn = await withdrawDirection(
+        remove(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(withdrawn.status).toBe(200);
+      const body = await read<{ confirmed: boolean; readyToAdvance: boolean }>(withdrawn);
+      expect(body.confirmed).toBe(false);
+      expect(body.readyToAdvance).toBe(false);
+
+      const again = await withdrawDirection(
+        remove(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      expect(again.status).toBe(404);
+    });
+
+    it('re-opens the step when the brief is edited through the PATCH route', async () => {
+      await confirmDirection(
+        post(`/api/curriculum/design/tasks/${task.id}/direction`),
+        taskParams(task.id),
+      );
+      const patched = await patchTask(
+        patch(`/api/curriculum/design/tasks/${task.id}`, { durationHours: 40 }),
+        taskParams(task.id),
+      );
+      expect(patched.status).toBe(200);
+      const body = await read<{ task: CurriculumTaskRecord }>(patched);
+      expect(body.task.durationHours).toBe(40);
+      // The signature belonged to the old card, so the interface has to show the
+      // step as open again.
+      expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'task')).toBeNull();
+    });
+
+    it('fences the sign-off by owner on every method', async () => {
+      await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
+      mocks.resolveOwnerId.mockReturnValue(OTHER);
+      const responses = await Promise.all([
+        getDirection(
+          fetch_(`/api/curriculum/design/tasks/${task.id}/direction`),
+          taskParams(task.id),
+        ),
+        confirmDirection(
+          post(`/api/curriculum/design/tasks/${task.id}/direction`),
+          taskParams(task.id),
+        ),
+        withdrawDirection(
+          remove(`/api/curriculum/design/tasks/${task.id}/direction`),
+          taskParams(task.id),
+        ),
+      ]);
+      // One indistinguishable answer for "not yours" and "does not exist", on all
+      // three methods: a stranger must not be able to confirm, or un-confirm, a
+      // design whose id they guessed.
+      for (const response of responses) expect(response.status).toBe(404);
+      // And the owner's sign-off survived the attempts.
+      expect(
+        await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'task'),
+      ).not.toBeNull();
+    });
+  });
+
   describe('outcome validation and derivation', () => {
     beforeEach(async () => {
+      await confirmCurriculumDesignStep(pool, OWNER, task.id, 'task', 'user');
       await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     });
 

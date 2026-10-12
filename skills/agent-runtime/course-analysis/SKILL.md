@@ -1,7 +1,7 @@
 ---
 name: course-analysis
 title: "课程分析"
-description: Phase 1 of outcome-first course design. Turns a course request into a completed brief and a list of what learners must be able to do independently. Use when someone asks to design, plan or build a course and the brief is not yet settled — "teach our new hires SQL injection defence", "turn this syllabus into a course", "we need a CTF training course". Produces the course task and the capability list that every later phase is measured against. Not for designing a single classroom that already has its plan, and not for editing an existing one.
+description: Phase 1 of outcome-first course design. Turns a course request into a brief the user has confirmed and a list of what learners must be able to do independently. Use when someone asks to design, plan or build a course and the brief is not yet settled — "teach our new hires SQL injection defence", "turn this syllabus into a course", "we need a CTF training course". Produces the course task and the capability list that every later phase is measured against. Not for designing a single classroom that already has its plan, and not for editing an existing one.
 ---
 
 # Course analysis
@@ -86,7 +86,32 @@ on.
 
 Tell the user, in one short paragraph: the settled brief, the capability list,
 and that the next step turns each capability into a verifiable outcome with its
-evidence. Then call `advance_course_design_phase` once the brief fields are in.
+evidence.
+
+## Signing the brief off — the phase is not over when the fields are filled
+
+The brief is seven slots, and they are what the user reads back before anything
+is built on them: `title`, `audience`, `learnerLevel`, `applicationScene`,
+`problemStatement`, `durationHours`, `trainingScenario`. `learnerLevel`,
+`applicationScene` and `trainingScenario` are not gated but they are exactly the
+slots a learner would notice are wrong — propose them, say that you proposed
+them, and let one sentence correct them.
+
+**A filled-in brief is not an agreed one.** The phase machine refuses to leave
+phase 1 until the user has confirmed the card, so the sequence is:
+
+1. write every fact the user states with `patch_course_task` as it arrives, and
+   read the card back in your reply;
+2. when the user agrees — 「确认」「可以」「就这个」 — call
+   `confirm_course_direction`;
+3. only then call `advance_course_design_phase`.
+
+Never call `confirm_course_direction` because the fields are complete, or
+because you judge the card good: it records *the user's* agreement, and a
+confirmation they did not give turns the rest of the design into your plan
+rather than theirs. Editing the brief afterwards re-opens the step, so a
+correction after the sign-off needs one more confirmation — say so rather than
+leaving them to discover the gate.
 
 ## When the request is one classroom, not a course
 
