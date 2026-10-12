@@ -21,5 +21,8 @@
 Answer with the JSON object the system prompt describes: `added` for new nodes
 (each naming the outcomes it supports in `objectiveRefs`), `updated` / `removed`
 naming the `ref` they target, `links` replacing one node's whole link set
-(`objectiveRef: null` to clear it), `message` for what the user reads, and
-`confirm` only when they have plainly agreed to a graph with nothing missing.
+(`objectiveRef: null` to clear it), `dependencies` for what must be learned
+before what (a new node is named by the name you gave it in this answer),
+`removedDependencies` naming the `dep_…` id of an edge that is wrong, `message`
+for what the user reads, and `confirm` only when they have plainly agreed to a
+graph with nothing missing.

@@ -26,6 +26,7 @@ const board: KnowledgeBoard = {
     ['node_a', [{ objectiveId: 'obj_1', supportLevel: 'primary' }]],
     ['node_b', [{ objectiveId: 'obj_1', supportLevel: 'primary' }]],
   ]),
+  dependencies: [],
 };
 
 function answer(over: Partial<KnowledgeAnswer> = {}): KnowledgeAnswer {
@@ -35,6 +36,8 @@ function answer(over: Partial<KnowledgeAnswer> = {}): KnowledgeAnswer {
     updated: [],
     removed: [],
     links: [],
+    dependencies: [],
+    removedDependencies: [],
     confirmRequested: false,
     rejectedRefs: [],
     ...over,
@@ -181,6 +184,7 @@ describe('resolveKnowledgeTurn — gaps and confirmation', () => {
       nodes: [],
       objectives: [{ id: 'obj_1', title: '独立解题' }],
       linksByNode: new Map(),
+      dependencies: [],
     };
     const result = resolveKnowledgeTurn({
       answer: answer({
@@ -200,5 +204,98 @@ describe('resolveKnowledgeTurn — gaps and confirmation', () => {
     });
     expect(result.gaps).toEqual([]);
     expect(result.confirmRequested).toBe(true);
+  });
+});
+
+// ── 第四步并进这一步：先后关系与教学顺序 ─────────────────────────────────────
+
+describe('resolveKnowledgeTurn — ordering edges', () => {
+  it('hands the route the edges to write, with drafts kept as drafts', () => {
+    const result = resolveKnowledgeTurn({
+      answer: answer({
+        added: [
+          {
+            name: '联合查询读数据',
+            nodeType: 'skill',
+            summary: null,
+            difficulty: null,
+            objectiveRefs: [],
+          },
+        ],
+        dependencies: [
+          { sourceRef: 'node_a', targetRef: '联合查询读数据', edgeType: 'prerequisite' },
+        ],
+      }),
+      board,
+      history: [{ role: 'user', content: '先讲参数化再讲联合查询' }],
+    });
+    // The node row does not exist yet, so the route gets an index it resolves
+    // after creating it; resolving here would need an id that cannot exist.
+    expect(result.dependencies).toHaveLength(1);
+    expect(result.dependencies[0]?.source).toEqual({ kind: 'node', id: 'node_a' });
+    expect(result.dependencies[0]?.target).toEqual({ kind: 'draft', index: 0 });
+    expect(result.changedDependencies).toBe(true);
+  });
+
+  it('turns a refused edge into a gap, because a dropped edge leaves no trace', () => {
+    const cyclic: KnowledgeBoard = {
+      ...board,
+      dependencies: [
+        { id: 'dep_1', sourceId: 'node_a', targetId: 'node_b', edgeType: 'prerequisite' },
+      ],
+    };
+    const result = resolveKnowledgeTurn({
+      answer: answer({
+        dependencies: [{ sourceRef: 'node_b', targetRef: 'node_a', edgeType: 'prerequisite' }],
+      }),
+      board: cyclic,
+      history: [{ role: 'user', content: '反过来呢' }],
+    });
+    expect(result.dependencies).toEqual([]);
+    expect(result.gaps.map((gap) => gap.text).join('')).toContain('会形成环');
+    // And it must block the sign-off: the sequence is not the one asked for.
+    expect(result.confirmRequested).toBe(false);
+  });
+
+  it('lets a turn that only added an edge confirm, since it did change the graph', () => {
+    const connected: KnowledgeBoard = {
+      ...board,
+      linksByNode: new Map([
+        ['node_a', [{ objectiveId: 'obj_1', supportLevel: 'primary' }]],
+        ['node_b', [{ objectiveId: 'obj_1', supportLevel: 'primary' }]],
+        ['node_c', [{ objectiveId: 'obj_2', supportLevel: 'primary' }]],
+      ]),
+    };
+    const result = resolveKnowledgeTurn({
+      answer: answer({
+        dependencies: [{ sourceRef: 'node_a', targetRef: 'node_c', edgeType: 'prerequisite' }],
+        confirmRequested: true,
+      }),
+      board: connected,
+      history: [{ role: 'user', content: '确认' }],
+    });
+    expect(result.gaps).toEqual([]);
+    expect(result.changedDependencies).toBe(true);
+    expect(result.confirmRequested).toBe(true);
+  });
+
+  it('reports the sequence the edges imply, and never writes a position', () => {
+    const ordered: KnowledgeBoard = {
+      ...board,
+      dependencies: [
+        { id: 'dep_1', sourceId: 'node_a', targetId: 'node_b', edgeType: 'prerequisite' },
+      ],
+    };
+    const result = resolveKnowledgeTurn({
+      answer: answer({
+        dependencies: [{ sourceRef: 'node_b', targetRef: 'node_c', edgeType: 'prerequisite' }],
+      }),
+      board: ordered,
+      history: [{ role: 'user', content: '再往后接一个' }],
+    });
+    expect(result.dependencies[0]?.source).toEqual({ kind: 'node', id: 'node_b' });
+    // Nothing in the result is a sort position: `patches` is the only way a turn
+    // could write one, and an ordering change must not produce one.
+    expect([...result.patches.values()]).toEqual([]);
   });
 });

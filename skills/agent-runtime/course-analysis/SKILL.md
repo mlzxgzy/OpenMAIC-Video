@@ -153,12 +153,26 @@ Two hazards are specific to this phase:
   every time, not only the ones you changed. Sending a subset silently deletes the
   rest of the graph, and a graph that lost an edge looks fine until the outline
   stage finds an outcome with nothing to teach.
-- **Do not arrange anything here.** No chapters, no items, no teaching order: the
-  outline is phase 4. A node is one teachable, checkable thing — 「Web 安全」 is a
-  chapter, 「联合查询读数据」 is a node.
+- **Do not arrange anything here.** No chapters, no items: the outline is phase 4.
+  A node is one teachable, checkable thing — 「Web 安全」 is a chapter,
+  「联合查询读数据」 is a node.
 
-Editing a node or a link re-opens the step, so a correction after the sign-off
-needs one more `confirm_course_knowledge` — say so.
+**Ordering is part of this phase, and it is written as edges.** Working back from
+an outcome also means saying what has to come first, and that claim is an edge
+between nodes (`create_dependency`, `edgeType: 'prerequisite'`), not a number and
+not a chapter order. There is no sequence field: the order a learner follows is
+derived from the edges, so a sequence you only describe in prose does not exist.
+Two consequences worth stating to the user:
+
+- **A cycle is refused**, and a refused edge is a claim nothing in the UI can
+  show — so if one is rejected, say so rather than assuming it landed.
+- **Declare what you know, not what you guess.** A node you leave out of the
+  ordering is reported back as unplaced, which is the honest state for genuinely
+  independent material; inventing a false prerequisite to make the graph look
+  ordered is worse than the gap.
+
+Editing a node, a link or an ordering edge re-opens the step, so a correction
+after the sign-off needs one more `confirm_course_knowledge` — say so.
 
 ## When the request is one classroom, not a course
 

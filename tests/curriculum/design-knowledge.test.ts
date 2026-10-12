@@ -17,6 +17,9 @@
  *   not exist is refused and logged.
  * - **Confirming needs a real change and a gap-free graph**, and a graph is
  *   gap-free only when it is connected at *both* ends.
+ * - **Ordering is an edge, not a number**: the merge only add/removes the edges
+ *   the turn names, a cycle is dropped before the store can roll the turn back,
+ *   and the sequence the card shows is derived, never stored.
  */
 import { describe, expect, it } from 'vitest';
 
@@ -25,15 +28,21 @@ import type { CurriculumSupportLevel } from '@/lib/curriculum/design-types';
 import {
   KnowledgeAnswerError,
   formatKnowledgeList,
+  knowledgeFindings,
   knowledgeGaps,
   knowledgeGapsOfRecords,
   mergeKnowledgePatch,
+  mergeNodeDependencies,
   mergeNodeLinks,
   parseKnowledgeAnswer,
+  sanitizeDependency,
   sanitizeNodeDraft,
   sanitizeNodePatch,
   shouldConfirmKnowledge,
+  teachingOrder,
   type KnowledgeAnswer,
+  type KnowledgeDependencyDraft,
+  type KnowledgeDependencyRef,
 } from '@/lib/curriculum/design-knowledge';
 
 const node = (id: string, name: string) => ({ id, name, nodeType: 'knowledge' as const });
@@ -46,6 +55,8 @@ function answer(over: Partial<KnowledgeAnswer> = {}): KnowledgeAnswer {
     updated: [],
     removed: [],
     links: [],
+    dependencies: [],
+    removedDependencies: [],
     confirmRequested: false,
     rejectedRefs: [],
     ...over,
@@ -404,4 +415,237 @@ it('the links map is keyed by node id', () => {
     { nodeId: 'node_a', objectiveId: 'obj_1', supportLevel: 'primary' as const },
   ]);
   expect([...map.keys()]).toEqual(['node_a']);
+});
+
+// ── 第四步并进这一步：先后关系 ─────────────────────────────────────────────
+
+const edge = (
+  id: string,
+  sourceId: string,
+  targetId: string,
+  edgeType: KnowledgeDependencyRef['edgeType'] = 'prerequisite',
+): KnowledgeDependencyRef => ({ id, sourceId, targetId, edgeType });
+
+function dependency(
+  sourceRef: string,
+  targetRef: string,
+  over: Partial<KnowledgeDependencyDraft> = {},
+): KnowledgeDependencyDraft {
+  return { sourceRef, targetRef, edgeType: 'prerequisite', ...over };
+}
+
+describe('sanitizeDependency', () => {
+  it('keeps a well-formed edge and defaults nothing', () => {
+    expect(
+      sanitizeDependency({ sourceRef: 'node_a', targetRef: 'node_b', edgeType: 'derives' }),
+    ).toEqual({
+      dependency: { sourceRef: 'node_a', targetRef: 'node_b', edgeType: 'derives' },
+    });
+  });
+
+  it('refuses an edge with no relationship type rather than inventing one', () => {
+    // Defaulting to `prerequisite` would be the rules layer deciding what the
+    // author meant by an edge it cannot read.
+    expect(sanitizeDependency({ sourceRef: 'node_a', targetRef: 'node_b' }).dependency).toBeNull();
+    expect(
+      sanitizeDependency({ sourceRef: 'node_a', targetRef: 'node_b', edgeType: 'related' })
+        .dependency,
+    ).toBeNull();
+  });
+
+  it('drops a self-edge here, where the store cannot roll the turn back', () => {
+    expect(
+      sanitizeDependency({ sourceRef: 'node_a', targetRef: 'node_a', edgeType: 'derives' }),
+    ).toMatchObject({ dependency: null });
+  });
+});
+
+describe('parseKnowledgeAnswer — dependencies', () => {
+  it('reads both the edges to write and the ones to take away', () => {
+    const parsed = parseKnowledgeAnswer(
+      JSON.stringify({
+        message: '',
+        dependencies: [{ sourceRef: 'node_a', targetRef: 'node_b', edgeType: 'prerequisite' }],
+        removedDependencies: ['dep_1'],
+        confirm: false,
+      }),
+    );
+    expect(parsed.dependencies).toHaveLength(1);
+    expect(parsed.removedDependencies).toEqual(['dep_1']);
+  });
+
+  it('says out loud that chapters and items are later, not silently theirs', () => {
+    const parsed = parseKnowledgeAnswer(JSON.stringify({ chapters: [], message: '' }));
+    expect(parsed.rejectedRefs.join('')).toContain('dependencies');
+  });
+});
+
+describe('mergeNodeDependencies', () => {
+  const existing = [edge('dep_1', 'node_a', 'node_b')];
+
+  const merge = (
+    proposed: KnowledgeDependencyDraft[],
+    over: Partial<Parameters<typeof mergeNodeDependencies>[0]> = {},
+  ) =>
+    mergeNodeDependencies({
+      knownNodeIds: new Set(['node_a', 'node_b', 'node_c']),
+      drafts: [],
+      removed: new Set<string>(),
+      existing,
+      removedDependencyIds: [],
+      proposed,
+      ...over,
+    });
+
+  it('adds only the edges it was handed, leaving the rest of the graph alone', () => {
+    const result = merge([dependency('node_b', 'node_c')]);
+    // dep_1 is untouched: edges are rows, so "not mentioned" cannot mean "gone".
+    expect(result.create.map((row) => `${row.source}→${row.target}`)).toHaveLength(1);
+    expect(result.remove).toEqual([]);
+  });
+
+  it('drops an edge that would close a loop, and says which one', () => {
+    // node_a → node_b already exists; node_b → node_a would make the order
+    // unlearnable. It is dropped here because the store's refusal would abort the
+    // whole turn, nodes included.
+    const result = merge([dependency('node_b', 'node_a')]);
+    expect(result.create).toEqual([]);
+    expect(result.droppedEdges.join('')).toContain('会形成环');
+  });
+
+  it('accounts for a cycle within the turn, not just against stored edges', () => {
+    const forward = dependency('node_b', 'node_c');
+    const backward = dependency('node_c', 'node_b');
+    const result = merge([forward, backward]);
+    expect(result.create).toHaveLength(1);
+    expect(result.droppedEdges).toHaveLength(1);
+  });
+
+  it('allows a mutual composes pair, because that is not an order claim', () => {
+    const result = merge([
+      dependency('node_a', 'node_c', { edgeType: 'composes' }),
+      dependency('node_c', 'node_a', { edgeType: 'composes' }),
+    ]);
+    expect(result.create).toHaveLength(2);
+    expect(result.droppedEdges).toEqual([]);
+  });
+
+  it('resolves a node added in the same turn by its name', () => {
+    const result = mergeNodeDependencies({
+      knownNodeIds: new Set(['node_a']),
+      drafts: [{ name: '联合查询读数据' }],
+      removed: new Set<string>(),
+      existing: [],
+      removedDependencyIds: [],
+      proposed: [dependency('node_a', '联合查询读数据')],
+    });
+    expect(result.create[0]?.target).toEqual({ kind: 'draft', index: 0 });
+  });
+
+  it('refuses a name that matches two new nodes instead of picking one', () => {
+    const result = mergeNodeDependencies({
+      knownNodeIds: new Set(['node_a']),
+      drafts: [{ name: '信息收集' }, { name: '信息收集' }],
+      removed: new Set<string>(),
+      existing: [],
+      removedDependencyIds: [],
+      proposed: [dependency('node_a', '信息收集')],
+    });
+    expect(result.create).toEqual([]);
+    expect(result.droppedEdges.join('')).toContain('分不清是哪一个');
+  });
+
+  it('names an edge by dep id to take it away, and ignores an id that is not there', () => {
+    const result = merge([], { removedDependencyIds: ['dep_1', 'dep_nope'] });
+    expect(result.remove).toEqual(['dep_1']);
+    expect(result.unmatchedRefs).toEqual(['dep_nope']);
+  });
+
+  it('lets a removal win over re-proposing the same edge in one turn', () => {
+    const result = merge([dependency('node_a', 'node_b')], { removedDependencyIds: ['dep_1'] });
+    expect(result.remove).toEqual(['dep_1']);
+    expect(result.create).toEqual([]);
+  });
+
+  it('reports an edge that names a node it cannot find', () => {
+    const result = merge([dependency('node_a', 'node_gone')]);
+    expect(result.create).toEqual([]);
+    expect(result.unmatchedRefs).toEqual(['node_gone']);
+    expect(result.droppedEdges.join('')).toContain('找不到节点');
+  });
+});
+
+describe('teachingOrder', () => {
+  const nodes = [node('node_a', 'A'), node('node_b', 'B'), node('node_c', 'C')];
+
+  it('derives the sequence from the ordering edges', () => {
+    const { order } = teachingOrder({
+      nodes,
+      dependencies: [edge('dep_1', 'node_a', 'node_c'), edge('dep_2', 'node_c', 'node_b')],
+    });
+    expect(order.map((row) => row.id)).toEqual(['node_a', 'node_c', 'node_b']);
+  });
+
+  it('breaks ties with the display order, so unrelated nodes do not shuffle', () => {
+    const { order } = teachingOrder({ nodes, dependencies: [edge('dep_1', 'node_b', 'node_a')] });
+    // node_c and node_b are both free at the start; node_b is earlier in the
+    // list, so the tie goes to it and node_c only follows once node_a has to.
+    expect(order.map((row) => row.id)).toEqual(['node_b', 'node_a', 'node_c']);
+  });
+
+  it('does not read `supports` as an order claim', () => {
+    const { order } = teachingOrder({
+      nodes,
+      dependencies: [edge('dep_1', 'node_c', 'node_a', 'supports')],
+    });
+    expect(order.map((row) => row.id)).toEqual(['node_a', 'node_b', 'node_c']);
+  });
+
+  it('reports nodes it cannot place, rather than looping forever', () => {
+    const { order, unresolved } = teachingOrder({
+      nodes,
+      dependencies: [edge('dep_1', 'node_a', 'node_b'), edge('dep_2', 'node_b', 'node_a')],
+    });
+    expect(order.map((row) => row.id)).toEqual(['node_c']);
+    expect(unresolved.map((row) => row.id)).toEqual(['node_a', 'node_b']);
+  });
+});
+
+describe('knowledgeFindings', () => {
+  it('flags two nodes with the same name, and is not a gap', () => {
+    const findings = knowledgeFindings(
+      [node('node_a', '信息收集'), node('node_b', '信息 收集')],
+      [edge('dep_1', 'node_a', 'node_b')],
+    );
+    expect(findings.map((row) => row.text).join('')).toContain('同名');
+  });
+
+  it('flags nodes that take part in no ordering relation', () => {
+    const findings = knowledgeFindings(
+      [node('node_a', 'A'), node('node_b', 'B'), node('node_c', 'C')],
+      [edge('dep_1', 'node_a', 'node_b')],
+    );
+    expect(findings.map((row) => row.text).join('')).toContain('C');
+  });
+
+  it('says there is no sequence at all when nothing is ordered yet', () => {
+    const findings = knowledgeFindings([node('node_a', 'A'), node('node_b', 'B')], []);
+    expect(findings).toHaveLength(1);
+    expect(findings[0]?.text).toContain('还没有任何先后关系');
+  });
+});
+
+describe('formatKnowledgeList — edges and the derived sequence', () => {
+  it('prints each edge with the dep id the model needs to remove it', () => {
+    const text = formatKnowledgeList({
+      nodes: [node('node_a', 'A'), node('node_b', 'B')],
+      objectives: [],
+      linksByNode: new Map(),
+      dependencies: [edge('dep_7', 'node_a', 'node_b')],
+      teachingOrderIds: ['node_a', 'node_b'],
+    });
+    expect(text).toContain('dep=dep_7');
+    expect(text).toContain('node_a(A) -[prerequisite]-> node_b(B)');
+    expect(text).toContain('1. node_a(A)');
+  });
 });

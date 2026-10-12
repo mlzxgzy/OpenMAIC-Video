@@ -23,15 +23,37 @@
  *    存都存不进去（外键），模型写下它多半是把目标名写错了；丢弃并记账，用户至少
  *    看得到"这一条没接上"，而不是一个静默消失的引用。
  *
- * 3. **这一步不排章节、不排讲授顺序。** 用户明确要求"暂不强制安排章节"，所以
+ * 3. **这一步不排章节，但排先后。** 用户明确要求"暂不强制安排章节"，所以
  *    {@link parseKnowledgeAnswer} **不接受任何章节/条目的字段**：模型即使擅自写了
  *    `chapters`、`units`，也会被整体忽略并在 `rejectedRefs` 里说明。少一个字段比
  *    多一个被静默忽略的字段安全。
+ *
+ * ## 第四步并进这一步：依赖与教学顺序
+ *
+ * 原计划的第四步「内容依赖分析与教学排序」没有自己的阶段，也不该有：它要写的就是
+ * 这张图上的**有向边**，和节点、连线是同一张图、同一份签收。分成两张卡意味着改一条
+ * 先后关系会把"知识点拆解"整张已签收的卡撤回——第三步刚花力气避免的正是这个。
+ * 所以它在这里落成三件事：
+ *
+ * 1. **先后关系是边，不是排序位。** 模型提交 `dependencies`，每条是
+ *    "source 必须在 target 之前"。**不写 `node.sortOrder`**：讲授顺序是这些边的一个
+ *    函数，存下来就是第二份真相，改一条边就会漂移；大纲阶段真正排序的是
+ *    `unit.orderIndex`。所以 {@link teachingOrder} 只是**推导出来给人看**。
+ * 2. **边是独立行，所以只增删被指名的那些。** 与连线相反，这里没有"整表替换"的
+ *    风险——添加是 upsert、删除按 dep id 指名。模型没提到的边一律不动。
+ * 3. **会成环的边丢掉并说出来。** store 会拒绝成环（整轮回滚），所以规则层必须**先**
+ *    按同一套边类型检查：成环、自指、指向不存在的节点，都记进缺口，让人看见。丢掉
+ *    一条不存在的边在界面上没有任何痕迹——不像"节点没挂目标"会显示成待挂——所以
+ *    这些必须由这一轮明确报出来。
  */
 import {
+  CURRICULUM_DEPENDENCY_EDGE_TYPES,
+  CURRICULUM_DIRECTED_EDGE_TYPES,
   CURRICULUM_DIFFICULTIES,
   CURRICULUM_NODE_TYPES,
+  CURRICULUM_ORDER_CLAIM_EDGE_TYPES,
   CURRICULUM_SUPPORT_LEVELS,
+  type CurriculumDependencyEdgeType,
   type CurriculumDifficulty,
   type CurriculumNodeType,
   type CurriculumSupportLevel,
@@ -84,6 +106,29 @@ export interface KnowledgeNodePatch {
   difficulty?: CurriculumDifficulty | null;
 }
 
+/**
+ * One ordering claim: the source has to be learned before the target.
+ *
+ * Both ends are node refs, not objective ids. An outcome is a destination, not a
+ * lesson — "目标 2 在目标 1 之后" is a statement about the plan, which is what
+ * the outline stage orders with `orderIndex`. What this step orders is the
+ * knowledge and skill the lessons are built from, and those are the nodes.
+ */
+export interface KnowledgeDependencyDraft {
+  sourceRef: string;
+  targetRef: string;
+  edgeType: CurriculumDependencyEdgeType;
+  note?: string | null;
+}
+
+/** An edge as it is already stored, in the form the merge reasons about. */
+export interface KnowledgeDependencyRef {
+  id: string;
+  sourceId: string;
+  targetId: string;
+  edgeType: CurriculumDependencyEdgeType;
+}
+
 export interface KnowledgeAnswer {
   message: string;
   added: KnowledgeNodeDraft[];
@@ -96,6 +141,10 @@ export interface KnowledgeAnswer {
     supportLevel?: CurriculumSupportLevel;
     note?: string | null;
   }[];
+  /** 要新增或改写的先后关系。只增删这里出现的边，其余边不动。 */
+  dependencies: KnowledgeDependencyDraft[];
+  /** 要删除的边，按依赖 id 指名（id printed in the graph listing）。 */
+  removedDependencies: string[];
   confirmRequested: boolean;
   rejectedRefs: string[];
 }
@@ -185,6 +234,42 @@ function sanitizeLink(raw: unknown): { link: KnowledgeLinkDraft | null; reason?:
       supportLevel,
       ...(note === undefined ? {} : { note }),
     },
+  };
+}
+
+/**
+ * 清洗模型给的一条先后关系。
+ *
+ * 两端都是必填的节点 ref，`edgeType` 也必填：缺省一个边类型等于替作者做了一个
+ * 关于"这是什么关系"的决定，而 `prerequisite` 与 `practices` 在教学上不是一回事。
+ * 自指在这一层就丢掉，不留给 store——store 会抛错并回滚整轮，一个笔误不该带走这一轮
+ * 的其他改动。
+ */
+export function sanitizeDependency(raw: unknown): {
+  dependency: KnowledgeDependencyDraft | null;
+  reason?: string;
+} {
+  if (!isRecord(raw)) return { dependency: null, reason: '依赖不是一个对象' };
+  const sourceRef = textOf(raw.sourceRef);
+  const targetRef = textOf(raw.targetRef);
+  if (!sourceRef) return { dependency: null, reason: '依赖缺少 sourceRef' };
+  if (!targetRef) return { dependency: null, reason: '依赖缺少 targetRef' };
+  const edgeType = oneOf(raw.edgeType, CURRICULUM_DEPENDENCY_EDGE_TYPES);
+  if (!edgeType) {
+    return {
+      dependency: null,
+      reason: `依赖 ${sourceRef}→${targetRef} 的 edgeType 不是允许的关系类型`,
+    };
+  }
+  const note = textOf(raw.note);
+  if (raw.note !== undefined && note === undefined) {
+    return { dependency: null, reason: `依赖 ${sourceRef}→${targetRef} 的备注不是文本` };
+  }
+  if (sourceRef === targetRef) {
+    return { dependency: null, reason: `依赖 ${sourceRef}→${targetRef} 指向自身` };
+  }
+  return {
+    dependency: { sourceRef, targetRef, edgeType, ...(note === undefined ? {} : { note }) },
   };
 }
 
@@ -310,7 +395,10 @@ export function parseKnowledgeAnswer(text: string): KnowledgeAnswer {
   const rejectedRefs: string[] = [];
   for (const key of OUT_OF_SCOPE_KEYS) {
     if (key in parsed) {
-      rejectedRefs.push(`「${key}」不在这一步的范围内，已忽略：章节与讲授顺序是后面步骤的事`);
+      rejectedRefs.push(
+        `「${key}」不在这一步的范围内，已忽略：章与条目是后面的步骤；` +
+          '先后关系请写成 dependencies',
+      );
     }
   }
 
@@ -361,12 +449,28 @@ export function parseKnowledgeAnswer(text: string): KnowledgeAnswer {
     }
   }
 
+  const dependencies: KnowledgeDependencyDraft[] = [];
+  for (const entry of asArray(parsed.dependencies)) {
+    const { dependency, reason } = sanitizeDependency(entry);
+    if (dependency) dependencies.push(dependency);
+    else if (reason) rejectedRefs.push(reason);
+  }
+
+  const removedDependencies: string[] = [];
+  for (const entry of asArray(parsed.removedDependencies)) {
+    const ref = typeof entry === 'string' ? textOf(entry) : null;
+    if (ref) removedDependencies.push(ref);
+    else rejectedRefs.push('要删除的依赖缺少 dep id');
+  }
+
   return {
     message: typeof parsed.message === 'string' ? parsed.message.trim() : '',
     added,
     updated,
     removed,
     links,
+    dependencies,
+    removedDependencies,
     confirmRequested: parsed.confirm === true,
     rejectedRefs,
   };
@@ -488,6 +592,347 @@ export function mergeNodeLinks(input: {
   return { replace, unmatchedRefs };
 }
 
+// ── 先后关系 ────────────────────────────────────────────────────────────────
+
+/**
+ * One end of an ordering claim.
+ *
+ * A node added in the same turn has no id yet — the model is writing the row and
+ * the edge in one JSON object — so it is addressed by its **name** and resolved
+ * to the draft it names. `draft` endpoints are turned into real node ids by the
+ * route once the rows exist.
+ */
+export type DependencyEndpoint = { kind: 'node'; id: string } | { kind: 'draft'; index: number };
+
+/** One edge to write, with both endpoints resolved. */
+export interface ResolvedDependency {
+  source: DependencyEndpoint;
+  target: DependencyEndpoint;
+  edgeType: CurriculumDependencyEdgeType;
+  note: string | null;
+}
+
+/** The key both ends are compared by while the cycle check runs. */
+function endpointKey(endpoint: DependencyEndpoint): string {
+  return endpoint.kind === 'node' ? `node:${endpoint.id}` : `draft:${endpoint.index}`;
+}
+
+/**
+ * 这一轮之后要新增/改写的先后关系，与要删除的边。
+ *
+ * 与 {@link mergeNodeLinks} 的形状不同，是因为存储的形状不同：连线是"一个节点的
+ * 整份集合"（`setCurriculumNodeObjectives` 全表替换），而依赖是**独立行**（添加是
+ * upsert、删除按 id）。所以这里没有"替换"，只有"这一轮被指名的边"——没提到的边不会
+ * 因为没被提到而消失。
+ *
+ * 成环在这一层就挡掉，理由和自指一样：store 的成环检查会抛错并回滚**整轮**，一个
+ * 写错的先修关系不该带走同一轮里几十个节点。挡下来的边写进 {@link droppedEdges}，
+ * 由调用方变成可见的缺口——一条没写进去的边在界面上没有任何痕迹，不像"节点没挂目标"
+ * 会显示成待挂状态，所以必须由这一轮说出来。
+ */
+export function mergeNodeDependencies(input: {
+  knownNodeIds: ReadonlySet<string>;
+  /** 这一轮新增的节点，按 `added` 的顺序。先后关系只能用名字引用它们。 */
+  drafts: readonly { name: string }[];
+  removed: ReadonlySet<string>;
+  existing: readonly KnowledgeDependencyRef[];
+  removedDependencyIds: readonly string[];
+  proposed: readonly KnowledgeDependencyDraft[];
+}): {
+  create: ResolvedDependency[];
+  remove: string[];
+  /** 模型指名了但图里没有的 dep id。 */
+  unmatchedRefs: string[];
+  /** 丢掉一条边的原因，人话，直接进缺口列表。 */
+  droppedEdges: string[];
+} {
+  const unmatchedRefs: string[] = [];
+  const droppedEdges: string[] = [];
+
+  // Drafts are addressed by name; an ambiguous name is refused rather than
+  // guessed, because picking one of two identical names is how an edge lands on
+  // the wrong node and nothing in the UI shows it.
+  const draftIndexes = new Map<string, number[]>();
+  input.drafts.forEach((draft, index) => {
+    const key = normaliseName(draft.name);
+    const list = draftIndexes.get(key) ?? [];
+    list.push(index);
+    draftIndexes.set(key, list);
+  });
+
+  const resolve = (ref: string): { endpoint: DependencyEndpoint } | { reason: string } => {
+    if (input.knownNodeIds.has(ref)) {
+      if (input.removed.has(ref)) return { reason: `节点 ${ref} 在这一轮被删除` };
+      return { endpoint: { kind: 'node', id: ref } };
+    }
+    const candidates = draftIndexes.get(normaliseName(ref)) ?? [];
+    if (candidates.length === 1) {
+      const index = candidates[0];
+      if (index === undefined) return { reason: `找不到节点 ${ref}` };
+      return { endpoint: { kind: 'draft', index } };
+    }
+    if (candidates.length > 1) {
+      return { reason: `「${ref}」对上这一轮新增的多个同名节点，分不清是哪一个` };
+    }
+    return { reason: `找不到节点 ${ref}` };
+  };
+
+  const byId = new Map(input.existing.map((edge) => [edge.id, edge]));
+  const remove: string[] = [];
+  // The natural keys being taken away. A turn that names an edge for removal and
+  // also re-proposes it must net out to *removed*: the deletion is the explicit
+  // statement, and the route deletes before it inserts, so honouring the
+  // re-proposal would quietly cancel the deletion the author asked for.
+  const removedKeys = new Set<string>();
+  for (const id of input.removedDependencyIds) {
+    const edge = byId.get(id);
+    if (!edge) {
+      unmatchedRefs.push(id);
+      continue;
+    }
+    if (!remove.includes(id)) remove.push(id);
+    removedKeys.add(`${edge.sourceId}:${edge.targetId}:${edge.edgeType}`);
+  }
+  const removing = new Set(remove);
+
+  // The graph the proposals are checked against: every stored edge that survives
+  // this turn's deletions. `composes` is not an order claim, so it cannot make a
+  // cycle; the set is the same one the store keeps acyclic, because a pre-check
+  // against a narrower list would let the store roll the turn back.
+  const outgoing = new Map<string, Set<string>>();
+  const addEdge = (source: string, target: string, edgeType: CurriculumDependencyEdgeType) => {
+    if (!isDirectedEdgeType(edgeType)) return;
+    const list = outgoing.get(source) ?? new Set<string>();
+    list.add(target);
+    outgoing.set(source, list);
+  };
+  for (const edge of input.existing) {
+    if (removing.has(edge.id)) continue;
+    addEdge(`node:${edge.sourceId}`, `node:${edge.targetId}`, edge.edgeType);
+  }
+
+  const create: ResolvedDependency[] = [];
+  const seen = new Set<string>();
+  for (const entry of input.proposed) {
+    const { sourceRef, targetRef, edgeType } = entry;
+    const source = resolve(sourceRef);
+    if ('reason' in source) {
+      unmatchedRefs.push(sourceRef);
+      droppedEdges.push(`先后关系「${sourceRef} → ${targetRef}」没有写入：${source.reason}`);
+      continue;
+    }
+    const target = resolve(targetRef);
+    if ('reason' in target) {
+      unmatchedRefs.push(targetRef);
+      droppedEdges.push(`先后关系「${sourceRef} → ${targetRef}」没有写入：${target.reason}`);
+      continue;
+    }
+    const sourceKey = endpointKey(source.endpoint);
+    const targetKey = endpointKey(target.endpoint);
+    // Same natural key twice is one edge: the store's unique index is
+    // (source, target, type), so the second insert is a conflict, not a fact.
+    const key = `${sourceKey}:${targetKey}:${edgeType}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (
+      source.endpoint.kind === 'node' &&
+      target.endpoint.kind === 'node' &&
+      removedKeys.has(`${source.endpoint.id}:${target.endpoint.id}:${edgeType}`)
+    ) {
+      continue;
+    }
+    if (sourceKey === targetKey) {
+      droppedEdges.push(`先后关系「${sourceRef} → ${targetRef}」指向自身，没有写入`);
+      continue;
+    }
+    if (wouldCloseCycle(outgoing, sourceKey, targetKey)) {
+      droppedEdges.push(
+        `先后关系「${sourceRef} → ${targetRef}」会形成环（${edgeType}）：这一条没有写入，` +
+          '先去掉环里的某一条，或者改掉方向',
+      );
+      continue;
+    }
+    create.push({
+      source: source.endpoint,
+      target: target.endpoint,
+      edgeType,
+      note: entry.note ?? null,
+    });
+    addEdge(sourceKey, targetKey, edgeType);
+  }
+
+  return { create, remove, unmatchedRefs, droppedEdges };
+}
+
+/** Is `from` already reachable from `to`? Then `from → to` closes a loop. */
+function wouldCloseCycle(
+  outgoing: ReadonlyMap<string, ReadonlySet<string>>,
+  sourceId: string,
+  targetId: string,
+): boolean {
+  const stack = [targetId];
+  const seen = new Set<string>([targetId]);
+  while (stack.length > 0) {
+    const current = stack.pop();
+    if (current === undefined) break;
+    if (current === sourceId) return true;
+    for (const next of outgoing.get(current) ?? []) {
+      if (seen.has(next)) continue;
+      seen.add(next);
+      stack.push(next);
+    }
+  }
+  return false;
+}
+
+/**
+ * 由先后关系推导出的讲授顺序。
+ *
+ * **这是推导，不是存储。** `node.sortOrder` 仍是节点在列表里的显示顺序，讲授顺序是
+ * 这些边的一个函数：存下来就会在改一条边时漂移，而大纲阶段真正排的是
+ * `unit.orderIndex`。所以这一步把它算出来给人看，不写回去。
+ *
+ * 只有 {@link CURRICULUM_ORDER_CLAIM_EDGE_TYPES} 里的边构成顺序：`supports` 说明两个
+ * 节点互相依赖，不说明谁先讲。顺序本身稳定——同一层里保持节点现有的显示顺序，所以
+ * 模型没提的节点不会莫名其妙换位置。
+ */
+export function teachingOrder(input: {
+  nodes: readonly KnowledgeNodeRef[];
+  dependencies: readonly KnowledgeDependencyRef[];
+  /** 这两点之间用哪种关系算顺序。默认取"顺序声明"那一组。 */
+  edgeTypes?: readonly CurriculumDependencyEdgeType[];
+}): {
+  /** 可以定序的节点，按讲授先后。 */
+  order: KnowledgeNodeRef[];
+  /** 剩下的节点：它们的先后关系成环，或者根本没参与任何关系。 */
+  unresolved: KnowledgeNodeRef[];
+} {
+  const edgeTypes = input.edgeTypes ?? CURRICULUM_ORDER_CLAIM_EDGE_TYPES;
+  const allowed = new Set<CurriculumDependencyEdgeType>(edgeTypes);
+  const indexOf = new Map(input.nodes.map((node, index) => [node.id, index]));
+  const indegree = new Map<string, number>(input.nodes.map((node) => [node.id, 0]));
+  const outgoing = new Map<string, string[]>();
+
+  for (const edge of input.dependencies) {
+    if (!allowed.has(edge.edgeType)) continue;
+    if (!indexOf.has(edge.sourceId) || !indexOf.has(edge.targetId)) continue;
+    if (edge.sourceId === edge.targetId) continue;
+    const list = outgoing.get(edge.sourceId) ?? [];
+    list.push(edge.targetId);
+    outgoing.set(edge.sourceId, list);
+    indegree.set(edge.targetId, (indegree.get(edge.targetId) ?? 0) + 1);
+  }
+
+  const byIndex = (left: string, right: string) =>
+    (indexOf.get(left) ?? 0) - (indexOf.get(right) ?? 0);
+  const ready = input.nodes
+    .filter((node) => (indegree.get(node.id) ?? 0) === 0)
+    .map((node) => node.id)
+    .sort(byIndex);
+  const orderedIds: string[] = [];
+
+  while (ready.length > 0) {
+    const current = ready.shift();
+    if (current === undefined) break;
+    orderedIds.push(current);
+    for (const next of outgoing.get(current) ?? []) {
+      const left = (indegree.get(next) ?? 1) - 1;
+      indegree.set(next, left);
+      if (left === 0) {
+        ready.push(next);
+        ready.sort(byIndex);
+      }
+    }
+  }
+
+  const byId = new Map(input.nodes.map((node) => [node.id, node]));
+  const order = orderedIds.flatMap((id) => {
+    const node = byId.get(id);
+    return node ? [node] : [];
+  });
+  const ordered = new Set(orderedIds);
+  const unresolved = input.nodes.filter((node) => !ordered.has(node.id));
+  return { order, unresolved };
+}
+
+/**
+ * 这一步该显示给人看的发现：**不是缺口，不拦签收**。
+ *
+ * 两件事机器判得了：两个节点同名（同一件事被拆了两遍），以及哪些节点还没进任何
+ * 先后关系。都只报不改——"合并两个节点"要的是语义判断，而**重复内容的语义判定留给
+ * 覆盖分析那一步**：那时课程全文已经在了，模型判断"这两处真的重复"有依据，而在这里
+ * 只有名字可比。
+ */
+export function knowledgeFindings(
+  nodes: readonly KnowledgeNodeRef[],
+  dependencies: readonly KnowledgeDependencyRef[],
+): KnowledgeGap[] {
+  const findings: KnowledgeGap[] = [];
+
+  const byNormalisedName = new Map<string, KnowledgeNodeRef[]>();
+  for (const node of nodes) {
+    const key = normaliseName(node.name);
+    const list = byNormalisedName.get(key) ?? [];
+    list.push(node);
+    byNormalisedName.set(key, list);
+  }
+  for (const list of byNormalisedName.values()) {
+    if (list.length < 2) continue;
+    findings.push({
+      ref: list[0]?.id,
+      text: `「${list.map((node) => node.name).join('」「')}」同名：确认是不是同一件事被拆了两遍`,
+    });
+  }
+
+  const ordered = new Set<string>();
+  for (const edge of dependencies) {
+    if (!isOrderClaimEdgeType(edge.edgeType)) continue;
+    ordered.add(edge.sourceId);
+    ordered.add(edge.targetId);
+  }
+  if (ordered.size === 0) {
+    if (nodes.length > 1) {
+      findings.push({ text: '还没有任何先后关系：现在只能看出讲什么，看不出先讲什么' });
+    }
+    return findings;
+  }
+  const unsequenced = nodes.filter((node) => !ordered.has(node.id));
+  if (unsequenced.length > 0) {
+    findings.push({
+      ref: unsequenced[0]?.id,
+      text:
+        `${unsequenced.map((node) => node.name).join('、')} 还没有参与任何先后关系：` +
+        '它们的讲授位置未定',
+    });
+  }
+  return findings;
+}
+
+/** 同名判定用：忽略大小写、空白与全角/半角差异，只看是不是同一个写法。 */
+function normaliseName(name: string): string {
+  return name.normalize('NFKC').replace(/\s+/g, '').toLowerCase();
+}
+
+/**
+ * Membership over the shared edge-type sets, typed for the whole union.
+ *
+ * The sets are `as const` tuples — that is what keeps the store and this layer
+ * from drifting — which makes `.includes` demand the narrower literal union.
+ * Widening here keeps the call sites readable and the tuple the single source of
+ * truth.
+ */
+function isDirectedEdgeType(edgeType: CurriculumDependencyEdgeType): boolean {
+  return (CURRICULUM_DIRECTED_EDGE_TYPES as readonly CurriculumDependencyEdgeType[]).includes(
+    edgeType,
+  );
+}
+
+function isOrderClaimEdgeType(edgeType: CurriculumDependencyEdgeType): boolean {
+  return (CURRICULUM_ORDER_CLAIM_EDGE_TYPES as readonly CurriculumDependencyEdgeType[]).includes(
+    edgeType,
+  );
+}
+
 // ── 缺口 ────────────────────────────────────────────────────────────────────
 
 export interface KnowledgeGap {
@@ -584,12 +1029,19 @@ export function shouldConfirmKnowledge(input: {
  * 给模型的每条连线两端都用 id：目标 id 是模型唯一的指路方式（目标没有别的短柄），
  * 节点 id 是 `ref`。一条都不给模型的行是"这张图接下来会重算"，所以顺序跟着
  * `sortOrder`。
+ *
+ * 先后关系**逐条带 dep id 打印**，因为它们删不掉：模型只能按 id 指名要删的边，而它
+ * 看不到 id 就只能提出一条没人能执行的删除。
  */
 export function formatKnowledgeList(input: {
   nodes: readonly KnowledgeNodeRef[];
   objectives: readonly KnowledgeRef[];
   linksByNode: ReadonlyMap<string, readonly { objectiveId: string }[]>;
+  dependencies?: readonly KnowledgeDependencyRef[];
+  /** 已有的先后关系推导出的顺序，给模型一个可反驳的默认值。 */
+  teachingOrderIds?: readonly string[];
 }): string {
+  const nameOf = new Map(input.nodes.map((node) => [node.id, node.name]));
   const lines = input.nodes.map((node) => {
     const links = input.linksByNode.get(node.id) ?? [];
     const linkText = links.length
@@ -608,11 +1060,31 @@ export function formatKnowledgeList(input: {
   const objectiveLines = input.objectives.map(
     (objective) => `obj=${objective.id}  ${objective.title}`,
   );
+
+  const dependencies = input.dependencies ?? [];
+  const dependencyLines = dependencies.map((edge) => {
+    const source = nameOf.get(edge.sourceId) ?? edge.sourceId;
+    const target = nameOf.get(edge.targetId) ?? edge.targetId;
+    return `dep=${edge.id}  ${edge.sourceId}(${source}) -[${edge.edgeType}]-> ${edge.targetId}(${target})`;
+  });
+
+  const ordered = input.teachingOrderIds ?? [];
+
   return [
     '当前知识/技能点（ref 是你唯一能引用的节点标识）',
     ...lines,
     '',
     '可支撑的学习目标（连线用 obj 引用）',
     ...(objectiveLines.length > 0 ? objectiveLines : ['(没有学习目标)']),
+    '',
+    '已声明的先后关系（要删除用 removedDependencies 指名 dep id）',
+    ...(dependencyLines.length > 0 ? dependencyLines : ['(还没有任何先后关系)']),
+    ...(ordered.length > 0
+      ? [
+          '',
+          '由先后关系推导出的讲授顺序（这是推导，不是你写的字段；要改就改边）',
+          ordered.map((id, index) => `${index + 1}. ${id}(${nameOf.get(id) ?? id})`).join(' → '),
+        ]
+      : []),
   ].join('\n');
 }

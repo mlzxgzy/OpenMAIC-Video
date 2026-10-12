@@ -11,9 +11,15 @@
  * sufficient. `gaps` names only what is missing from the graph itself, which is
  * what the card marks.
  */
-import { knowledgeGapsOfRecords, type KnowledgeGap } from '@/lib/curriculum/design-knowledge';
+import {
+  knowledgeFindings,
+  knowledgeGapsOfRecords,
+  teachingOrder,
+  type KnowledgeGap,
+} from '@/lib/curriculum/design-knowledge';
 import {
   nextCurriculumDesignPhase,
+  type CurriculumDependencyRecord,
   type CurriculumDesignConfirmationRecord,
   type CurriculumLearningNodeRecord,
   type CurriculumNodeObjectiveRecord,
@@ -31,7 +37,19 @@ export interface KnowledgePayload {
   nodeObjectives: CurriculumNodeObjectiveRecord[];
   /** The confirmed outcome list: the graph's other end, so the card can show it. */
   objectives: CurriculumObjectiveRecord[];
+  /** The ordering edges the author signs, so the card can show what precedes what. */
+  dependencies: CurriculumDependencyRecord[];
+  /**
+   * The teaching sequence, **derived** from `dependencies` and never stored.
+   *
+   * It lives here rather than in a column because it is a function of the edges: a
+   * stored copy drifts the first time an edge changes, and the outline stage is
+   * where a sequence is actually committed (`unit.orderIndex`).
+   */
+  teachingOrder: string[];
   gaps: KnowledgeGap[];
+  /** Advisory only — what the machine can see but must not decide for the author. */
+  findings: KnowledgeGap[];
   confirmation: CurriculumDesignConfirmationRecord | null;
   confirmed: boolean;
   nextPhase: string | null;
@@ -49,12 +67,21 @@ export async function knowledgeState(
   nodes: CurriculumLearningNodeRecord[],
   nodeObjectives: CurriculumNodeObjectiveRecord[],
   objectives: CurriculumObjectiveRecord[],
+  dependencies: CurriculumDependencyRecord[] = [],
 ): Promise<KnowledgePayload> {
-  const boardGaps = knowledgeGapsOfRecords(
-    nodes.map((row) => ({ id: row.id, name: row.name, nodeType: row.nodeType })),
-    nodeObjectives,
-    objectives.map((row) => ({ id: row.id, title: row.title })),
-  );
+  const nodeRefs = nodes.map((row) => ({ id: row.id, name: row.name, nodeType: row.nodeType }));
+  const objectiveRefs = objectives.map((row) => ({ id: row.id, title: row.title }));
+  const boardGaps = knowledgeGapsOfRecords(nodeRefs, nodeObjectives, objectiveRefs);
+  // Only node-to-node edges describe the order knowledge is taught in; an edge
+  // with an outcome endpoint is a plan-level claim the outline stage reads.
+  const edges = dependencies
+    .filter((edge) => edge.sourceKind === 'node' && edge.targetKind === 'node')
+    .map((edge) => ({
+      id: edge.id,
+      sourceId: edge.sourceId,
+      targetId: edge.targetId,
+      edgeType: edge.edgeType,
+    }));
   const confirmation = await getCurriculumDesignStepConfirmation(
     ctx.queryable,
     ctx.ownerId,
@@ -69,7 +96,12 @@ export async function knowledgeState(
     nodes,
     nodeObjectives,
     objectives,
+    dependencies,
+    teachingOrder: teachingOrder({ nodes: nodeRefs, dependencies: edges }).order.map(
+      (node) => node.id,
+    ),
     gaps: boardGaps,
+    findings: knowledgeFindings(nodeRefs, edges),
     confirmation,
     confirmed: confirmation !== null,
     nextPhase: next,

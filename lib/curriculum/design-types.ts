@@ -297,6 +297,37 @@ export const CURRICULUM_DEPENDENCY_EDGE_TYPES = [
 ] as const;
 export type CurriculumDependencyEdgeType = (typeof CURRICULUM_DEPENDENCY_EDGE_TYPES)[number];
 
+/**
+ * The edge types that make an **order claim**: "learn the source before the
+ * target". Stored in one place because two different questions are asked of the
+ * same column and answering them with two hand-written lists is how the store
+ * and the audit end up disagreeing about which graph is a legal one.
+ *
+ * - {@link CURRICULUM_DIRECTED_EDGE_TYPES} — the set the store keeps acyclic. It
+ *   is the **storage gate**: an edge of one of these types that would close a
+ *   loop is refused, so anything writing edges must pre-check against exactly
+ *   this set or it will be rolled back.
+ * - {@link CURRICULUM_ORDER_CLAIM_EDGE_TYPES} — the set the audit reads as "this
+ *   came before that". It is a **subset**: `supports` is a directed storage
+ *   constraint (two things cannot each support the other in a learning path) but
+ *   it does not by itself say which one is taught first, so ordering rules must
+ *   not infer a sequence from it.
+ */
+export const CURRICULUM_DIRECTED_EDGE_TYPES = [
+  'prerequisite',
+  'derives',
+  'supports',
+  'practices',
+  'progresses',
+] as const satisfies readonly CurriculumDependencyEdgeType[];
+
+export const CURRICULUM_ORDER_CLAIM_EDGE_TYPES = [
+  'prerequisite',
+  'derives',
+  'practices',
+  'progresses',
+] as const satisfies readonly CurriculumDependencyEdgeType[];
+
 export interface CurriculumDependencyRecord {
   id: string;
   taskId: string;

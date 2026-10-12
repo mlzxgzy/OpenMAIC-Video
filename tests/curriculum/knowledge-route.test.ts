@@ -59,6 +59,7 @@ import {
 import {
   advanceCurriculumTaskPhase,
   confirmCurriculumDesignStep,
+  createCurriculumDependency,
   createCurriculumEvidence,
   createCurriculumLearningNode,
   createCurriculumObjective,
@@ -419,6 +420,193 @@ describe('the step-3 knowledge routes', () => {
       await confirmCurriculumDesignStep(pool, OWNER, taskId, 'graph', 'user');
       const advanced = await advanceCurriculumTaskPhase(pool, OWNER, taskId);
       expect(advanced.designPhase).toBe('outline');
+    });
+  });
+
+  /**
+   * Step 4 folded into step 3: the ordering edges are written by the same turn and
+   * covered by the same sign-off. The assertions are on the stored rows, for the
+   * same reason the link tests are: a turn whose response looks right and whose
+   * edges did not land is exactly the failure this file exists to catch.
+   */
+  describe('ordering edges', () => {
+    const storedEdges = async () =>
+      (await getCurriculumDesignSnapshot(pool, OWNER, taskId)).dependencies
+        .map((row) => `${row.sourceId}-[${row.edgeType}]->${row.targetId}`)
+        .sort();
+
+    it('writes an edge between two nodes the turn is adding, by name', async () => {
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '拆成两步，先原理后利用。',
+          added: [
+            {
+              name: '联合查询原理',
+              nodeType: 'knowledge',
+              objectiveRefs: [{ objectiveRef: objSql, supportLevel: 'primary' }],
+            },
+            {
+              name: '联合查询利用',
+              nodeType: 'skill',
+              objectiveRefs: [{ objectiveRef: objSql, supportLevel: 'primary' }],
+            },
+          ],
+          dependencies: [
+            {
+              sourceRef: '联合查询原理',
+              targetRef: '联合查询利用',
+              edgeType: 'prerequisite',
+            },
+          ],
+          confirm: false,
+        }),
+      );
+      const response = await turnRequest(taskId, { instruction: 'SQL 注入拆细一点' });
+      expect(response.status).toBe(200);
+
+      const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, taskId);
+      const principle = snapshot.nodes.find((row) => row.name === '联合查询原理');
+      const exploit = snapshot.nodes.find((row) => row.name === '联合查询利用');
+      expect(snapshot.dependencies).toHaveLength(1);
+      // The endpoint was a name in the answer and has to be a real id in the row.
+      expect(snapshot.dependencies[0]).toMatchObject({
+        sourceId: principle?.id,
+        targetId: exploit?.id,
+        sourceKind: 'node',
+        targetKind: 'node',
+        edgeType: 'prerequisite',
+      });
+    });
+
+    it('drops a cyclic edge but still writes the rest of the turn', async () => {
+      const { first, second } = await seedNodes();
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '再补一个节点，并且让第二条反过来说明。',
+          added: [
+            {
+              name: '报错注入',
+              nodeType: 'skill',
+              objectiveRefs: [{ objectiveRef: objSql, supportLevel: 'primary' }],
+            },
+          ],
+          dependencies: [
+            { sourceRef: first.id, targetRef: second.id, edgeType: 'prerequisite' },
+            { sourceRef: second.id, targetRef: first.id, edgeType: 'prerequisite' },
+          ],
+          confirm: false,
+        }),
+      );
+      const response = await turnRequest(taskId, { instruction: '顺序反过来' });
+      expect(response.status).toBe(200);
+
+      // The legal edge landed, the cyclic one did not, and the node from the same
+      // turn survived: the store's own refusal would have rolled all of it back.
+      expect(await storedEdges()).toEqual([`${first.id}-[prerequisite]->${second.id}`]);
+      const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, taskId);
+      expect(snapshot.nodes.some((row) => row.name === '报错注入')).toBe(true);
+
+      const payload = (await response.json()) as {
+        warnings: string[];
+        teachingOrder: string[];
+      };
+      // A refused edge has to be said out loud: there is no row for a missing
+      // edge, so nothing else in the card would show it.
+      expect(payload.warnings.join('')).toContain('会形成环');
+      // And the sequence it derived is the one the surviving edge states.
+      expect(payload.teachingOrder[0]).toBe(first.id);
+    });
+
+    it('takes an edge away when the model names its dep id', async () => {
+      const { first, second } = await seedNodes();
+      const edge = await createCurriculumDependency(pool, OWNER, taskId, {
+        sourceId: first.id,
+        targetId: second.id,
+        sourceKind: 'node',
+        targetKind: 'node',
+        edgeType: 'prerequisite',
+      });
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '这两条其实没有先后，去掉。',
+          removedDependencies: [edge.id],
+          confirm: false,
+        }),
+      );
+      const response = await turnRequest(taskId, { instruction: '去掉那条先修' });
+      expect(response.status).toBe(200);
+      expect(await storedEdges()).toEqual([]);
+    });
+
+    it('withdraws the graph sign-off when an edge really changes, not when it is restated', async () => {
+      const { first, second } = await seedNodes();
+      const signOff = async () =>
+        (
+          await pool.query<{ id: string }>(
+            `SELECT id FROM curriculum_design_confirmation
+              WHERE owner_id = $1 AND task_id = $2 AND step = 'graph'`,
+            [OWNER, taskId],
+          )
+        ).rows[0];
+
+      await confirmCurriculumDesignStep(pool, OWNER, taskId, 'graph', 'user');
+
+      // Restating an edge that is already stored is not a change, so a turn that
+      // only repeats it must leave the sign-off alone.
+      await createCurriculumDependency(pool, OWNER, taskId, {
+        sourceId: first.id,
+        targetId: second.id,
+        sourceKind: 'node',
+        targetKind: 'node',
+        edgeType: 'prerequisite',
+      });
+      await confirmCurriculumDesignStep(pool, OWNER, taskId, 'graph', 'user');
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '顺序就是先参数化再盲注。',
+          dependencies: [{ sourceRef: first.id, targetRef: second.id, edgeType: 'prerequisite' }],
+          confirm: false,
+        }),
+      );
+      await turnRequest(taskId, { instruction: '确认一下顺序' });
+      expect(await signOff()).toBeDefined();
+
+      // A genuinely new claim reopens the step: the graph the author signed is not
+      // the graph they now have.
+      await seedNodes();
+      const nodes = (await getCurriculumDesignSnapshot(pool, OWNER, taskId)).nodes;
+      const third = nodes.find((row) => row.name === '布尔盲注');
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '先讲参数化，再讲盲注。',
+          dependencies: [{ sourceRef: first.id, targetRef: third?.id, edgeType: 'prerequisite' }],
+          confirm: false,
+        }),
+      );
+      await turnRequest(taskId, { instruction: '加一条先后关系' });
+      expect(await signOff()).toBeUndefined();
+    });
+
+    it('answers with the edges, the derived sequence and the advisory findings', async () => {
+      await seedNodes();
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '就这样。',
+          dependencies: [],
+          confirm: false,
+        }),
+      );
+      const response = await turnRequest(taskId, { instruction: '看看图' });
+      const payload = (await response.json()) as {
+        dependencies: unknown[];
+        teachingOrder: string[];
+        findings: { text: string }[];
+      };
+      expect(payload.dependencies).toEqual([]);
+      expect(Array.isArray(payload.teachingOrder)).toBe(true);
+      // Two nodes and no ordering edge: the machine can see that, and says so —
+      // but it is a finding, not a gap, so the card does not block on it.
+      expect(payload.findings.map((row) => row.text).join('')).toContain('还没有任何先后关系');
     });
   });
 });

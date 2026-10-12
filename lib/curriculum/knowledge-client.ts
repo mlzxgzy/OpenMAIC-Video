@@ -9,11 +9,13 @@
  * for the reason `direction-client.ts` gives: two copies of the endpoint strings is
  * how one of them ends up posting to a route that moved.
  *
- * Nothing is derived here. `gaps`, `phaseGaps` and `readyToAdvance` all come from the
- * server, which computes them from the store. A client that recomputed "the graph is
- * connected" would disagree with the gate the first time either changed.
+ * Nothing is derived here. `gaps`, `phaseGaps`, `teachingOrder` and
+ * `readyToAdvance` all come from the server, which computes them from the store. A
+ * client that recomputed "the graph is connected" — or "this is the teaching
+ * order" — would disagree with the gate the first time either changed.
  */
 import type {
+  CurriculumDependencyRecord,
   CurriculumDesignConfirmationRecord,
   CurriculumDesignPhase,
   CurriculumLearningNodeRecord,
@@ -32,7 +34,11 @@ export interface KnowledgeStatePayload {
   nodes: CurriculumLearningNodeRecord[];
   nodeObjectives: CurriculumNodeObjectiveRecord[];
   objectives: CurriculumObjectiveRecord[];
+  dependencies: CurriculumDependencyRecord[];
+  /** Node ids in teaching sequence, derived from `dependencies` on the server. */
+  teachingOrder: string[];
   gaps: KnowledgeGap[];
+  findings: KnowledgeGap[];
   confirmation: CurriculumDesignConfirmationRecord | null;
   confirmed: boolean;
   nextPhase: CurriculumDesignPhase | null;
@@ -43,6 +49,8 @@ export interface KnowledgeStatePayload {
 /** The shape `POST .../knowledge/turn` answers with. */
 export interface KnowledgeTurnPayload extends KnowledgeStatePayload {
   message: string;
+  /** What this turn could not honour, in the user's language. */
+  warnings: string[];
   confirmedThisTurn: boolean;
 }
 

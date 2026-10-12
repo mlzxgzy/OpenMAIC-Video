@@ -15,20 +15,26 @@ import { formatDirectionLine } from '@/lib/server/curriculum/outcomes-step';
 import {
   KnowledgeAnswerError,
   formatKnowledgeList,
+  knowledgeFindings,
   knowledgeGaps,
   knowledgeGapsOfRecords,
   mergeKnowledgePatch,
+  mergeNodeDependencies,
   mergeNodeLinks,
   parseKnowledgeAnswer,
   shouldConfirmKnowledge,
+  teachingOrder,
   type KnowledgeAnswer,
+  type KnowledgeDependencyRef,
   type KnowledgeGap,
   type KnowledgeNodeDraft,
   type KnowledgeNodePatch,
   type KnowledgeNodeRef,
   type KnowledgeRef,
+  type ResolvedDependency,
 } from '@/lib/curriculum/design-knowledge';
 import type {
+  CurriculumDependencyRecord,
   CurriculumLearningNodeRecord,
   CurriculumNodeObjectiveRecord,
   CurriculumObjectiveRecord,
@@ -52,6 +58,8 @@ export interface KnowledgeBoard {
   nodes: readonly KnowledgeNodeRef[];
   objectives: readonly KnowledgeRef[];
   linksByNode: ReadonlyMap<string, readonly KnowledgeLinkRef[]>;
+  /** 已存储的先后关系。删除要按 id 指名，所以这里带 id。 */
+  dependencies: readonly KnowledgeDependencyRef[];
 }
 
 export interface CourseKnowledgeInput {
@@ -92,9 +100,34 @@ export interface CourseKnowledgeResult {
    * links would leave the author staring at an unchanged graph.
    */
   changedLinks: boolean;
+  /**
+   * 这一轮之后要新增/改写的先后关系，端点已解析成真实节点 id。
+   *
+   * 与 `links` 不同，这里只有**被指名的边**：依赖是独立行，没提到的边不会因为没被
+   * 提到而消失，所以不需要（也不应该）传一整份集合。
+   */
+  dependencies: ResolvedDependency[];
+  /** 要删除的边，按 dep id。 */
+  removedDependencies: string[];
+  /**
+   * 这一轮的先后关系是否真的动过。与 `changedLinks` 同一个理由：一轮只加了一条先修
+   * 关系的对话也必须能确认，否则模型只能靠再动一次别的东西来解锁。
+   */
+  changedDependencies: boolean;
   unmatchedRefs: string[];
   rejectedRefs: string[];
   gaps: KnowledgeGap[];
+  /** 只报告、不拦签收的发现（同名节点、还没进先后关系的节点）。 */
+  findings: KnowledgeGap[];
+  /**
+   * 这一轮**没能照做**的事，人话。
+   *
+   * 与 `gaps` 分开，是因为两者要待的地方不同：`gaps` 是"图还不完整"的判定，会被重算，
+   * 所以只能包含**存得住**的事实；而"你要的顺序我写不进去"是关于**这一轮**的事实，
+   * 下一轮就消失。它必须出现在回包里（用户看得见），也必须拦住模型自己声明的确认
+   * （`gaps` 里有它）——否则一句"确认"会把一条没写进去的先修关系签字生效。
+   */
+  warnings: string[];
   userTurns: number;
 }
 
@@ -134,14 +167,35 @@ export function resolveKnowledgeTurn(input: {
   });
   unmatchedRefs.push(...linkRefs);
 
+  const knownNodeIds = new Set(input.board.nodes.map((entry) => entry.id));
+  const {
+    create: dependencies,
+    remove: removedDependencies,
+    unmatchedRefs: dependencyRefs,
+    droppedEdges,
+  } = mergeNodeDependencies({
+    knownNodeIds,
+    drafts: input.answer.added,
+    removed,
+    existing: input.board.dependencies,
+    removedDependencyIds: input.answer.removedDependencies,
+    proposed: input.answer.dependencies,
+  });
+  unmatchedRefs.push(...dependencyRefs);
+
   // Drafts are counted as nodes immediately, and their own links as links: the
   // turn that creates the first node of a task cannot otherwise ever confirm the
   // graph it just built, because the stored rows do not exist until afterwards.
   const draftNodeCount = input.answer.added.length;
 
   const links = collectLinks(input.board.linksByNode, replace, removed);
+  const changedDependencies = dependencies.length > 0 || removedDependencies.length > 0;
   const changedAnything =
-    input.answer.added.length > 0 || patches.size > 0 || removed.size > 0 || replace.size > 0;
+    input.answer.added.length > 0 ||
+    patches.size > 0 ||
+    removed.size > 0 ||
+    replace.size > 0 ||
+    changedDependencies;
 
   // Gaps after this turn. `knowledgeGaps` is the same function the card and the
   // gate use, so the three cannot disagree.
@@ -187,7 +241,44 @@ export function resolveKnowledgeTurn(input: {
       input.board.objectives.filter((objective) => !supportedObjectiveIds.has(objective.id)),
     ),
     ...unmatchedDraftLinks(input.answer.added, knownObjectiveIds),
+    // A dependency edge that did not land leaves no trace in the UI: unlike a node
+    // with no outcome (shown as "待挂目标"), there is no row for a missing edge, so
+    // "the model asked for an order and we refused" has to be said out loud. It
+    // also has to block the sign-off: the author would otherwise confirm a graph
+    // whose sequence is not the one they asked for.
+    ...droppedEdges.map((text) => ({ text })),
   ];
+
+  // The same findings the card shows, computed on the graph this turn leaves
+  // behind. Nodes added this turn have no id yet, so they carry their name as the
+  // id: a finding is a sentence, and for the two checks that matter here — two
+  // nodes with the same name, a node in no ordering relation — the name is the
+  // whole evidence.
+  const findings = knowledgeFindings(
+    [
+      ...survivingNodes,
+      ...input.answer.added.map((draft) => ({
+        id: draft.name,
+        name: draft.name,
+        nodeType: draft.nodeType,
+      })),
+    ],
+    [
+      ...input.board.dependencies.filter((edge) => !removedDependencies.includes(edge.id)),
+      ...dependencies.flatMap((edge) =>
+        edge.source.kind === 'node' && edge.target.kind === 'node'
+          ? [
+              {
+                id: '',
+                sourceId: edge.source.id,
+                targetId: edge.target.id,
+                edgeType: edge.edgeType,
+              },
+            ]
+          : [],
+      ),
+    ],
+  );
 
   return {
     message: input.answer.message,
@@ -200,6 +291,9 @@ export function resolveKnowledgeTurn(input: {
     // changed it while `links` has fewer rows than before, not more. Neither shows
     // up in `replace.size`, so the route is told separately.
     changedLinks: replace.size > 0 || input.answer.added.length > 0,
+    dependencies,
+    removedDependencies,
+    changedDependencies,
     confirmRequested: shouldConfirmKnowledge({
       confirmRequested: input.answer.confirmRequested,
       userTurns,
@@ -211,6 +305,8 @@ export function resolveKnowledgeTurn(input: {
     unmatchedRefs,
     rejectedRefs: input.answer.rejectedRefs,
     gaps,
+    findings,
+    warnings: [...droppedEdges, ...input.answer.rejectedRefs],
     userTurns,
   };
 }
@@ -283,6 +379,7 @@ export function knowledgeBoardOf(
   nodes: readonly CurriculumLearningNodeRecord[],
   objectives: readonly CurriculumObjectiveRecord[],
   links: readonly CurriculumNodeObjectiveRecord[],
+  dependencies: readonly CurriculumDependencyRecord[] = [],
 ): KnowledgeBoard {
   const linksByNode = new Map<string, KnowledgeLinkRef[]>();
   for (const link of links) {
@@ -307,6 +404,17 @@ export function knowledgeBoardOf(
       )
       .map((row) => ({ id: row.id, title: row.title })),
     linksByNode,
+    // Node-to-node edges only. An edge with an objective endpoint is not a claim
+    // about the order of the knowledge being taught, so it is not part of this
+    // board: the routes that read it are the ones that order units.
+    dependencies: dependencies
+      .filter((edge) => edge.sourceKind === 'node' && edge.targetKind === 'node')
+      .map((edge) => ({
+        id: edge.id,
+        sourceId: edge.sourceId,
+        targetId: edge.targetId,
+        edgeType: edge.edgeType,
+      })),
   };
 }
 
@@ -333,6 +441,28 @@ export function draftLinksOf(
 }
 
 /**
+ * The graph listing the prompt shows, including the ordering edges and the order
+ * they already imply.
+ *
+ * The derived order is printed rather than stored (`teachingOrder` says why), so
+ * the model can see the consequence of the edges it wrote last turn and argue
+ * with it — which is exactly what a sequence stated as a number would not allow:
+ * a number the model cannot see the derivation of is a number it cannot check.
+ */
+export function knowledgeGraphText(board: KnowledgeBoard): string {
+  return formatKnowledgeList({
+    nodes: board.nodes,
+    objectives: board.objectives,
+    linksByNode: board.linksByNode,
+    dependencies: board.dependencies,
+    teachingOrderIds: teachingOrder({
+      nodes: board.nodes,
+      dependencies: board.dependencies,
+    }).order.map((node) => node.id),
+  });
+}
+
+/**
  * Run one knowledge turn. Throws {@link KnowledgeAnswerError} when the answer is
  * not usable as a graph change; the caller maps that to a 502 and the graph is
  * left exactly as it was.
@@ -343,7 +473,7 @@ export async function draftCourseKnowledge(
 ): Promise<CourseKnowledgeResult> {
   const prompts = buildPrompt(PROMPT_IDS.COURSE_KNOWLEDGE, {
     direction: input.direction,
-    graph: formatKnowledgeList(input.board),
+    graph: knowledgeGraphText(input.board),
     gaps: gapsText(
       knowledgeGapsOfRecords(
         input.board.nodes,

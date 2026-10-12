@@ -73,7 +73,11 @@ import {
 } from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
 import { changedDirectionKeys, directionValuesOf } from '@/lib/curriculum/design-direction';
-import { deriveVerifiability, nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
+import {
+  CURRICULUM_DIRECTED_EDGE_TYPES,
+  deriveVerifiability,
+  nextCurriculumDesignPhase,
+} from '@/lib/curriculum/design-types';
 import { examStrictRefusal } from '@/lib/curriculum/lab-authoring';
 import { curriculumQualityLayerLabel } from '@/lib/curriculum/quality-labels';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
@@ -1738,6 +1742,11 @@ export async function deleteCurriculumObjective(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('学习目标不存在');
+  // A deleted outcome takes its ordering edges with it, for the same reason a
+  // node does: the edge endpoints are not foreign keys, so nothing cascades.
+  await deleteDependencyEdgesForEndpoints(queryable, ownerId, row.task_id, 'objective', [
+    objectiveId,
+  ]);
   // A deleted outcome is always a real change: there is no "no-op delete".
   await withdrawOutcomesSignOff(queryable, ownerId, row.task_id);
 }
@@ -1927,6 +1936,7 @@ export async function deleteCurriculumLearningNode(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
+  await deleteDependencyEdgesForEndpoints(queryable, ownerId, row.task_id, 'node', [nodeId]);
   await withdrawKnowledgeSignOff(queryable, ownerId, row.task_id);
 }
 
@@ -2039,18 +2049,16 @@ function listLinksForTask(
 // ── Dependency CRUD ─────────────────────────────────────────────────────────
 
 /**
- * The directed learning-order edges, kept acyclic. `related` and `composes`
- * are not order claims, so they are exempt: a cycle in "these two topics are
- * related to each other" is not a design error, while a cycle in
- * "you must learn A before B" is.
+ * The directed learning-order edges, kept acyclic. `composes` is not an order
+ * claim, so it is exempt: a cycle in "these two topics are composed of each
+ * other" is not a design error, while a cycle in "you must learn A before B" is.
+ *
+ * The set itself lives in `design-types.ts` because the rules layer that writes
+ * these edges from a conversation turn has to pre-check exactly this set — a
+ * pre-check against a different list would let the store roll the whole turn
+ * back on an edge the rules layer thought was legal.
  */
-const DIRECTED_EDGE_TYPES: readonly CurriculumDependencyEdgeType[] = [
-  'prerequisite',
-  'derives',
-  'supports',
-  'practices',
-  'progresses',
-];
+const DIRECTED_EDGE_TYPES: readonly CurriculumDependencyEdgeType[] = CURRICULUM_DIRECTED_EDGE_TYPES;
 
 export async function createCurriculumDependency(
   queryable: Queryable,
@@ -2075,6 +2083,17 @@ export async function createCurriculumDependency(
     input.edgeType,
   );
 
+  // Re-recording an edge that is already stored exactly as asked is not a change
+  // to the graph, so it must not withdraw the sign-off. The insert below is an
+  // upsert, so without this comparison a turn that restates the whole dependency
+  // set would reopen a step the author had already signed.
+  const strength = input.strength ?? 1.0;
+  const note = optionalText(input.note);
+  const existing = await readDependencyRowByEdge(queryable, ownerId, taskId, input);
+  if (existing && numeric(existing.strength) === strength && existing.note === note) {
+    return mapDependency(existing);
+  }
+
   const result = await queryable.query<DependencyRow>(
     `INSERT INTO curriculum_dependency
        (id, owner_id, task_id, source_id, target_id, source_kind, target_kind, edge_type,
@@ -2092,13 +2111,47 @@ export async function createCurriculumDependency(
       input.sourceKind,
       input.targetKind,
       input.edgeType,
-      input.strength ?? 1.0,
-      optionalText(input.note),
+      strength,
+      note,
     ],
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('依赖创建失败');
+  // A learning-order claim is part of the graph the author signs. It was not
+  // withdrawn before this step existed because nothing but the workbench wrote
+  // edges; now that a conversation turn writes them, an edge added after the
+  // sign-off would otherwise advance a step whose content had changed.
+  await withdrawKnowledgeSignOff(queryable, ownerId, taskId);
   return mapDependency(row);
+}
+
+/** The stored edge with this exact natural key, or null. */
+async function readDependencyRowByEdge(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  input: Pick<
+    CurriculumDependencyInput,
+    'sourceId' | 'targetId' | 'sourceKind' | 'targetKind' | 'edgeType'
+  >,
+): Promise<DependencyRow | null> {
+  const result = await queryable.query<DependencyRow>(
+    `SELECT ${DEPENDENCY_COLUMNS} FROM curriculum_dependency
+      WHERE owner_id = $1 AND task_id = $2
+        AND source_kind = $3 AND source_id = $4
+        AND target_kind = $5 AND target_id = $6
+        AND edge_type = $7`,
+    [
+      ownerId,
+      taskId,
+      input.sourceKind,
+      input.sourceId,
+      input.targetKind,
+      input.targetId,
+      input.edgeType,
+    ],
+  );
+  return result.rows[0] ?? null;
 }
 
 /**
@@ -2148,11 +2201,45 @@ export async function deleteCurriculumDependency(
   ownerId: string,
   dependencyId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_dependency WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_dependency WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, dependencyId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('依赖不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('依赖不存在');
+  // Removing an edge is a change to the signed graph, exactly as adding one is.
+  // A dependency id exists only while the row does, so there is no no-op delete
+  // to special-case here.
+  await withdrawKnowledgeSignOff(queryable, ownerId, row.task_id);
+}
+
+/**
+ * Drop every edge that names one of these endpoints.
+ *
+ * `curriculum_dependency` is polymorphic — the endpoints are `(kind, id)` pairs
+ * rather than two foreign keys — so nothing cascades when a node or an outcome
+ * is deleted. Without this the graph keeps edges pointing at rows that no longer
+ * exist: `dependency_cycle` reports a loop through an id nothing can resolve,
+ * and an orphan node is invisible because a dangling edge still "names" it.
+ * The table's shape buys one graph with a single recursive walk; this is the
+ * cleanup that shape requires, and it belongs on the delete path rather than in
+ * every reader.
+ */
+async function deleteDependencyEdgesForEndpoints(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  kind: CurriculumDependencyKind,
+  ids: readonly string[],
+): Promise<void> {
+  if (ids.length === 0) return;
+  await queryable.query(
+    `DELETE FROM curriculum_dependency
+      WHERE owner_id = $1 AND task_id = $2
+        AND ((source_kind = $3 AND source_id = ANY($4::text[]))
+          OR (target_kind = $3 AND target_id = ANY($4::text[])))`,
+    [ownerId, taskId, kind, [...ids]],
+  );
 }
 
 // ── Unit CRUD ───────────────────────────────────────────────────────────────

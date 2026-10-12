@@ -54,7 +54,11 @@ import {
   formatDirectionCard,
 } from '@/lib/curriculum/design-direction';
 import { formatOutcomeList, outcomeGapsOfRecords } from '@/lib/curriculum/design-outcomes';
-import { formatKnowledgeList, knowledgeGapsOfRecords } from '@/lib/curriculum/design-knowledge';
+import {
+  formatKnowledgeList,
+  knowledgeGapsOfRecords,
+  teachingOrder,
+} from '@/lib/curriculum/design-knowledge';
 import { traceFromObjective } from '@/lib/curriculum/traceability';
 import {
   CurriculumDesignNotFoundError,
@@ -1237,17 +1241,34 @@ export function buildCurriculumDesignTools(
         'assistant',
       );
       const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      // The listing carries the ordering edges and the sequence they imply, so the
+      // answer states what was actually signed rather than only the node count: a
+      // sign-off covers the order too, and the order is derived rather than stored.
+      const confirmedNodes = snapshot.nodes.map((row) => ({
+        id: row.id,
+        name: row.name,
+        nodeType: row.nodeType,
+      }));
+      const confirmedEdges = snapshot.dependencies
+        .filter((edge) => edge.sourceKind === 'node' && edge.targetKind === 'node')
+        .map((edge) => ({
+          id: edge.id,
+          sourceId: edge.sourceId,
+          targetId: edge.targetId,
+          edgeType: edge.edgeType,
+        }));
       return toolResult(
         `Knowledge and skill graph confirmed by the user (step 3 of 7). ${snapshot.nodes.length} nodes, ` +
-          `${snapshot.nodeObjectives.length} links.\n` +
+          `${snapshot.nodeObjectives.length} links, ${confirmedEdges.length} ordering edges.\n` +
           formatKnowledgeList({
-            nodes: snapshot.nodes.map((row) => ({
-              id: row.id,
-              name: row.name,
-              nodeType: row.nodeType,
-            })),
+            nodes: confirmedNodes,
             objectives: snapshot.objectives.map((row) => ({ id: row.id, title: row.title })),
             linksByNode: linksByNodeOf(snapshot.nodeObjectives),
+            dependencies: confirmedEdges,
+            teachingOrderIds: teachingOrder({
+              nodes: confirmedNodes,
+              dependencies: confirmedEdges,
+            }).order.map((node) => node.id),
           }) +
           '\n' +
           (next
@@ -1452,7 +1473,7 @@ export function buildCurriculumDesignTools(
     name: 'create_dependency',
     label: 'Add dependency edge',
     description:
-      'Add an edge to the learning dependency graph — what must come before what. Cycles are refused. If an outcome turns out to be missing a prerequisite, add the node that supplies it rather than only noting the gap.',
+      'Add an edge to the learning dependency graph — what must come before what. The teaching sequence is derived from these edges rather than stored, so an order only described in prose does not exist. Cycles are refused; if an outcome turns out to be missing a prerequisite, add the node that supplies it rather than only noting the gap.',
     parameters: CreateDependencyParams,
     executionMode: 'sequential',
     async execute(_id, params, signal) {

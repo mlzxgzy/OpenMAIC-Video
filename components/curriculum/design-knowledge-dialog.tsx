@@ -43,6 +43,7 @@ import {
   type KnowledgeTurn,
 } from '@/lib/curriculum/knowledge-client';
 import type {
+  CurriculumDependencyRecord,
   CurriculumDesignConfirmationRecord,
   CurriculumLearningNodeRecord,
 } from '@/lib/curriculum/design-types';
@@ -60,7 +61,7 @@ function initialTurn(): KnowledgeTurn {
   return {
     role: 'assistant',
     content:
-      '这一步只回答一个问题：为了做到那些学习目标，学生得先掌握哪些知识、练会哪些操作。我会把它们拆成知识技能点，并说明每一条支撑哪些目标——章节和讲授顺序留到下一步，你改完点确认。',
+      '这一步回答两件事：为了做到那些学习目标，学生得先掌握哪些知识、练会哪些操作；以及这些知识技能点之间谁先谁后。我会把它们拆成节点、挂上支撑的目标、连出先后关系——讲什么、按什么顺序讲都由你改，改完点确认。章节和条目留到下一步。',
   };
 }
 
@@ -68,7 +69,10 @@ const EMPTY_STATE: KnowledgeStatePayload = {
   nodes: [],
   nodeObjectives: [],
   objectives: [],
+  dependencies: [],
+  teachingOrder: [],
   gaps: [{ text: '还没有知识/技能点：从已确认的学习目标反推' }],
+  findings: [],
   confirmation: null,
   confirmed: false,
   nextPhase: null,
@@ -88,6 +92,10 @@ export function DesignKnowledgeDialog({
   const [busy, setBusy] = useState<'send' | 'confirm' | 'withdraw' | 'load' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // What the last turn could not honour. Kept separate from `error` because the
+  // turn did succeed: the graph changed, one instruction did not land, and the
+  // author has to be able to tell those apart.
+  const [warnings, setWarnings] = useState<string[]>([]);
   const listEnd = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -96,6 +104,7 @@ export function DesignKnowledgeDialog({
     setState(EMPTY_STATE);
     setError(null);
     setNotice(null);
+    setWarnings([]);
     setBusy('load');
     void readKnowledgeState(taskId)
       .then(setState)
@@ -118,6 +127,7 @@ export function DesignKnowledgeDialog({
     setBusy('send');
     setError(null);
     setNotice(null);
+    setWarnings([]);
     try {
       const payload = await sendKnowledgeTurn({ taskId, instruction, history });
       setTurns((current) => [
@@ -130,6 +140,7 @@ export function DesignKnowledgeDialog({
         },
       ]);
       setState(payload);
+      setWarnings(payload.warnings ?? []);
       if (payload.confirmedThisTurn) {
         setNotice('已按你在对话里的确认记录：知识技能图已确认。');
       }
@@ -173,8 +184,20 @@ export function DesignKnowledgeDialog({
 
   const busyNow = busy !== null;
   const titleOf = (id: string) => state.objectives.find((row) => row.id === id)?.title ?? id;
+  const nameOf = (id: string) => state.nodes.find((row) => row.id === id)?.name ?? id;
   const linksOf = (node: CurriculumLearningNodeRecord) =>
     state.nodeObjectives.filter((row) => row.nodeId === node.id);
+  // Only node-to-node edges describe teaching order; edges with an outcome
+  // endpoint belong to the outline stage and would read as noise on this card.
+  const nodeIds = new Set(state.nodes.map((row) => row.id));
+  const edges: CurriculumDependencyRecord[] = state.dependencies.filter(
+    (edge) => nodeIds.has(edge.sourceId) && nodeIds.has(edge.targetId),
+  );
+  const prerequisitesOf = (nodeId: string) =>
+    edges.filter((edge) => edge.targetId === nodeId).map((edge) => nameOf(edge.sourceId));
+  const precedesOf = (nodeId: string) =>
+    edges.filter((edge) => edge.sourceId === nodeId).map((edge) => nameOf(edge.targetId));
+  const orderIndex = new Map(state.teachingOrder.map((id, index) => [id, index + 1]));
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -185,8 +208,8 @@ export function DesignKnowledgeDialog({
             第三步：知识点与技能点拆解
           </DialogTitle>
           <DialogDescription>
-            聊清楚为了做到那些学习目标，学生得先掌握什么。AI
-            写的每个知识技能点和每条支撑关系都会直接存进课程设计；你改完点「确认知识技能图」，才允许进入大纲阶段。这一步不排章节。
+            聊清楚为了做到那些学习目标，学生得先掌握什么、按什么顺序学。AI
+            写的每个知识技能点、每条支撑关系和先后关系都会直接存进课程设计；你改完点「确认知识技能图」，才允许进入大纲阶段。这一步不排章节——讲授顺序由先后关系推导，不是一个写死的序号。
           </DialogDescription>
         </DialogHeader>
 
@@ -254,6 +277,15 @@ export function DesignKnowledgeDialog({
                         <Badge variant="outline" className="px-1 py-0 text-[10px]">
                           {NODE_TYPE_LABELS[node.nodeType]}
                         </Badge>
+                        {orderIndex.has(node.id) ? (
+                          <Badge
+                            variant="secondary"
+                            className="px-1 py-0 text-[10px]"
+                            title="由先后关系推导出的讲授顺序"
+                          >
+                            第 {orderIndex.get(node.id)} 讲
+                          </Badge>
+                        ) : null}
                         {links.length === 0 ? (
                           <Badge
                             className="border-amber-500/50 bg-amber-500/10 px-1 py-0 text-[10px] text-amber-700 dark:text-amber-300"
@@ -273,12 +305,18 @@ export function DesignKnowledgeDialog({
                           label: `${titleOf(link.objectiveId)}（${SUPPORT_LEVEL_LABELS[link.supportLevel]}）`,
                         }))}
                       />
+                      <OrderSummary
+                        prerequisites={prerequisitesOf(node.id)}
+                        precedes={precedesOf(node.id)}
+                      />
                     </li>
                   );
                 })}
               </ul>
             )}
+            <OrderList order={state.teachingOrder} nameOf={nameOf} total={state.nodes.length} />
             <GapList gaps={state.gaps} />
+            <FindingList findings={state.findings} />
           </div>
         </div>
 
@@ -286,6 +324,17 @@ export function DesignKnowledgeDialog({
           <div className="border-destructive/40 bg-destructive/5 text-destructive flex items-start gap-2 rounded-lg border p-3 text-xs">
             <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
             {error}
+          </div>
+        ) : null}
+        {warnings.length > 0 ? (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-xs text-amber-700 dark:text-amber-300">
+            <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+            <ul className="space-y-0.5">
+              <li className="font-medium">这一轮有 {warnings.length} 件事没能照你说的写进去：</li>
+              {warnings.map((warning) => (
+                <li key={warning}>· {warning}</li>
+              ))}
+            </ul>
           </div>
         ) : null}
         {notice ? (
@@ -353,6 +402,74 @@ function LinkSummary({ rows }: { rows: readonly { id: string; label: string }[] 
   }
   return (
     <span className="text-muted-foreground">支撑：{rows.map((row) => row.label).join('；')}</span>
+  );
+}
+
+/**
+ * What comes before and after one node.
+ *
+ * The sequence is stated as edges rather than as a number the author can edit,
+ * because the number would be a second source of truth: change one prerequisite
+ * and every later position is wrong. The card shows the derived position instead.
+ */
+function OrderSummary({
+  prerequisites,
+  precedes,
+}: {
+  prerequisites: readonly string[];
+  precedes: readonly string[];
+}) {
+  if (prerequisites.length === 0 && precedes.length === 0) {
+    return (
+      <span className="text-[11px] text-amber-700 dark:text-amber-300">
+        先后：还没有和其他知识技能点连起来
+      </span>
+    );
+  }
+  return (
+    <span className="text-muted-foreground text-[11px]">
+      {prerequisites.length > 0 ? `先修：${prerequisites.join('、')}` : '先修：无（可以作为起点）'}
+      {precedes.length > 0 ? `　后续：${precedes.join('、')}` : ''}
+    </span>
+  );
+}
+
+/** The sequence the edges already imply, so the author can disagree with it. */
+function OrderList({
+  order,
+  nameOf,
+  total,
+}: {
+  order: readonly string[];
+  nameOf: (id: string) => string;
+  total: number;
+}) {
+  if (order.length === 0 || total === 0) return null;
+  const unplaced = total - order.length;
+  return (
+    <div className="border-border rounded-lg border p-3 text-[11px]">
+      <div className="mb-1 font-medium">讲授顺序（由先后关系推导）</div>
+      <div className="text-muted-foreground">
+        {order.map((id, index) => `${index + 1}. ${nameOf(id)}`).join(' → ')}
+      </div>
+      {unplaced > 0 ? (
+        <div className="mt-1 text-amber-700 dark:text-amber-300">
+          还有 {unplaced} 个点没有进入顺序：它们的先后关系成环，或者还没连过
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** Advisory only: neither of these blocks the sign-off. */
+function FindingList({ findings }: { findings: readonly KnowledgeGap[] }) {
+  if (findings.length === 0) return null;
+  return (
+    <ul className="text-muted-foreground space-y-0.5 text-[11px]">
+      {findings.map((finding) => (
+        <li key={`${finding.ref ?? ''}-${finding.text}`}>· {finding.text}</li>
+      ))}
+    </ul>
   );
 }
 

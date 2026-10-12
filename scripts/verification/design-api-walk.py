@@ -295,11 +295,33 @@ st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/dependenc
     "edgeType": "prerequisite", "strength": 0.9})
 check("POST /dependencies -> 201", st, 201)
 
+# An ordering edge is part of the graph the author signs. Writing one after the
+# sign-off has to reopen the step, or the phase machine advances on a graph whose
+# sequence the author never read.
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/knowledge")
+check("writing an ordering edge withdraws the graph sign-off", body.get("confirmed"), False)
+check("GET /knowledge returns the edge", len(body.get("dependencies", [])), 1)
+check("the sequence is derived from it, prerequisite first",
+      body.get("teachingOrder"), [n_http, n_sql])
+show("findings (advisory, must not block)", body.get("findings", []))
+
+# Re-recording the same edge is not a change, so it must not reopen the step.
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/knowledge")
+check("re-confirm after the edge -> 200", st, 200)
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/dependencies", {
+    "sourceId": n_http, "targetId": n_sql, "sourceKind": "node", "targetKind": "node",
+    "edgeType": "prerequisite", "strength": 0.9})
+check("re-recording the same edge -> 201", st, 201)
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/knowledge")
+check("restating an edge keeps the sign-off", body.get("confirmed"), True)
+
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/dependencies", {
     "sourceId": n_sql, "targetId": n_http, "sourceKind": "node", "targetKind": "node",
     "edgeType": "prerequisite"})
 check("cycle refused", st in (400, 409), True)
 show("cycle refusal", body)
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/knowledge")
+check("a refused edge changes nothing, sign-off included", body.get("confirmed"), True)
 
 # the graph is now fully linked, so the outline may be entered
 st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/phase")
@@ -637,6 +659,30 @@ else:
                             if l["nodeId"] != target["id"]}
                     want_kept = {(l["nodeId"], l["objectiveId"]) for l in keep}
                     check("links of untouched nodes survived a re-link", kept, want_kept)
+
+                # Ordering edges, written by the same conversation and covered by
+                # the same sign-off. The sequence is *derived*, so what the walk can
+                # check is that an edge landed as a row and that the derived order
+                # honours it — a number in a field could not be checked this way.
+                st, order_body = req(owner, "POST",
+                                     f"/api/curriculum/design/tasks/{ai_id}/knowledge/turn",
+                                     {"instruction": "说明这些知识点之间的先后关系："
+                                                    "哪些必须先掌握才能学下一个，"
+                                                    "用先后关系表达，不要排章节"})
+                check("the ordering turn -> 200", st, 200)
+                edges = order_body.get("dependencies", [])
+                order_ids = order_body.get("teachingOrder", [])
+                print(f"    ordering edges={len(edges)} derived order={len(order_ids)}")
+                order_nodes = {n["id"] for n in order_body.get("nodes", [])}
+                check("every ordering edge names two real nodes",
+                      all(e["sourceId"] in order_nodes and e["targetId"] in order_nodes
+                          for e in edges), True)
+                check("the derived sequence covers every node exactly once",
+                      sorted(order_ids), sorted(order_nodes))
+                for e in edges[:5]:
+                    print(f"    - {e['sourceId']} -[{e['edgeType']}]-> {e['targetId']}")
+                for warning in order_body.get("warnings", [])[:3]:
+                    print(f"    warning: {warning}")
 
                 # Whatever the model left open, the author closes it by hand.
                 st, state = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_id}/knowledge")

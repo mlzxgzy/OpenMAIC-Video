@@ -12,10 +12,12 @@
 > 小节**已过时**，请以 [`CHANGELOG.fork.md`](../../CHANGELOG.fork.md) 的
 > `[1.2.0-video.3]` 发布节为准。
 >
-> **S6 / S7 已落地**，落地记录见 [第十二节](#十二s6-落地记录已完成第一步改成-ai-对话--用户签收)
-> 与 [第十三节](#十三s7-落地记录已完成第二步学习目标与考核标准)：新建课程与学习目标
-> 两步都改为「AI 对话填写 + 用户签收」，共用 `curriculum_design_confirmation` 表，
-> `task → outcomes` 与 `outcomes → graph` 两道门禁都读它。
+> **S6 / S7 / S8 已落地**，落地记录见 [第十二节](#十二s6-落地记录已完成第一步改成-ai-对话--用户签收)、
+> [第十三节](#十三s7-落地记录已完成第二步学习目标与考核标准) 与
+> [S8](#s8-第四步并进第三步先后关系即为边)：新建课程、学习目标、知识技能图三步都改为
+> 「AI 对话填写 + 用户签收」，共用 `curriculum_design_confirmation` 表，
+> `task → outcomes` 与 `outcomes → graph` 两道门禁都读它；第四步「依赖与排序」并入
+> 第三步，写成同一张图上的有向边，不再单独成阶段。
 >
 > 本文件在上游忽略的 `/docs` 目录下，本 fork 用 `git add -f` 将它纳入版本库。
 
@@ -822,6 +824,7 @@ S4  页面层    设计工作台 6 阶段 + 双视角 + 审核面板
 S5  流程层    deck_design → outline 输入契约 + 实操目生成 + 质量门
 S6  流程层    第一步课程方向 = AI 对话填写 + 用户签收门禁
 S7  流程层    第二步学习目标与考核标准 = AI 对话 + 签收；清单用 ref 指名改动
+S8  流程层    第三步知识点拆解 + 先后关系；第四步并入此步，顺序由边推导
 ```
 
 **S1→S2 可以立刻产生价值**：即使 UI 全不动，`audit.ts` 跑一遍现有 CTF 数据就能立刻告出"哪些目标没考、哪些知识点是孤儿"。
@@ -1315,3 +1318,90 @@ Brief ──▶ 知识点 ──▶ 大纲     Brief ──▶ 能力目标 ─�
 ```
 
 相关文件：[types.ts](lib/curriculum/types.ts)、[curriculum.ts](lib/persistence/curriculum.ts)、[assembly.ts](lib/curriculum/assembly.ts)、[coverage.ts](lib/curriculum/coverage.ts)、[course-workspace.tsx](components/curriculum/course-workspace.tsx)、[course-assembler-panel.tsx](components/curriculum/course-assembler-panel.tsx)、[stage-writer-tools.ts](lib/agent-runtime/stage-writer-tools.ts)、[understanding-by-design/SKILL.md](skills/agent-runtime/understanding-by-design/SKILL.md)、[vocational/SKILL.md](skills/agent-runtime/vocational/SKILL.md)、[generation.ts](lib/types/generation.ts)
+---
+
+# S8 第四步并进第三步：先后关系即为边
+
+## 先回答"这一步要不要做"
+
+原计划的第四步是「内容依赖分析与教学排序」，四件事：前置知识、先后顺序、重复内容、
+缺失环节。查了一遍消费方，结论是**它不该是一个独立阶段**：
+
+| 这一步想写的东西 | 谁在读 | 结论 |
+|---|---|---|
+| 节点间依赖边 `curriculum_dependency`（node→node） | 除路由与 schema 测试外**没有业务读方** | 需要在这一步写，否则永远是死数据 |
+| 节点排序位 `node.sortOrder` | 只影响列表显示；审核的顺序规则读的是 **`unit.orderIndex`** | **不写**：它是先后关系的函数，存下来就是第二份真相 |
+
+于是把它并进第三步，落成三件事。
+
+## 1. 顺序是**边**推导出来的，不是一个字段
+
+模型提交 `dependencies`（`sourceRef` → `targetRef`），只增删被指名的边。讲授顺序由
+`teachingOrder()` 做拓扑排序**推导**出来，只用于展示与提示词，**不写回任何列**：
+大纲阶段真正排顺序的是 `unit.orderIndex`，在节点上再存一份，改一条边就会漂移。
+
+同一层里 `supports` 不参与排序——它说明两个节点互相支撑，不说明谁先讲。这个区分现在
+收在 [design-types.ts](lib/curriculum/design-types.ts) 的两个常量里
+（`CURRICULUM_DIRECTED_EDGE_TYPES` 是 store 保持无环的那一组，
+`CURRICULUM_ORDER_CLAIM_EDGE_TYPES` 是审核读作"先学谁"的那一组），免得 store 与规则层
+各写一份、各写各的。
+
+## 2. 会成环的边在**规则层**丢掉，因为 store 会回滚整轮
+
+`createCurriculumDependency` 的环检测抛的是 `CurriculumDesignValidationError`：一轮里
+几十个节点 + 一条写错的先修关系，结果整轮回滚。所以 `mergeNodeDependencies` 用**同一组
+边类型**先走一遍可达性，把成环的那条丢掉。
+
+丢掉之后必须**说出来**：一条没写进去的边在界面上没有任何痕迹——不像"节点没挂目标"会
+显示成待挂状态。所以它进两处：回包里的 `warnings`（用户看得见），以及这一轮的 `gaps`
+（拦掉模型自己声明的确认）。重述同一批边不算改动，不会撤回签收。
+
+## 3. 三类发现分开，别混成一个"缺口"
+
+| 发现 | 处理 | 理由 |
+|---|---|---|
+| 边成环、指向不存在的节点、删一条不存在的边 | **拒写 + 记账 + 警告** | 用户的指令没被执行，必须看见 |
+| 两个节点同名 | **只报告** | 合并要的是语义判断；只按同名报，别假装判得了重复内容 |
+| 节点没参与任何先后关系 | **只报告** | 独立内容不排顺序是合法的，报出来让人决定 |
+
+**语义上的重复内容判定仍然留给覆盖分析那一步**：那时课程全文已经在了，模型说"这两处
+真的重复"有依据，而在这里只有名字可比。
+
+## 顺手修掉的两个真 bug
+
+1. **依赖边写完后不撤回 `graph` 签收**：`createCurriculumDependency` /
+   `deleteCurriculumDependency` 都不调用撤回逻辑（此前只有工作台写边，没人注意）。
+   一条先修关系是作者签字认可的图的一部分，签完之后加一条就是"签的那份已经变了"。
+   同时加了"完全相同的边重录不算改动"，否则一轮把整份依赖集重述一遍就会撤回签收。
+2. **删除节点/目标留下悬空边**：`curriculum_dependency` 的端点是 `(kind, id)` 而非外键
+   （多态表换来"一张图一次递归遍历"），所以**什么都不级联**。删掉一个节点，指向它的边
+   还在：`dependency_cycle` 会报一条经过不存在 id 的环，而一个孤儿节点会因为一条悬空边
+   而"看起来还有依赖"。现在两个删除路径都会清掉相关边。
+
+## 测试抓到的第三件事：这个文件已经红了一整轮
+
+`tests/persistence/curriculum-design-store.test.ts` 的 `advanceTo` 助手**没有跟上第二、
+三步新增的签收门禁**（`outcomes` 与 `graph`），所以它有 20 个用例从第二步落地起就一直
+失败——而常规命令只跑 `tests/curriculum`，没人看见。修好助手（并让"证据门禁"那个用例
+先满足签收、再断言它真正要测的东西）之后 31 例全绿。
+
+## 验证
+
+| 项 | 结果 |
+|---|---|
+| 规则层新增 | `sanitizeDependency` / 解析 / `mergeNodeDependencies` / `teachingOrder` / `knowledgeFindings` / 列表渲染，共 22 例 |
+| 步骤层新增 | 4 例（草稿端点、成环成缺口、只加边也能确认、不写排序位） |
+| 路由层新增 | 5 例（PGlite，断言库里 `curriculum_dependency` 的行） |
+| 存储层新增 | 2 例（边写删撤回签收、删节点带走边） |
+| `tests/curriculum` | 全绿 |
+| `tests/persistence/curriculum-design-store.test.ts` | 31/31（修好陈旧的助手之后） |
+| tsc / eslint / prettier | 全绿 |
+| 活体 walk | 见 [artifacts/regression/design-walk-step4.txt](artifacts/regression/design-walk-step4.txt) |
+| 界面 | 仍**未做浏览器端驱动验证**（同 S6/S7：Playwright 期望的 chromium 版本本机不具备） |
+
+## 尚未做（继续往后）
+
+- 第五步「大纲 / 教学条目」：`unit.orderIndex` 才是提交顺序的地方；`dependency_out_of_order`
+  那时才有意义（它比的是目标图与交付顺序）
+- 覆盖分析那一步的语义重复检测
+- 浏览器端驱动验证

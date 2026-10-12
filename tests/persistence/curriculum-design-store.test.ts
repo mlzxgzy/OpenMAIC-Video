@@ -25,6 +25,8 @@ import {
   createCurriculumUnit,
   createCurriculumUnitCoverage,
   createCurriculumUnitDependency,
+  deleteCurriculumDependency,
+  deleteCurriculumLearningNode,
   deleteCurriculumUnitDependency,
   CurriculumDesignNotFoundError,
   CurriculumDesignValidationError,
@@ -111,6 +113,11 @@ describe('reverse-design store (PGlite)', () => {
       successCondition: '成功读取 /flag',
       conditionExpression: "readFile('/flag') === true",
     });
+    // The outcome list's own sign-off, for the same reason step 1 has one: a
+    // complete list is not an agreed one. Without this the helper cannot reach
+    // `graph` at all, and the twenty tests that use it fail for a reason that has
+    // nothing to do with what they check.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outcomes', 'user');
     // → graph
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'graph') return;
@@ -122,6 +129,11 @@ describe('reverse-design store (PGlite)', () => {
     await setCurriculumNodeObjectives(pool, OWNER, task.id, [
       { nodeId: node.id, objectiveId: objective.id },
     ]);
+    // Step 3's sign-off, the third and last gate the helper has to honour: the
+    // graph's own phase boundary. Each of these was added by the step that
+    // introduced it, and the helper has to carry them or every test past it fails
+    // for a reason unrelated to what it checks.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
     // → outline
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'outline') return;
@@ -243,6 +255,10 @@ describe('reverse-design store (PGlite)', () => {
       verificationMethod: '实操验证',
       successCondition: '成功读取 /flag',
     });
+    // Two gates sit on this boundary and this test is about the evidence one, so
+    // the sign-off is satisfied first — otherwise the assertion below would pass
+    // or fail on the confirmation rather than on the evidence it names.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outcomes', 'user');
     await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).resolves.toMatchObject({
       designPhase: 'graph',
     });
@@ -456,6 +472,74 @@ describe('reverse-design store (PGlite)', () => {
     await expect(deleteCurriculumUnitDependency(pool, OWNER, recorded.id)).rejects.toBeInstanceOf(
       CurriculumDesignNotFoundError,
     );
+  });
+
+  it('treats a learning-order edge as part of the graph the author signs', async () => {
+    await advanceTo('graph');
+    const base = await createCurriculumLearningNode(pool, OWNER, task.id, {
+      name: 'SQL 基础',
+      nodeType: 'knowledge',
+    });
+    const injection = await createCurriculumLearningNode(pool, OWNER, task.id, {
+      name: 'SQL 注入',
+      nodeType: 'knowledge',
+    });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
+
+    const edge = await createCurriculumDependency(pool, OWNER, task.id, {
+      sourceId: base.id,
+      targetId: injection.id,
+      sourceKind: 'node',
+      targetKind: 'node',
+      edgeType: 'prerequisite',
+    });
+    // An edge added after the sign-off changes the graph the author read, so the
+    // sign-off has to go — otherwise the phase machine advances on content that
+    // changed underneath it.
+    expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'graph')).toBeNull();
+
+    // Re-recording the exact same edge is not a change, so it must not reopen a
+    // step the author just signed.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
+    await createCurriculumDependency(pool, OWNER, task.id, {
+      sourceId: base.id,
+      targetId: injection.id,
+      sourceKind: 'node',
+      targetKind: 'node',
+      edgeType: 'prerequisite',
+    });
+    expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'graph')).not.toBeNull();
+
+    // Taking the edge away is a change too.
+    await deleteCurriculumDependency(pool, OWNER, edge.id);
+    expect(await getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'graph')).toBeNull();
+    await expect(deleteCurriculumDependency(pool, OWNER, edge.id)).rejects.toBeInstanceOf(
+      CurriculumDesignNotFoundError,
+    );
+  });
+
+  it('takes an edge with the endpoint that is deleted, because nothing cascades', async () => {
+    await advanceTo('graph');
+    const base = await createCurriculumLearningNode(pool, OWNER, task.id, {
+      name: 'HTTP 基础',
+      nodeType: 'knowledge',
+    });
+    const headers = await createCurriculumLearningNode(pool, OWNER, task.id, {
+      name: 'HTTP 头',
+      nodeType: 'knowledge',
+    });
+    await createCurriculumDependency(pool, OWNER, task.id, {
+      sourceId: base.id,
+      targetId: headers.id,
+      sourceKind: 'node',
+      targetKind: 'node',
+      edgeType: 'prerequisite',
+    });
+
+    await deleteCurriculumLearningNode(pool, OWNER, headers.id);
+    // The endpoints are (kind, id) pairs rather than foreign keys, so a dangling
+    // edge would survive as a claim about a node that no longer exists.
+    expect((await getCurriculumDesignSnapshot(pool, OWNER, task.id)).dependencies).toEqual([]);
   });
 
   it('refuses a question whose answer names a missing option', async () => {

@@ -22,6 +22,13 @@
  *   state the store's orphan check reports), while a link to an outcome that does
  *   not exist is refused and logged, because it is a mistyped reference the author
  *   should see rather than a silent gap.
+ * - **Ordering edges land in the same turn and the same sign-off.** Step 4's
+ *   dependency analysis and teaching sequence are edges on this graph, so they are
+ *   written here; the sequence itself is *derived* from them (`teachingOrder`) and
+ *   never stored as a number. A proposed edge that would close a cycle is dropped
+ *   and reported **before** the write, because the store's own check would abort
+ *   the whole transaction and take the turn's nodes with it — and unlike a node
+ *   with no outcome, a dropped edge leaves no visible trace to notice later.
  *
  * Requires the task to have reached the `graph` phase, so building nodes needs
  * confirmed outcomes. Same-origin JSON only, because the turn spends the owner's
@@ -42,7 +49,9 @@ import {
 } from '@/lib/server/curriculum/design-http';
 import {
   confirmCurriculumDesignStep,
+  createCurriculumDependency,
   createCurriculumLearningNode,
+  deleteCurriculumDependency,
   deleteCurriculumLearningNode,
   getCurriculumDesignSnapshot,
   getCurriculumTask,
@@ -60,6 +69,7 @@ import {
   knowledgeBoardOf,
   type CourseKnowledgeTurn,
 } from '@/lib/server/curriculum/knowledge-step';
+import type { ResolvedDependency } from '@/lib/curriculum/design-knowledge';
 import {
   backgroundWorkspaceId,
   SlotDisabledError,
@@ -110,7 +120,12 @@ export async function POST(req: NextRequest, { params }: Params) {
     if ('response' in model) return model.response;
 
     const before = await getCurriculumDesignSnapshot(ctx.queryable, ctx.ownerId, task.id);
-    const board = knowledgeBoardOf(before.nodes, before.objectives, before.nodeObjectives);
+    const board = knowledgeBoardOf(
+      before.nodes,
+      before.objectives,
+      before.nodeObjectives,
+      before.dependencies,
+    );
 
     let turn;
     try {
@@ -187,6 +202,26 @@ export async function POST(req: NextRequest, { params }: Params) {
       if (turn.changedLinks) {
         await setCurriculumNodeObjectives(tx, ctx.ownerId, task.id, links);
       }
+      // Ordering edges last, because a draft endpoint only becomes a real id once
+      // its row exists. Removals first for the same reason node deletions are: a
+      // turn that takes an edge off and re-adds it must not leave the deletion
+      // racing the insert.
+      for (const dependencyId of turn.removedDependencies) {
+        await deleteCurriculumDependency(tx, ctx.ownerId, dependencyId);
+      }
+      for (const edge of turn.dependencies) {
+        const sourceId = resolveDependencyEndpoint(edge.source, nodeIdOf);
+        const targetId = resolveDependencyEndpoint(edge.target, nodeIdOf);
+        if (!sourceId || !targetId) continue;
+        await createCurriculumDependency(tx, ctx.ownerId, task.id, {
+          sourceId,
+          targetId,
+          sourceKind: 'node',
+          targetKind: 'node',
+          edgeType: edge.edgeType,
+          note: edge.note,
+        });
+      }
       const snapshot = await getCurriculumDesignSnapshot(tx, ctx.ownerId, task.id);
       return snapshot;
     });
@@ -210,13 +245,40 @@ export async function POST(req: NextRequest, { params }: Params) {
       written.nodes,
       written.nodeObjectives,
       written.objectives,
+      written.dependencies,
     );
     return ownerJson(
-      { ...payload, message: turn.message, confirmedThisTurn: turn.confirmRequested },
+      {
+        ...payload,
+        message: turn.message,
+        confirmedThisTurn: turn.confirmRequested,
+        // What this turn could not honour — a dropped ordering edge, a field that
+        // is not this step's. It rides on the answer rather than on `gaps`
+        // because it is a fact about the turn: the stored graph is fine, the
+        // instruction was not. Without it a refused edge would leave no trace at
+        // all, and the author would confirm a sequence that is not the one asked
+        // for.
+        warnings: turn.warnings,
+      },
       200,
       ctx.headers,
     );
   });
+}
+
+/**
+ * A `draft` endpoint is a node this same turn created; the index is its position
+ * in `added`, which is how the rules layer tied it back. An index with no row is
+ * impossible — the route creates one row per draft before it resolves any edge —
+ * so returning null here means "do not write this edge" rather than "pick
+ * something", and the turn has already reported the edge as unwritable.
+ */
+function resolveDependencyEndpoint(
+  endpoint: ResolvedDependency['source'],
+  nodeIdOf: readonly string[],
+): string | null {
+  if (endpoint.kind === 'node') return endpoint.id;
+  return nodeIdOf[endpoint.index] ?? null;
 }
 
 /**
