@@ -62,10 +62,11 @@ and these are optional:
 - `emphasis` — specific words or steps that must land.
 - `visual` — the diagram the page needs, described so a generator can draw it.
 - `code` — a snippet the page must show verbatim.
-- `teaches` — the knowledge points this page is responsible for, written as
-  **names** (not ids). This is what keeps the storyboard answerable to the
-  script: every `core` point has to be carried by some page, and nothing in
-  `omit` may appear on a page.
+- `teaches` — the knowledge points this page is responsible for, written the same
+  way the buckets are: **ids** from the item's list (a name is also accepted and
+  resolved to its id). This is what keeps the storyboard answerable to the script:
+  every `core` point has to be carried by some page, and nothing in `omit` may
+  appear on a page.
 
 `pages` **replaces that item's whole storyboard**, so send every page the item
 should have afterwards. An item you do not mention keeps its pages untouched.
@@ -144,7 +145,7 @@ markdown code fence:
           "emphasis": ["username 参数"],
           "visual": "HTTP 请求到 SQL 语句的拼接过程",
           "code": "POST /login username=admin' --",
-          "teaches": ["SQL 注入的成因"]
+          "teaches": ["node_sql_cause"]
         },
         {
           "order": 2,
@@ -152,7 +153,7 @@ markdown code fence:
           "goal": "学员能自己写出一个 union 注入读出数据",
           "coreInfo": "列数对齐后用 UNION SELECT 顶替原查询的回显位",
           "mode": "demo",
-          "teaches": ["联合查询读取任意数据"]
+          "teaches": ["node_union_reads_data"]
         }
       ]
     }
@@ -163,8 +164,9 @@ markdown code fence:
 
 - `plans` may be empty; an empty turn is a turn where the author asked a question.
 - `ref` is a stored item's `unit_…` id, copied exactly from the list.
-- `core`/`brief`/`mention`/`sequence`/`prerequisites` take knowledge-point ids;
-  `omit` takes free text; a page's `teaches` takes knowledge-point **names**.
+- `core`/`brief`/`mention`/`sequence`/`prerequisites` and a page's `teaches` all
+  take knowledge-point ids (names are accepted too, and stored as ids); `omit`
+  takes free text.
 - Never include `nodes`, `objectives`, `questions`, `labTasks` or `exam`: they are
   not this step and are discarded.
 - `confirm` is `false` unless rule 8 and rule 9 both hold.

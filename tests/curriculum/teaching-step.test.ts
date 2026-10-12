@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
+import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
 import type { TeachingAnswer, TeachingPageDraft } from '@/lib/curriculum/design-teaching';
 import { resolveTeachingTurn, teachingBoardOf } from '@/lib/server/curriculum/teaching-step';
 import type { TeachingBoard, TeachingItemBoard } from '@/lib/curriculum/design-teaching';
@@ -200,6 +201,28 @@ describe('resolveTeachingTurn — 缺口算在写完之后的稿子上', () => {
     expect(turn.gaps).toEqual([]);
     expect(turn.advisories.join('')).toContain('自报');
     expect(turn.patches.get('unit-1')?.deckDesign.estPages).toBe(1);
+  });
+});
+
+describe('the prompt template carries the contract the rules implement', () => {
+  it('renders, says it is step 6, and asks for the double-depth contract', () => {
+    const prompts = buildPrompt(PROMPT_IDS.COURSE_TEACHING, {
+      direction: '方向：Web 安全',
+      plan: '条目：unit_a',
+      gaps: '- 还差一个分镜',
+      history: '(这是这一步的第一句话)',
+      instruction: '写 1.1 的脚本与分镜',
+    });
+    expect(prompts).not.toBeNull();
+    expect(prompts?.system).toContain('第六步');
+    // The contract the rules layer enforces has to be the one the model is told:
+    // three buckets by id, `omit` as prose, pages only for a lecture, and the two
+    // fields it must not write because they are derived.
+    expect(prompts?.system).toContain('knowledge-point ids');
+    expect(prompts?.system).toContain('free text');
+    expect(prompts?.system).toContain('Do not write `nodes` or `objectives`');
+    expect(prompts?.system).toContain('Only a `lecture` item has a storyboard');
+    expect(prompts?.user).toContain('unit_a');
   });
 });
 
