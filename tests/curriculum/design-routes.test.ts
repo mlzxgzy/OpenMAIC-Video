@@ -247,6 +247,9 @@ describe('design routes (PGlite)', () => {
       objectiveId: objective.id,
       coverageKind: 'teach',
     });
+    // Step 5 sign-off, the fourth of the same kind: a complete outline is not an
+    // agreed one, so a fixture that walks past `outline` has to sign it.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'teaching') return;
     // → assessment: the gate is teaching coverage, which is already in place.

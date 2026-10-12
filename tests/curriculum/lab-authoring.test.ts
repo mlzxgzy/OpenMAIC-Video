@@ -283,6 +283,9 @@ describe('the store and the database both refuse a warm exam', () => {
       objectiveId: objective.id,
       coverageKind: 'teach',
     });
+    // Step 5's sign-off gates `outline → teaching`, so a fixture that walks to
+    // the assessment phase has to sign the outline on the way.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → teaching
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → assessment
 

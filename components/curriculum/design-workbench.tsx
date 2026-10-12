@@ -68,6 +68,7 @@ import {
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
+import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-signoff';
 import {
   CreateForm,
   InlineEdit,
@@ -783,6 +784,21 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
               }
             />
           </div>
+          {/* Same arrangement as the graph card above: the entries below and this
+              sign-off are two faces of the same step, so the strip lives inside
+              this card rather than beside it. */}
+          <DesignOutlineSignOff
+            taskId={snapshot.task.id}
+            units={units}
+            unitCoverage={snapshot.unitCoverage ?? []}
+            confirmation={snapshot.confirmations.find((entry) => entry.step === 'outline') ?? null}
+            run={run}
+            busy={busy}
+            onRefresh={async () => {
+              await load();
+              await onChanged();
+            }}
+          />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {items.length === 0 ? (

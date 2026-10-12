@@ -148,6 +148,9 @@ describe('reverse-design store (PGlite)', () => {
       objectiveId: objective.id,
       coverageKind: 'teach',
     });
+    // Step 5's sign-off gates the way out of `outline`, so the helper signs it
+    // too — the same rule the three steps before it follow.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     // → teaching
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'teaching') return;

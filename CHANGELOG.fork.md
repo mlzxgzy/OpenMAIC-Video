@@ -163,7 +163,40 @@
     `CURRICULUM_DESIGN_ALLOWLIST` / `CURRICULUM_DESIGN_TOOL_PHASES` /
     `CURRICULUM_DESIGN_TOOLS_PROMPT` 与 `course-analysis` skill。
 
+- **第五步「生成课程大纲」是 AI 对话 + 用户签收**：工作台「课程大纲」卡片里点
+  「用 AI 排大纲」即可对话。模型把已经签收的学习目标、知识技能图和先后关系组织成
+  **章 → 节 → 目**，并写清每个目讲授/练习/考核了哪些目标。确认前
+  `outline → teaching` 一律 409。
+  - **章和节都是 `chapter`，目是 `item`**：用户的「章 / 节 / 目」是三级，库里的
+    `unit_type` 只有两种，靠 `parent_id` 分层——章和节是归类（不承载覆盖），目是唯一
+    会教东西的一层。`planUnitWrites` 支持同一轮里用模型自己起的 `ref` 互相指名父级，
+    章、节、目一次写全，并且**父级必须先写**（向前引用会被拓扑排序调整，成环则丢掉并
+    记账）。
+  - **单元是独立的行，覆盖是整表替换**：`setCurriculumUnitCoverage` 会删掉全任务覆盖
+    再重建，所以规则层算的是**这一轮之后的完整账本**（只替换被指名的条目，其余原样带
+    过来）。只发被指名的那些，会静默把别的条目清空，然后在门禁那里报成"有目标没有
+    被讲授"。
+  - **凡是 store 会抛的，规则层先丢掉**：整轮对话在一个事务里写入，store 抛一次就回滚
+    全部改动。章节带教学角色、条目没角色、父级不是章节、覆盖挂在章节上（数据库里还有
+    触发器）——这些都在写入前过滤并进 `warnings`（用户看得见），而不是让整轮白干。
+  - **顺序第一次变成真的**：`unit.orderIndex` 是提交顺序的地方，而审核的
+    `dependency_out_of_order` 此前**只读 `objective → objective` 的边**——第三步签下的
+    节点级先后关系没有任何读方，那句"顺序由边推导"是装饰。规则层的
+    `outlineOrderConflicts` 现在同时走两种端点（节点经由"支撑哪些目标"折到条目上），
+    审核那条规则改为调用同一个实现，两处不再可能各说各话。
+  - **签收与写入在同一个事务里**：缺口在**写完之后**从库里重算（规则层缺口 + 审核自己的
+    条目顺序发现），所以记录下来的确认一定覆盖磁盘上那一份文档；模型自称"用户已确认"
+    但大纲还有缺口时，不记录确认并在 `warnings` 里说明原因。
+  - 规则层 `lib/curriculum/design-outline.ts`、步骤层 `outline-step.ts`、状态层
+    `outline-state.ts`、提示词 `course-outline`、路由
+    `.../outline`（GET/POST/DELETE）与 `.../outline/turn`、界面
+    `design-outline-dialog.tsx` + `design-outline-signoff.tsx`。
+
 ### Changed
+
+- **`phaseCompletionGaps('teaching')` 加上了大纲签收检查**：`outline` 签收此前对状态机
+  毫无作用——一份从没被读回的大纲也能离开 `outline` 阶段，然后教学设计就建立在没人
+  批准的顺序上。现在和其它三步一样：未确认则 409。
 
 - **`phaseCompletionGaps('outline')` 补上了缺失的那一半**：原来只检查「每个节点都要有
   目标」，**一个目标完全可以没有任何节点**——它照样通过检查，然后在大纲阶段变成
@@ -236,6 +269,21 @@
   - 未做浏览器端驱动验证（同前两步）。
 
 ### Fixed
+
+- **大纲写入此前一个都不撤回签收**：`createCurriculumUnit` / `updateCurriculumUnit` /
+  `deleteCurriculumUnit` / `createCurriculumUnitCoverage` / `setCurriculumUnitCoverage` /
+  `createCurriculumUnitDependency` / `deleteCurriculumUnitDependency` 都不动
+  `outline` 签收，所以确认之后模型可以在确认背后加一章十条目，门禁却还开着。现在都会
+  撤回，并区分「什么都没改的重述」——`setCurriculumUnitCoverage` 增加同集守卫，
+  `updateCurriculumUnit` 比较九个字段，重述不撤签收。
+
+- **审核的 `dependency_out_of_order` 不读节点级先后关系**：它只处理
+  `objective → objective` 的边，于是第三步落地的「节点 A 必须先于节点 B」从来没被任何
+  规则检查过。现在两种端点都走，节点经由它支撑的目标折到"最早讲授它的条目"上。
+
+- **`schema-migration-checksums` 从 S6 起就是红的**：migration 13
+  （`design_confirmation`）落地时没有补进那份 pin 住的清单，而这个文件在
+  `tests/curriculum` 之外——常规命令看不到。补上该行后 2/2 通过。
 
 - **`tests/persistence/curriculum-design-store.test.ts` 已红了一整轮**：它的 `advanceTo`
   助手没跟上第二、三步新增的 `outcomes` / `graph` 签收门禁，20 个用例从第二步落地起就

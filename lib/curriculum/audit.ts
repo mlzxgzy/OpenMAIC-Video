@@ -13,6 +13,8 @@
  * belong here.
  */
 
+import { CURRICULUM_ORDER_CLAIM_EDGE_TYPES } from './design-types';
+import { outlineOrderConflicts } from './design-outline';
 import type {
   CurriculumAuditSeverity,
   CurriculumDependencyEdgeType,
@@ -539,13 +541,17 @@ function ruleLabVerifyGradesByPath(snapshot: CurriculumDesignSnapshot): Curricul
     }));
 }
 
-/** Edges that express order, for cycle detection. */
-const ORDERING_EDGES: ReadonlySet<CurriculumDependencyEdgeType> = new Set([
-  'prerequisite',
-  'derives',
-  'progresses',
-  'practices',
-]);
+/**
+ * Edges that express order, for cycle detection.
+ *
+ * The set itself lives in `design-types` because three layers read it now — this
+ * audit, the step-3 rules that decide which edges may be written at all, and the
+ * store's cycle walk. A local copy is how "supports is not an order claim" ends
+ * up true in one place and false in another.
+ */
+const ORDERING_EDGES: ReadonlySet<CurriculumDependencyEdgeType> = new Set(
+  CURRICULUM_ORDER_CLAIM_EDGE_TYPES,
+);
 
 function buildAdjacency<E extends string>(
   edges: { sourceId: string; targetId: string; edgeType: E }[],
@@ -636,57 +642,53 @@ function ruleDependencyCycle(snapshot: CurriculumDesignSnapshot): CurriculumAudi
  * A dependency that points backwards relative to the order the items are
  * delivered in. "Advanced skill appears before its foundation" — the graph
  * says B requires A, but A is taught in a later item than B.
+ *
+ * Both endpoint kinds are read, and the node half was missing for a while:
+ * step 3 records "which knowledge comes before which" as **node → node** edges,
+ * and a rule that only walked `objective → objective` edges reported nothing
+ * about them. That made the ordering claim the author signed decorative — the
+ * design system's promise that "the sequence is derived from the edges" had no
+ * reader at all. A node's delivery position is the earliest item teaching any
+ * outcome that node supports, which is the only way a node reaches a learner.
  */
 function ruleDependencyOutOfOrder(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
-  const itemOrder = new Map<string, number>();
-  const unitByObjective = new Map<string, string[]>();
-  for (const unit of snapshot.units) {
-    if (unit.unitType !== 'item') continue;
-    itemOrder.set(unit.id, unit.orderIndex);
-  }
+  const items = snapshot.units
+    .filter((unit) => unit.unitType === 'item')
+    .map((unit) => ({ id: unit.id, orderIndex: unit.orderIndex }));
+  const teachesByItem = new Map<string, string[]>();
   for (const coverage of snapshot.unitCoverage) {
     if (coverage.coverageKind !== 'teach') continue;
-    const list = unitByObjective.get(coverage.objectiveId) ?? [];
-    list.push(coverage.unitId);
-    unitByObjective.set(coverage.objectiveId, list);
+    const list = teachesByItem.get(coverage.unitId) ?? [];
+    list.push(coverage.objectiveId);
+    teachesByItem.set(coverage.unitId, list);
   }
-
-  const earliestOrder = (objectiveId: string): number | null => {
-    const unitIds = unitByObjective.get(objectiveId);
-    if (!unitIds || unitIds.length === 0) return null;
-    let min: number | null = null;
-    for (const unitId of unitIds) {
-      const order = itemOrder.get(unitId);
-      if (order === undefined) continue;
-      if (min === null || order < min) min = order;
-    }
-    return min;
-  };
+  const objectivesByNode = new Map<string, string[]>();
+  for (const link of snapshot.nodeObjectives) {
+    const list = objectivesByNode.get(link.nodeId) ?? [];
+    list.push(link.objectiveId);
+    objectivesByNode.set(link.nodeId, list);
+  }
 
   const objectiveById = new Map(snapshot.objectives.map((o) => [o.id, o]));
-  const findings: CurriculumAuditFinding[] = [];
-  for (const edge of snapshot.dependencies) {
-    if (edge.targetKind !== 'objective' || edge.sourceKind !== 'objective') continue;
-    if (!ORDERING_EDGES.has(edge.edgeType)) continue;
-    const prereqOrder = earliestOrder(edge.sourceId);
-    const targetOrder = earliestOrder(edge.targetId);
-    if (prereqOrder === null || targetOrder === null) continue;
-    if (prereqOrder <= targetOrder) continue;
-    const source = objectiveById.get(edge.sourceId);
-    const target = objectiveById.get(edge.targetId);
-    findings.push({
-      rule: 'dependency_out_of_order',
-      severity: 'error',
-      message:
-        `「${target?.title ?? edge.targetId}」先于它的先修` +
-        `「${source?.title ?? edge.sourceId}」被讲授`,
-      refKind: 'dependency',
-      refId: edge.id,
-      refIds: [edge.sourceId, edge.targetId],
-      layer: 'dependency_valid',
-    });
-  }
-  return findings;
+  const nodeById = new Map(snapshot.nodes.map((n) => [n.id, n]));
+  // One implementation, two readers: this audit and the step-5 outline rules ask
+  // the identical question ("does the delivery order contradict the claim?") of
+  // the identical data. `outlineOrderConflicts` is the definition.
+  return outlineOrderConflicts({
+    items,
+    teachesByItem,
+    objectivesByNode,
+    edges: snapshot.dependencies,
+    labelOf: (id) => objectiveById.get(id)?.title ?? nodeById.get(id)?.name ?? id,
+  }).map((conflict) => ({
+    rule: 'dependency_out_of_order' as const,
+    severity: 'error' as const,
+    message: conflict.message,
+    refKind: 'dependency',
+    refId: conflict.refId,
+    refIds: [conflict.sourceId, conflict.targetId],
+    layer: 'dependency_valid' as const,
+  }));
 }
 
 /**

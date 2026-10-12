@@ -231,6 +231,9 @@ describe('design workbench authoring gates', () => {
       objectiveId: objective.id,
       coverageKind: 'teach',
     });
+    // Step 5's sign-off, like the three steps before it: the outline has to be
+    // agreed before lessons are designed on top of it.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → teaching
     if (phase === 'teaching') return task.id;
 

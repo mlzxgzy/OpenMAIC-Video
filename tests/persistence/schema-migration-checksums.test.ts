@@ -270,6 +270,16 @@ const SHIPPED: readonly (readonly [
     true,
     'f9426d94b945a75f00dfeb6a8d569db7d85c41b508ecc40c0b632f4b1569ca4a',
   ],
+  [
+    // Pinned late: migration 13 (`design_confirmation`, step 1's sign-off table)
+    // shipped without this row, so this file has been failing since S6 — it lives
+    // outside `tests/curriculum`, which is the command that always gets run.
+    'curriculum',
+    13,
+    'design_confirmation',
+    true,
+    '33df13d6c3b5c35fd37da3be0f66e8751d6526b0fac5f0dfdac25569d981a569',
+  ],
 ];
 
 /**

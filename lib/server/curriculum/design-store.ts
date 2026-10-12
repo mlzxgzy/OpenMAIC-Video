@@ -979,6 +979,60 @@ async function withdrawKnowledgeSignOff(
   await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'graph');
 }
 
+/**
+ * Drop the `outline` sign-off because the outline really changed.
+ *
+ * The same rule as the two above, applied to the step that first commits a
+ * delivery order: the sign-off covers *that* outline, so a unit added, moved,
+ * re-roled or given different coverage after the author read it back has to be
+ * read again. It is a separate function for the reason spelled out above — the
+ * three signs cover three different things, and a shared helper with a `step`
+ * parameter fails by quietly unlocking a confirmed step.
+ *
+ * What it fixes: none of the outline writers used to withdraw anything. An author
+ * could confirm the outline, have the model add a chapter and ten items behind
+ * the confirmation, and the phase machine would still report `outline` as signed
+ * — so `outline → teaching` opened on a document nobody had read. That is the same
+ * hole steps 2, 3 and 4 each had in turn.
+ */
+async function withdrawOutlineSignOff(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<void> {
+  await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'outline');
+}
+
+/**
+ * Withdraw only when the write produced a different row. Same reasoning as
+ * {@link withdrawKnowledgeSignOffIfChanged}: a step-5 conversation re-sends units
+ * it did not change, and a badge that clears on every message trains the author
+ * to ignore it.
+ */
+async function withdrawOutlineSignOffIfChanged(
+  queryable: Queryable,
+  ownerId: string,
+  updated: UnitRow,
+  current: UnitRow,
+): Promise<void> {
+  const fields: (keyof UnitRow)[] = [
+    'parent_id',
+    'title',
+    'code',
+    'unit_role',
+    'hours',
+    'order_index',
+    'teaching_design',
+    'deck_design',
+    'stage_id',
+  ];
+  const same = fields.every(
+    (field) => JSON.stringify(updated[field] ?? null) === JSON.stringify(current[field] ?? null),
+  );
+  if (same) return;
+  await withdrawOutlineSignOff(queryable, ownerId, updated.task_id);
+}
+
 async function readObjectiveRow(
   queryable: Queryable,
   ownerId: string,
@@ -1421,6 +1475,20 @@ export async function phaseCompletionGaps(
     );
     if (Number(untaught.rows[0]?.count ?? 0) > 0) {
       gaps.push(`${untaught.rows[0].count} 个学习目标还没有被任何条目讲授`);
+    }
+    // The outline being complete is not the same fact as the author having agreed
+    // to it — the distinction steps 1–3 draw for their own documents, and it was
+    // missing here. Without it the `outline` confirmation was decorative: a task
+    // could leave the phase with its index of chapters and items never read back,
+    // and the design would then build lessons on top of an order nobody approved.
+    const outlineConfirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'outline',
+    );
+    if (!outlineConfirmation) {
+      gaps.push('课程大纲还没有确认（确认后才会进入教学设计阶段）');
     }
   }
 
@@ -2310,6 +2378,8 @@ export async function createCurriculumUnit(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('大纲单元创建失败');
+  // A new unit is always a change to the document the author signed.
+  await withdrawOutlineSignOff(queryable, ownerId, taskId);
   return mapUnit(row);
 }
 
@@ -2365,6 +2435,7 @@ export async function updateCurriculumUnit(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('大纲单元不存在');
+  await withdrawOutlineSignOffIfChanged(queryable, ownerId, row, current);
   return mapUnit(row);
 }
 
@@ -2373,11 +2444,16 @@ export async function deleteCurriculumUnit(
   ownerId: string,
   unitId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_unit WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_unit WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, unitId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('大纲单元不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('大纲单元不存在');
+  // Deleting a chapter takes its whole subtree with it (the FK cascades), so this
+  // is not a small edit: the signed outline can lose a section's worth of items
+  // in one call.
+  await withdrawOutlineSignOff(queryable, ownerId, row.task_id);
 }
 
 /**
@@ -2407,6 +2483,14 @@ export async function createCurriculumUnitCoverage(
   // editing an existing design, and a course being revised must not be frozen
   // at the phase it first reached.
 
+  // Read before writing: the upsert cannot tell an insert from an identical
+  // update, and "repeating the same claim" must not clear a sign-off.
+  const before = await queryable.query<UnitCoverageRow>(
+    `SELECT ${UNIT_COVERAGE_COLUMNS} FROM curriculum_unit_coverage
+      WHERE unit_id = $1 AND objective_id = $2 AND coverage_kind = $3`,
+    [input.unitId, input.objectiveId, input.coverageKind],
+  );
+
   const result = await queryable.query<UnitCoverageRow>(
     `INSERT INTO curriculum_unit_coverage
        (id, owner_id, task_id, unit_id, objective_id, coverage_kind, depth, order_index, note)
@@ -2429,6 +2513,13 @@ export async function createCurriculumUnitCoverage(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('覆盖记录创建失败');
+  const previous = before.rows[0];
+  const unchanged =
+    previous !== undefined &&
+    previous.depth === row.depth &&
+    previous.order_index === row.order_index &&
+    (previous.note ?? null) === (row.note ?? null);
+  if (!unchanged) await withdrawOutlineSignOff(queryable, ownerId, taskId);
   return mapUnitCoverage(row);
 }
 
@@ -2461,6 +2552,16 @@ export async function setCurriculumUnitCoverage(
     }
   }
 
+  // The step-5 turn route calls this with the *whole* ledger it computed, merging
+  // the items it did not name back in before calling (see `mergeUnitCoverage`).
+  // This function stays the blunt "replace everything" it always was, because the
+  // workbench's own save means exactly that. So the guard belongs on the
+  // comparison: whatever the caller intended, the stored ledger is what the
+  // sign-off has to be compared against.
+  if (await sameUnitCoverage(queryable, ownerId, taskId, unique)) {
+    return listUnitCoverageForTask(queryable, ownerId, taskId);
+  }
+
   await queryable.query(
     'DELETE FROM curriculum_unit_coverage WHERE owner_id = $1 AND task_id = $2',
     [ownerId, taskId],
@@ -2487,7 +2588,53 @@ export async function setCurriculumUnitCoverage(
     const out = result.rows[0];
     if (out) created.push(mapUnitCoverage(out));
   }
+  await withdrawOutlineSignOff(queryable, ownerId, taskId);
   return created;
+}
+
+/**
+ * Whether the stored teach / practice / assess ledger already equals `wanted`,
+ * comparing what the author reads: the item, the outcome, the kind, the depth and
+ * the note.
+ *
+ * Same guard, same reason, as `sameLinkSet` one step earlier: the conversation
+ * re-sends the whole ledger every turn, and a set that did not move must not
+ * withdraw a sign-off — otherwise the badge clears on every message and the
+ * author learns to ignore it.
+ */
+async function sameUnitCoverage(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  wanted: ReadonlyMap<string, CurriculumUnitCoverageInput>,
+): Promise<boolean> {
+  const current = await listUnitCoverageForTask(queryable, ownerId, taskId);
+  if (current.length !== wanted.size) return false;
+  const byKey = new Map(
+    current.map((row) => [`${row.unitId}:${row.objectiveId}:${row.coverageKind}`, row]),
+  );
+  for (const [key, row] of wanted) {
+    const stored = byKey.get(key);
+    if (!stored) return false;
+    if (stored.depth !== (row.depth ?? 'standard')) return false;
+    if ((stored.note ?? null) !== optionalText(row.note)) return false;
+  }
+  return true;
+}
+
+function listUnitCoverageForTask(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<CurriculumUnitCoverageRecord[]> {
+  return queryable
+    .query<UnitCoverageRow>(
+      `SELECT ${UNIT_COVERAGE_COLUMNS} FROM curriculum_unit_coverage
+        WHERE owner_id = $1 AND task_id = $2
+        ORDER BY unit_id, objective_id, coverage_kind`,
+      [ownerId, taskId],
+    )
+    .then((result) => result.rows.map((row) => mapUnitCoverage(row)));
 }
 
 export async function createCurriculumUnitDependency(
@@ -2527,6 +2674,10 @@ export async function createCurriculumUnitDependency(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('单元依赖创建失败');
+  // An order claim is part of the outline the author signs, and the audit reads
+  // it against `unit.orderIndex`: signing the outline while the model keeps
+  // adding claims about it would sign a document that is still moving.
+  await withdrawOutlineSignOff(queryable, ownerId, taskId);
   return mapUnitDependency(row);
 }
 
@@ -2556,11 +2707,13 @@ export async function deleteCurriculumUnitDependency(
   ownerId: string,
   unitDependencyId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_unit_dependency WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_unit_dependency WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, unitDependencyId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('单元依赖不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('单元依赖不存在');
+  await withdrawOutlineSignOff(queryable, ownerId, row.task_id);
 }
 
 // ── Question CRUD ───────────────────────────────────────────────────────────
