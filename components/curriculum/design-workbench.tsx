@@ -66,6 +66,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
+import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import {
   CreateForm,
   InlineEdit,
@@ -521,6 +522,21 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
               }
             />
           </div>
+          {/* The list below and this sign-off are two faces of the same step, so
+              the strip lives inside this card rather than beside it: an editor of
+              the list, and the "I have read it" that opens the next phase. */}
+          <DesignOutcomesSignOff
+            taskId={snapshot.task.id}
+            objectives={objectives}
+            evidence={snapshot.evidence ?? []}
+            confirmation={snapshot.confirmations.find((entry) => entry.step === 'outcomes') ?? null}
+            run={run}
+            busy={busy}
+            onRefresh={async () => {
+              await load();
+              await onChanged();
+            }}
+          />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {objectives.length === 0 ? (

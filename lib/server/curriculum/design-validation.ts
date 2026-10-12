@@ -356,14 +356,19 @@ export const DIRECTION_MAX_TURNS = 24;
 export const DIRECTION_MAX_TURN_CHARS = 4000;
 
 /**
- * `{ taskId?, instruction, history? }` for `POST /api/curriculum/design/direction`.
+ * `{ taskId?, instruction, history? }` for the two conversation routes
+ * (`POST /api/curriculum/design/direction` and `.../outcomes`).
+ *
+ * One parser, not two: both steps take the same body, and the confirmation guard
+ * in each is driven by the same counter, so a drift between two copies of the
+ * caps would let one step accept a transcript the other refuses.
  *
  * `history` excludes the instruction: the dialog sends what came before, and the
  * route passes the instruction to the prompt as its own variable. Keeping them
  * apart is what lets the confirmation guard count turns truthfully — the count
  * is `history.length + 1`, with no parsing of the transcript.
  */
-export function parseDirectionTurnRequest(body: unknown): ParseResult<{
+export function parseConversationTurnRequest(body: unknown): ParseResult<{
   taskId?: string;
   instruction: string;
   history: DirectionTurn[];

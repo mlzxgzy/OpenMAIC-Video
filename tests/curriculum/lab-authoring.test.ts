@@ -257,6 +257,8 @@ describe('the store and the database both refuse a warm exam', () => {
       verificationMethod: '实操验证',
       successCondition: '成功读取 /flag',
     });
+    // Step 2 closes the same way: complete is not agreed until the user signs off.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outcomes', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → graph
 
     const node = await createCurriculumLearningNode(pool, OWNER, task.id, {

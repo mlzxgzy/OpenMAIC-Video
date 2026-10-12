@@ -217,6 +217,10 @@ describe('design routes (PGlite)', () => {
       verificationMethod: '实操验证',
       successCondition: '成功读取 /flag',
     });
+    // Step 2 sign-off: like the brief, the outcome list is complete but not yet
+    // agreed until the user confirms it. Walking the machine means honouring that,
+    // so this helper confirms each step before advancing past it.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outcomes', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'graph') return;
     const node = await createCurriculumLearningNode(pool, OWNER, task.id, {

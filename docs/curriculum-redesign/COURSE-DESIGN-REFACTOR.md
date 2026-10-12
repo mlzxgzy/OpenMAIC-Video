@@ -12,9 +12,10 @@
 > 小节**已过时**，请以 [`CHANGELOG.fork.md`](../../CHANGELOG.fork.md) 的
 > `[1.2.0-video.3]` 发布节为准。
 >
-> **S6（第一步的 AI 流程）已落地**，落地记录见 [第十二节](#十二s6-落地记录已完成第一步改成-ai-对话--用户签收)：
-> 新建课程改为「AI 对话填写 + 用户签收」，新增 `curriculum_design_confirmation`
-> 表与 `updateCurriculumTask` 的改动即撤回确认规则。
+> **S6 / S7 已落地**，落地记录见 [第十二节](#十二s6-落地记录已完成第一步改成-ai-对话--用户签收)
+> 与 [第十三节](#十三s7-落地记录已完成第二步学习目标与考核标准)：新建课程与学习目标
+> 两步都改为「AI 对话填写 + 用户签收」，共用 `curriculum_design_confirmation` 表，
+> `task → outcomes` 与 `outcomes → graph` 两道门禁都读它。
 >
 > 本文件在上游忽略的 `/docs` 目录下，本 fork 用 `git add -f` 将它纳入版本库。
 
@@ -820,6 +821,7 @@ S3  AI 层     11 个 skill 的 SKILL.md + 阶段锁 + 工具集
 S4  页面层    设计工作台 6 阶段 + 双视角 + 审核面板
 S5  流程层    deck_design → outline 输入契约 + 实操目生成 + 质量门
 S6  流程层    第一步课程方向 = AI 对话填写 + 用户签收门禁
+S7  流程层    第二步学习目标与考核标准 = AI 对话 + 签收；清单用 ref 指名改动
 ```
 
 **S1→S2 可以立刻产生价值**：即使 UI 全不动，`audit.ts` 跑一遍现有 CTF 数据就能立刻告出"哪些目标没考、哪些知识点是孤儿"。
@@ -1117,9 +1119,80 @@ S1–S5 把设计系统做出来了，但**第一步没法用**：七个 brief �
 
 ## 尚未做（S7 起）
 
-- 第二步「学习目标与考核标准」的 AI 对话 + 签收（复用本步的骨架）
-- 第三步起的六个步骤
+- 第三步起的五个步骤
 - 浏览器端驱动验证（Playwright 的 chromium 版本期望 1208，本机是 1148 且缺可执行文件）
+
+---
+
+# 十三、S7 落地记录（已完成）：第二步，学习目标与考核标准
+
+S6 交付的是"七格卡片"的骨架。第二步的对象换成了**一份会增长、有序、可增删的
+清单**，于是骨架里最关键的那条保证必须重新证明一次：**当 AI 直接改一份清单，
+什么是安全的写**。
+
+## 交付内容
+
+| 文件 | 内容 |
+|---|---|
+| [lib/curriculum/design-outcomes.ts](../../lib/curriculum/design-outcomes.ts) | 引用解析、模型输出清洗、缺口、确认的确定性裁决 |
+| [lib/server/curriculum/outcomes-step.ts](../../lib/server/curriculum/outcomes-step.ts) + [course-outcomes](../../lib/prompts/templates/course-outcomes/system.md) | 一次对话轮次 → 一次清单写入 |
+| [outcomes/turn/route.ts](../../app/api/curriculum/design/tasks/%5Bid%5D/outcomes/turn/route.ts) | 对话轮次；[outcomes/route.ts](../../app/api/curriculum/design/tasks/%5Bid%5D/outcomes/route.ts) 状态 / 确认 / 撤回 |
+| [design-outcomes-dialog.tsx](../../components/curriculum/design-outcomes-dialog.tsx) · [design-outcomes-signoff.tsx](../../components/curriculum/design-outcomes-signoff.tsx) | 对话面板；工作台里的签收条 |
+| [design-store.ts](../../lib/server/curriculum/design-store.ts) | `listCurriculumOutcomes`；新增/修改/删除目标与证据时撤回 `outcomes` 签收；`graph` 门禁加一条 |
+
+## 清单没有"只改这一格"的安全阀，所以 `ref` 就是安全阀
+
+第一步的安全阀是"模型只回传它改动的那几格，其余不动"。清单没有这个结构：模型每次
+回答都会重述整条目标，而**重述就是一次写入**。用户在清单里看不出"这条措辞变了"，
+而重述可能顺手丢掉一条最低标准，让一个本来可考核的目标退回不可验证。
+
+所以清单的安全阀换成**指名道姓**：模型只能用 `ref` 指明要改哪一条（`ref` 就是
+`curriculum_objective.id`，每轮随清单一起打印给它）。规则有三条，全部在
+`mergeOutcomePatch()` 里：
+
+1. **对不上的 `ref` 一律丢弃并记账**，绝不按位置或按顺序套用。按位置套用就是"AI 悄悄
+   改了用户读过的东西"，而且不可见。
+2. **删除优先于修改**：同一轮里删掉又改的那条，删赢——否则一个已被判定"删掉"的条目
+   又被 patch 写回来。
+3. **同一条只接受最后一次 patch**：模型在一次回答里给两版改法时，后者是它真正的想法。
+
+## 两条不对称的容忍度
+
+这一层最需要记住的判断是**哪些坏输入该拒绝、哪些该显示出来**：
+
+| 输入 | 处理 | 理由 |
+|---|---|---|
+| 目标缺最低标准 | **接受**，落库为"不可验证" | 这是 UI 要显示、等人补一句的**可见状态**。拒绝写入等于把这个缺口藏起来 |
+| 证据缺检验方式或成功条件 | **拒绝** | 空的证据行能满足 store 的"每个目标都有证据"门禁，却什么都没证明——**它会把门禁骗过去** |
+
+同一步里，一个缺可观察行为的目标是可见的待办，一条空的证据却是一个假保证。这个
+不对称是这一层唯一真正难的决定，写在 `sanitizeEvidence` 的注释里。
+
+## 确认比第一步多一条底线：这一轮必须真的动过清单
+
+`shouldConfirmOutcomes()` 在第一步两条底线（用户首句不能确认、必填没齐不能确认）之外
+加了第三条：**没有新增、没有修改、没有删除、没有加证据的"确认"不是签收**。它是对一句
+"看起来还行"的附和，而签收的对象是这一轮的成果。
+
+## 改动即撤回，但重述不算改动
+
+`updateCurriculumObjective` 比较的是**合并后整行**与原行（`sameObjectiveShape`），
+所以模型为了改一条最低标准而把标题重发一遍，不会撤回用户的确认。活体 walk 里这条是被
+真实模型打出来的：它每轮都会重写目标，若按"写入次数"撤回，确认会在每一轮之后消失。
+
+新增目标、删除目标、新增/删除证据一律撤回——这些没有"无变化的写法"。
+
+## 测试与活体校验抓到的真 bug
+
+活体 walk 的 `adding an outcome withdraws the sign-off` 抓到一个**只有写了 walk 才会
+发现**的洞：`createCurriculumObjective` 没有调用撤回逻辑，所以确认之后新增一条目标，
+清单已经不是用户读过的那一份，`graph` 门禁却仍然开着。补上之后由真 PostgreSQL 契约
+测试锁住（`tests/persistence/curriculum-design-store.pg.test.ts`）。
+
+## 尚未做（S8 起）
+
+- 第三步「知识技能图」起的五个步骤
+- 浏览器端驱动验证（同 S6：Playwright 的 chromium 版本期望 1208，本机是 1148）
 
 ---
 

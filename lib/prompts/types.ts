@@ -10,6 +10,7 @@ export type PromptId =
   | 'task-engine-outlines'
   | 'outline-revision'
   | 'course-direction'
+  | 'course-outcomes'
   | 'web-search-query-rewrite'
   | 'agent-system'
   | 'agent-system-wb-teacher'

@@ -28,6 +28,7 @@ export const PROMPT_IDS = {
   TASK_ENGINE_OUTLINES: 'task-engine-outlines',
   OUTLINE_REVISION: 'outline-revision',
   COURSE_DIRECTION: 'course-direction',
+  COURSE_OUTCOMES: 'course-outcomes',
   WEB_SEARCH_QUERY_REWRITE: 'web-search-query-rewrite',
   AGENT_SYSTEM: 'agent-system',
   AGENT_SYSTEM_WB_TEACHER: 'agent-system-wb-teacher',

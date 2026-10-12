@@ -194,7 +194,60 @@ st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/evidence"
 check("evidence for second objective -> 201", st, 201)
 
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
-check("advance outcomes -> graph once evidenced", st, 200)
+check("outcomes -> graph still blocked while unconfirmed", st, 409)
+show("refusal", body)
+
+# Step 2 has the same sign-off the brief has: evidenced is not the same fact as
+# agreed, and the phase machine reads the confirmation, not just the fields.
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("GET /outcomes -> 200", st, 200)
+check("outcomes list has both objectives", len(body["objectives"]), 2)
+check("outcomes not confirmed yet", body["confirmed"], False)
+# The deliberately vague outcome ("了解 SQL 注入") has no behavior and no criteria,
+# so the store keeps it unverifiable. The list therefore still has a gap, and a
+# sign-off must be refused for it — this is the rule that keeps a topic from
+# being signed off as an outcome.
+check("vague outcome is a gap", len(body["gaps"]), 1)
+check("vague outcome named", body["gaps"][0]["text"], "目标「了解 SQL 注入」还没有可观察行为和最低标准，现在无法考核")
+check("readyToAdvance still false without the sign-off", body["readyToAdvance"], False)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("confirm refused while an outcome is unverifiable -> 400", st, 400)
+check("the refusal says what to fix", "可观察行为" in body["error"]["message"], True)
+
+# Give the vague outcome a behavior and criteria, then it becomes assessable.
+st, body = req(owner, "PATCH", f"/api/curriculum/design/tasks/{task_id}/objectives/{obj2['id']}",
+               {"expectedBehavior": "能说出 SQL 注入的成因与常见利用方式",
+                "minCriteria": ["能说明成因", "能构造一条注入语句"]})
+check("PATCH makes the vague outcome verifiable", body["objective"]["verifiable"], True)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("POST /outcomes (confirm) -> 200", st, 200)
+check("sign-off records the user", body["confirmation"]["confirmedBy"], "user")
+check("readyToAdvance true after the sign-off", body["readyToAdvance"], True)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/objectives",
+               {"title": "课后新增的目标", "objectiveType": "skill",
+                "expectedBehavior": "新增后未挂证据", "minCriteria": ["x"]})
+check("POST a third objective after the sign-off -> 201", st, 201)
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("adding an outcome withdraws the sign-off", body["confirmed"], False)
+
+# remove the late objective again so the walk can continue past this step
+st, listing = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+st, body = req(owner, "DELETE",
+               f"/api/curriculum/design/tasks/{task_id}/objectives/{listing['objectives'][-1]['id']}")
+check("delete the late objective -> 200", st, 200)
+
+st, body = req(owner, "DELETE", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("withdrawing an unconfirmed step -> 404", st, 404)
+
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("advance outcomes -> graph still needs the sign-off back", st, 409)
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/outcomes")
+check("re-confirm -> 200", st, 200)
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("advance outcomes -> graph once evidenced AND confirmed", st, 200)
 
 st, b_http = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/nodes",
                  {"name": "HTTP 请求与参数", "nodeType": "knowledge", "difficulty": "intro"})
@@ -457,6 +510,61 @@ else:
         check("the card can then be confirmed -> 200", st, 200)
         st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_task['id']}/phase")
         check("a conversation-built course can leave step 1", st, 200)
+
+        print()
+        print("STEP 2 CONVERSATION (live model)")
+        ai_id = ai_task["id"]
+        st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/outcomes/turn", {
+            "instruction": "核心是六个方向每个方向都能独立解一类题，"
+                           "Web 和 Pwn 要能完整写出 Writeup；理论问单选多选判断，"
+                           "实操在 Docker 里做，提交 flag 判分",
+        })
+        if st == 400 and body.get("error", {}).get("code") == "MISSING_MODEL":
+            print("SKIP  no language model configured for the design slot")
+        else:
+            check("POST /outcomes/turn -> 200", st, 200)
+            show("model message", body.get("message", ""), 300)
+            outcomes = body.get("objectives", [])
+            evidence = body.get("evidence", [])
+            check("the turn wrote at least one outcome", len(outcomes) > 0, True)
+            check("every stored outcome names something", all(o.get("title") for o in outcomes), True)
+            check("no stored outcome is empty-handed", all(o.get("expectedBehavior") for o in outcomes), True)
+            print(f"    objectives={len(outcomes)} evidence={len(evidence)} "
+                  f"verifiable={sum(1 for o in outcomes if o.get('verifiable'))}")
+            for o in outcomes[:3]:
+                print(f"    - [{o['objectiveType']}] {o['title']}")
+            check("every evidence row says how it is checked",
+                  all(e.get("verificationMethod") and e.get("successCondition") for e in evidence), True)
+            check("no evidence is bound to nothing",
+                  all(e.get("objectiveId") in {o["id"] for o in outcomes} for e in evidence), True)
+            gaps = body.get("gaps", [])
+            for gap in gaps[:3]:
+                print(f"    gap: {gap['text']}")
+            check("the unevidenced ones are named, not hidden", isinstance(gaps, list), True)
+
+            # Whatever the model left open, the author closes it by hand, and only
+            # then may the step be signed off.
+            st, state = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_id}/outcomes")
+            for o in state["objectives"]:
+                patch = {}
+                if not o.get("expectedBehavior"):
+                    patch["expectedBehavior"] = "在 Docker 靶场中完成本题并提交结果"
+                if not o.get("minCriteria"):
+                    patch["minCriteria"] = ["完成题目并提交正确答案"]
+                if patch:
+                    req(owner, "PATCH",
+                        f"/api/curriculum/design/tasks/{ai_id}/objectives/{o['id']}", patch)
+                if not any(e["objectiveId"] == o["id"] for e in state["evidence"]):
+                    req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/evidence", {
+                        "objectiveId": o["id"], "evidenceType": "lab",
+                        "verificationMethod": "提交 flag，系统自动比对",
+                        "successCondition": "独立完成本题并提交 flag"})
+            st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_id}/outcomes")
+            check("a hand-completed list has no gaps", body["gaps"], [])
+            st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/outcomes")
+            check("then it can be signed off -> 200", st, 200)
+            st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/phase")
+            check("a conversation-built course can leave step 2", st, 200)
 
 st, snap = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}")
 check("GET snapshot -> 200", st, 200)

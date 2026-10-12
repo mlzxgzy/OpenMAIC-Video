@@ -54,7 +54,7 @@ import {
   updateCurriculumTask,
   type CurriculumTaskInput,
 } from '@/lib/server/curriculum/design-store';
-import { parseDirectionTurnRequest } from '@/lib/server/curriculum/design-validation';
+import { parseConversationTurnRequest } from '@/lib/server/curriculum/design-validation';
 import { DirectionAnswerError, draftCourseDirection } from '@/lib/server/curriculum/direction-step';
 import {
   backgroundWorkspaceId,
@@ -101,7 +101,7 @@ export async function POST(req: NextRequest) {
         ctx.headers,
       );
     }
-    const parsed = parseDirectionTurnRequest(await ctx.body());
+    const parsed = parseConversationTurnRequest(await ctx.body());
     if (!parsed.ok) return designInvalid(parsed.message, ctx.headers);
 
     const model = await resolveDirectionModel(ctx);

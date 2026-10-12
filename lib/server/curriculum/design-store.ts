@@ -934,6 +934,23 @@ async function assertPhase(
 
 // ── Existence checks ────────────────────────────────────────────────────────
 
+/**
+ * Drop the `outcomes` sign-off because the outcome list really changed.
+ *
+ * The same rule step 1 applies to the brief, and for the same reason: the
+ * confirmation signs *that* list, so an outcome edited after the author read it
+ * back has to be read again. It is deliberately **not** called on a write that
+ * changes nothing — the AI rewrites a whole outcome to change one criterion, and
+ * revoking on a no-op would make the confirmation flicker on every message.
+ */
+async function withdrawOutcomesSignOff(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<void> {
+  await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'outcomes');
+}
+
 async function readObjectiveRow(
   queryable: Queryable,
   ownerId: string,
@@ -1302,6 +1319,20 @@ export async function phaseCompletionGaps(
     if (unevidenced.rows.length > 0) {
       gaps.push(`${unevidenced.rows.length} 个学习目标还没有证据，例如 ${unevidenced.rows[0].id}`);
     }
+    // The outcome list being complete is not the same fact as the user having
+    // agreed to it — the same distinction step 1 draws for the brief. The graph
+    // (knowledge nodes, dependencies) is built on this list, so the sign-off is
+    // checked here rather than in the UI; a client that POSTs the phase route
+    // directly meets the same gate.
+    const outcomeConfirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'outcomes',
+    );
+    if (!outcomeConfirmation) {
+      gaps.push('学习目标与考核标准还没有确认（确认后才会进入知识技能图阶段）');
+    }
   }
 
   if (next === 'outline') {
@@ -1498,6 +1529,9 @@ export async function createCurriculumObjective(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('学习目标创建失败');
+  // Adding an outcome is always a real change — there is no "no-op create" — and
+  // the sign-off covers the list the author read, not the one that now exists.
+  await withdrawOutcomesSignOff(queryable, ownerId, taskId);
   return mapObjective(row);
 }
 
@@ -1565,7 +1599,76 @@ export async function updateCurriculumObjective(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('学习目标不存在');
-  return mapObjective(row);
+  const updated = mapObjective(row);
+  await withdrawOutcomesSignOffIfChanged(queryable, ownerId, updated, current);
+  return updated;
+}
+
+/**
+ * Withdraw the sign-off only when the merge produced a different row.
+ *
+ * A patch is a *merge*: the model rewriting a title to change a criterion sends
+ * both fields, and the title usually comes back byte-identical. Comparing the
+ * whole mapped row rather than the patch is what makes "edited" mean edited.
+ */
+async function withdrawOutcomesSignOffIfChanged(
+  queryable: Queryable,
+  ownerId: string,
+  updated: CurriculumObjectiveRecord,
+  current: ObjectiveRow,
+): Promise<void> {
+  if (sameObjectiveShape(updated, current)) return;
+  await withdrawOutcomesSignOff(queryable, ownerId, updated.taskId);
+}
+
+/** The fields an author reads. `updatedAt` is excluded: it moves on every write. */
+function sameObjectiveShape(updated: CurriculumObjectiveRecord, current: ObjectiveRow): boolean {
+  return (
+    updated.title === current.title &&
+    updated.objectiveType === current.objective_type &&
+    updated.expectedBehavior === current.expected_behavior &&
+    updated.description === current.description &&
+    sameStringList(updated.minCriteria, stringList(current.min_criteria)) &&
+    sameStringList(updated.proficientCriteria, stringList(current.proficient_criteria)) &&
+    sameStringList(updated.excellentCriteria, stringList(current.excellent_criteria))
+  );
+}
+
+function sameStringList(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((entry, index) => entry === right[index]);
+}
+
+/**
+ * One task's outcomes and their evidence, in the order the workbench and the
+ * step-2 conversation both read them.
+ *
+ * A pair rather than two functions because the step-2 rules ask a question that
+ * spans both ("which outcomes have no evidence"), and answering it from two
+ * separately-read lists is how the card and the gate end up disagreeing.
+ */
+export async function listCurriculumOutcomes(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<{ objectives: CurriculumObjectiveRecord[]; evidence: CurriculumEvidenceRecord[] }> {
+  const [objectives, evidence] = await Promise.all([
+    queryable.query<ObjectiveRow>(
+      `SELECT ${OBJECTIVE_COLUMNS} FROM curriculum_objective
+        WHERE owner_id = $1 AND task_id = $2
+        ORDER BY sort_order, created_at`,
+      [ownerId, taskId],
+    ),
+    queryable.query<EvidenceRow>(
+      `SELECT ${EVIDENCE_COLUMNS} FROM curriculum_evidence
+        WHERE owner_id = $1 AND task_id = $2
+        ORDER BY sort_order, created_at`,
+      [ownerId, taskId],
+    ),
+  ]);
+  return {
+    objectives: objectives.rows.map((row) => mapObjective(row)),
+    evidence: evidence.rows.map((row) => mapEvidence(row)),
+  };
 }
 
 export async function deleteCurriculumObjective(
@@ -1573,11 +1676,14 @@ export async function deleteCurriculumObjective(
   ownerId: string,
   objectiveId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_objective WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_objective WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, objectiveId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('学习目标不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('学习目标不存在');
+  // A deleted outcome is always a real change: there is no "no-op delete".
+  await withdrawOutcomesSignOff(queryable, ownerId, row.task_id);
 }
 
 // ── Evidence CRUD ───────────────────────────────────────────────────────────
@@ -1625,6 +1731,7 @@ export async function createCurriculumEvidence(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('证据创建失败');
+  await withdrawOutcomesSignOff(queryable, ownerId, taskId);
   return mapEvidence(row);
 }
 
@@ -1633,11 +1740,13 @@ export async function deleteCurriculumEvidence(
   ownerId: string,
   evidenceId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_evidence WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_evidence WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, evidenceId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('证据不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('证据不存在');
+  await withdrawOutcomesSignOff(queryable, ownerId, row.task_id);
 }
 
 // ── Learning node CRUD ──────────────────────────────────────────────────────

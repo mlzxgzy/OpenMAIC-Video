@@ -200,6 +200,9 @@ describe('design workbench authoring gates', () => {
       verificationMethod: '实操验证',
       successCondition: '成功读取 /flag',
     });
+    // Step 2 closes the same way step 1 does: complete is not agreed until the
+    // user signs off, so walking the machine has to confirm it.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outcomes', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → graph
     if (phase === 'graph') return task.id;
 

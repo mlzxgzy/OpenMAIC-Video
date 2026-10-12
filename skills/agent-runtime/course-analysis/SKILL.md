@@ -113,6 +113,31 @@ rather than theirs. Editing the brief afterwards re-opens the step, so a
 correction after the sign-off needs one more confirmation — say so rather than
 leaving them to discover the gate.
 
+## Signing the outcome list off — the same rule, on a list
+
+Phase 2 obeys the same rule with one extra hazard. A complete outcome list — every
+outcome has a behavior, a minimum criterion and evidence — is still not agreed
+until the user confirms it, and the sequence is the same: write with
+`create_learning_outcome` / `patch_learning_outcome` / `create_outcome_evidence`,
+read the list back, and call `confirm_course_outcomes` only when the user plainly
+agrees to it.
+
+The extra hazard is that **the subject is a list, not a fixed card.** A model that
+rewrites five outcomes to change one has no field-wise safety valve: every
+restatement is a change the user cannot see, and one of them can quietly drop a
+minimum criterion and leave the outcome unverifiable. So:
+
+- change only the outcome the request names, and say which one you changed;
+- never restate an outcome you are not changing;
+- keep each outcome's minimum criteria intact unless the request changes them —
+  they are what makes it assessable, not decoration;
+- if the user says 「第二条」 and you cannot tell which is the second, ask rather
+  than guess: a change on the wrong row is invisible until someone audits the
+  whole course.
+
+Editing an outcome or adding evidence re-opens the step, so a correction after
+the sign-off needs one more `confirm_course_outcomes` — say so.
+
 ## When the request is one classroom, not a course
 
 A single lesson is a different shape. If the user wants one classroom for one

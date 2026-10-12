@@ -139,6 +139,9 @@ describe('outcome-first design tools (PGlite)', () => {
       verificationMethod: '实操考试，在 Docker 环境获取指定数据',
       successCondition: '成功读取 /flag',
     });
+    // 0 step 2: the outcome list is complete but not yet agreed, so the machine
+    // refuses to leave it. Confirming is part of walking it, exactly as in step 1.
+    await call(tools, 'confirm_course_outcomes', { taskId: id });
     await call(tools, 'advance_course_design_phase', { taskId: id });
     if (target === 'graph') return id;
     // 3 graph: one node bound to the outcome
@@ -165,7 +168,10 @@ describe('outcome-first design tools (PGlite)', () => {
     it('registers every design tool and keeps the allowlist in step', () => {
       const names = [...tools.keys()].sort();
       expect(names).toEqual([...CURRICULUM_DESIGN_ALLOWLIST].sort());
-      expect(names.length).toBe(22);
+      // 22 design tools + confirm_course_outcomes (step 2's sign-off, added with
+      // the outcomes gate). Keep this count honest so a new tool cannot be added
+      // without the allowlist, the phase map and this number all moving together.
+      expect(names.length).toBe(23);
     });
   });
 

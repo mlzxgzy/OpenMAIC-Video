@@ -19,9 +19,13 @@ import {
   CurriculumPhaseError,
   advanceCurriculumTaskPhase,
   confirmCurriculumDesignStep,
+  createCurriculumEvidence,
+  createCurriculumObjective,
   createCurriculumUnitDependency,
   deleteCurriculumUnitDependency,
   getCurriculumDesignSnapshot,
+  listCurriculumOutcomes,
+  updateCurriculumObjective,
   withdrawCurriculumDesignStep,
 } from '@/lib/server/curriculum/design-store';
 
@@ -178,5 +182,78 @@ describe.skipIf(!contractUrl)('reverse-design store (PostgreSQL)', () => {
     expect((await getCurriculumDesignSnapshot(queryable, OWNER, TASK)).unitDependencies).toEqual(
       [],
     );
+  });
+  it('withdraws the outcome sign-off on a real change, and keeps it on a restatement', async () => {
+    // Its own task, seeded raw like the rest of this file: the phase machine is a
+    // single row, and stepping it here would couple these two cases.
+    await pool.query(
+      `INSERT INTO curriculum_task (id, owner_id, title, audience, duration_hours, problem_statement, design_phase)
+       VALUES ('task-pg-outcomes', $1, 'CTF 综合实战', '安全运维岗新人', 4, '学员无法独立完成基础 Web CTF', 'outcomes')`,
+      [OWNER],
+    );
+    const taskId = 'task-pg-outcomes';
+    const objective = await createCurriculumObjective(queryable, OWNER, taskId, {
+      title: '能够利用 SQL 注入读取指定数据',
+      objectiveType: 'skill',
+      expectedBehavior: '在靶场中构造 payload 读取 flag',
+      minCriteria: ['识别注入点'],
+    });
+    expect(objective.verifiable).toBe(true);
+    await createCurriculumEvidence(queryable, OWNER, taskId, {
+      objectiveId: objective.id,
+      evidenceType: 'lab',
+      verificationMethod: '实操验证',
+      successCondition: '成功读取 /flag',
+    });
+
+    // Complete list, unconfirmed: the same wall step 1 has, on the second step.
+    const unconfirmed = await advanceCurriculumTaskPhase(queryable, OWNER, taskId).catch(
+      (error: unknown) => error,
+    );
+    expect(unconfirmed).toBeInstanceOf(CurriculumPhaseError);
+    expect((unconfirmed as Error).message).toContain('还没有确认');
+
+    await confirmCurriculumDesignStep(queryable, OWNER, taskId, 'outcomes', 'user');
+    expect(
+      (await getCurriculumDesignSnapshot(queryable, OWNER, taskId)).confirmations,
+    ).toHaveLength(1);
+
+    // A restatement: the model resends the whole outcome to change one criterion.
+    // The stored row comes back byte-identical, so the sign-off must survive —
+    // otherwise the AI flow revokes the author's agreement every time the model
+    // repeats itself, which is most turns.
+    await updateCurriculumObjective(queryable, OWNER, objective.id, {
+      title: objective.title,
+      expectedBehavior: objective.expectedBehavior,
+      minCriteria: [...objective.minCriteria],
+    });
+    expect(
+      (await getCurriculumDesignSnapshot(queryable, OWNER, taskId)).confirmations,
+    ).toHaveLength(1);
+
+    // A real change re-opens the step: the confirmation signed the previous list.
+    await updateCurriculumObjective(queryable, OWNER, objective.id, {
+      minCriteria: ['识别注入点', '构造 payload', '读取 flag'],
+    });
+    expect((await getCurriculumDesignSnapshot(queryable, OWNER, taskId)).confirmations).toEqual([]);
+
+    // Re-confirm, then add an outcome: creating one is always a real change to a
+    // list the author has already read, so it re-opens the step too.
+    await confirmCurriculumDesignStep(queryable, OWNER, taskId, 'outcomes', 'user');
+    await createCurriculumObjective(queryable, OWNER, taskId, {
+      title: '课程结束后新增的目标',
+      objectiveType: 'skill',
+      expectedBehavior: '新增的一条',
+      minCriteria: ['x'],
+    });
+    expect((await getCurriculumDesignSnapshot(queryable, OWNER, taskId)).confirmations).toEqual([]);
+
+    // The reader the step-2 routes share, on the production engine.
+    const listed = await listCurriculumOutcomes(queryable, OWNER, taskId);
+    expect(listed.objectives.map((row) => row.id)).toEqual([
+      objective.id,
+      expect.stringMatching(/^obj-/) as unknown as string,
+    ]);
+    expect(listed.evidence.map((row) => row.objectiveId)).toEqual([objective.id]);
   });
 });

@@ -89,6 +89,60 @@
   下载成功。工作台卡片与对话框的验证来自 tsc / eslint / 代码评审与接口层活体
   walk，界面效果请在浏览器里确认。
 
+### Added
+
+- **第二步「学习目标与考核标准」同样是 AI 对话 + 用户签收**：工作台里点「用 AI
+  修改学习目标」即可对话；模型直接把目标与考核方式写进 `curriculum_objective` /
+  `curriculum_evidence`，改完点「确认学习目标」才允许进入知识技能图阶段。
+  `phaseCompletionGaps('graph')` 多一条门禁，`outcomes` 的签收与第一步共用
+  `curriculum_design_confirmation` 表。
+
+  与第一步最关键的区别：**清单没有"只改这一格"的安全阀**。模型每次回答都会重述整条
+  目标，而重述就是一次写入——用户看不出措辞变化，重述却可能顺手丢掉一条最低标准，
+  让可考核的目标退回不可验证。所以清单的安全阀换成**指名道姓**：模型只能用 `ref`
+  指明要改哪一条，规则三条全在 `mergeOutcomePatch()` 里：对不上的 `ref` 丢弃并记账
+  （绝不按位置套用）、删除优先于修改、同一条只接受最后一次 patch。
+
+  一处不对称的容忍度是这一层最难的决定：**目标缺最低标准时接受写入**（落库为
+  "不可验证"，这是 UI 要显示、等人补一句的可见状态），而**证据缺检验方式或成功条件
+  时拒绝**——空的证据行能满足 store 的"每个目标都有证据"门禁却什么都没证明，它会
+  把门禁骗过去。
+
+  确认比第一步多一条底线：**这一轮必须真的动过清单**。没有增删改的"确认"是对一句
+  "看起来还行"的附和，不是签收这一轮的成果。
+
+  改动即撤回签收，但**重述不算改动**：`updateCurriculumObjective` 比较合并后的整行，
+  所以模型为改一条最低标准而重发标题不会撤销用户的确认；新增/删除目标、增删证据一律
+  撤回。agent 侧新增 `confirm_course_outcomes` 工具，skill 与提示词补上对应规则。
+
+  - 规则层 `lib/curriculum/design-outcomes.ts`，AI 步骤 `outcomes-step.ts` +
+    `course-outcomes` 提示词，路由 `outcomes/turn`（对话）与 `outcomes`（状态/确认/
+    撤回），界面 `design-outcomes-dialog.tsx` 与 `design-outcomes-signoff.tsx`
+    （嵌在学习目标卡片头部，不另起一张卡——并排会让人以为多了一步）。
+  - 顺带把第一步的 `parseDirectionTurnRequest` 改名 `parseConversationTurnRequest`
+    并复用：两步的请求体和确认轮次计数相同，两份上限副本会让其中一步接受另一步拒绝的
+    对话记录。
+
+  验证：
+
+  - 新增 `design-outcomes` 31 例、`outcomes-route` 14 例（**均为 0 模型 0 数据库的
+    规则层与路由层**）；`tests/curriculum` 298 例全绿。
+  - 真 PostgreSQL 契约套件 11 例全绿，新增一例专测「重述不撤回、真改动才撤回、
+    新增目标也撤回」。
+  - 回归 `tests/curriculum + agent-runtime + generation`：与 stash 基线**逐条相同**的
+    37 个既有失败，**零新增**。
+  - 活体 walk `design-api-walk.py` **142/142**（证据 `artifacts/regression/
+    design-walk-step2.txt`），含**真实模型跑完的完整第二步**：一轮对话让模型写下
+    6 条学习目标 + 14 条考核方式，全部可验证、每条证据都写明怎么验和什么算通过；
+    模型还主动把两个待定问题（Writeup 是否只限 Web/Pwn、是否用统一评分量表）问回来
+    而不是替用户决定。
+
+  活体校验抓到一个只有跑 walk 才会发现的洞：`createCurriculumObjective` 没有调用撤回
+  逻辑，所以**确认之后新增一条目标，清单已经不是用户读过的那一份，`graph` 门禁却仍
+  然开着**。已修，并由 pg 契约测试锁住。
+
+  未做浏览器端驱动验证（同第一步：Playwright 期望的 chromium 版本本机不具备）。
+
 ## [1.2.0-video.3] - 2026-10-11
 
 基线是上游 `ccdc88a5`（**本版未同步上游**：`v1.2.0-video.2` 之后没有再做

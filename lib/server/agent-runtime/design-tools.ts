@@ -53,6 +53,7 @@ import {
   directionValuesOf,
   formatDirectionCard,
 } from '@/lib/curriculum/design-direction';
+import { formatOutcomeList, outcomeGapsOfRecords } from '@/lib/curriculum/design-outcomes';
 import { traceFromObjective } from '@/lib/curriculum/traceability';
 import {
   CurriculumDesignNotFoundError,
@@ -809,6 +810,24 @@ async function guarded<T>(
  * matters (what is taught, drilled and examined per outcome) rather than every
  * field of every row.
  */
+/**
+ * Evidence grouped by outcome, for the one place the tool layer renders a list.
+ *
+ * The same grouping the step-2 rules build, so the confirm tool's echo of the list
+ * and the list the rules judge are the same list.
+ */
+function evidenceByObjective(
+  evidence: readonly CurriculumDesignSnapshot['evidence'][number][],
+): Map<string, CurriculumDesignSnapshot['evidence']> {
+  const grouped = new Map<string, CurriculumDesignSnapshot['evidence']>();
+  for (const row of evidence) {
+    const list = grouped.get(row.objectiveId);
+    if (list) list.push(row);
+    else grouped.set(row.objectiveId, [row]);
+  }
+  return grouped;
+}
+
 function renderSnapshot(snapshot: CurriculumDesignSnapshot): string {
   const { task, objectives, evidence, nodes, nodeObjectives, dependencies, units, unitCoverage } =
     snapshot;
@@ -1100,6 +1119,59 @@ export function buildCurriculumDesignTools(
           '\n' +
           (next
             ? `Call advance_course_design_phase to enter "${next}", or keep editing the brief first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
+    },
+  };
+
+  const confirmCourseOutcomes: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_outcomes',
+    label: 'Confirm learning outcomes',
+    description:
+      'Record that the user has agreed to the learning outcomes and their assessment criteria. Step 2 of the design is not finished when every outcome has evidence: it is finished when the user has read the list and said yes, and the phase machine refuses to leave "outcomes" until then. Editing an outcome or adding evidence re-opens the step, so this has to be called again after either. Call it only after the user plainly agrees; an outcome that cannot be assessed or has no evidence is refused here, so fill those first.',
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const gaps = outcomeGapsOfRecords(snapshot.objectives, snapshot.evidence);
+      if (gaps.length > 0) {
+        return toolResult(
+          `Cannot confirm the learning outcomes yet: ${gaps.map((gap) => gap.text).join('；')}. ` +
+            'Write the missing behaviour, criterion or evidence first, show the list to the user, and confirm once they agree.',
+          { error: 'outcomes-incomplete', gaps: gaps.map((gap) => gap.text) },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'outcomes',
+        'assistant',
+      );
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Learning outcomes confirmed by the user (step 2 of 7). ${snapshot.objectives.length} outcomes, ` +
+          `${snapshot.evidence.length} pieces of evidence.\n` +
+          formatOutcomeList({
+            objectives: snapshot.objectives.map((row) => ({ id: row.id, title: row.title })),
+            unverifiable: [],
+            unevidenced: [],
+            evidenceByObjective: evidenceByObjective(snapshot.evidence),
+          }) +
+          '\n' +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing the outcomes first.`
             : ''),
         {
           taskId: params.taskId,
@@ -1712,6 +1784,7 @@ export function buildCurriculumDesignTools(
     createCourseTask,
     patchCourseTask,
     confirmCourseDirection,
+    confirmCourseOutcomes,
     getCourseDesign,
     advancePhase,
     createOutcome,
@@ -1785,6 +1858,7 @@ export const CURRICULUM_DESIGN_ALLOWLIST: ReadonlySet<string> = new Set([
   'create_course_task',
   'patch_course_task',
   'confirm_course_direction',
+  'confirm_course_outcomes',
   'get_course_design',
   'advance_course_design_phase',
   'create_learning_outcome',
@@ -1811,6 +1885,7 @@ export const CURRICULUM_DESIGN_TOOL_PHASES: Readonly<Record<string, CurriculumDe
   create_course_task: 'task',
   patch_course_task: 'task',
   confirm_course_direction: 'task',
+  confirm_course_outcomes: 'outcomes',
   get_course_design: 'task',
   advance_course_design_phase: 'task',
   create_learning_outcome: 'outcomes',
@@ -1845,6 +1920,7 @@ export const CURRICULUM_DESIGN_TOOLS_PROMPT = [
   'Never create a chapter or item before the outcomes it serves exist, and never create a learning node before the outcome that needs it.',
   'The store enforces this order and refuses writes that skip a phase, naming what is missing.',
   'Step 1 is the course direction (the brief): settle who is trained, what the course covers and for how long, then let the user confirm. Ask at most two questions per turn instead of interviewing slot by slot; write every fact the user states with `patch_course_task` as it arrives; and call `confirm_course_direction` only after the user plainly agrees to the card. `get_course_design` says whether the direction is confirmed, and the phase machine refuses to leave the brief until it is.',
+  'Step 2 is the learning outcomes and their assessment criteria: each outcome needs a title, an observable behavior, at least one minimum criterion and at least one piece of evidence, and then the user has to agree to the list. Editing an outcome or adding evidence re-opens the step, so `confirm_course_outcomes` has to be called again after either. The phase machine refuses to leave "outcomes" until the list is both complete and confirmed.',
   'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete.',
   'An outcome is verifiable only when it has an expected behavior and at least one minimum criterion; the store refuses to mark one verifiable otherwise, and every outcome needs evidence before the graph phase opens.',
   'A chapter classifies; it carries no content. An item is a lecture, practice or exam, and the design may not assume a practice and an exam after every lecture — decide from the outcome and its evidence.',
