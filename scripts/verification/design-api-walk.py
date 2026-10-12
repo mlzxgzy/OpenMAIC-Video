@@ -266,6 +266,30 @@ st, body = req(owner, "PUT", f"/api/curriculum/design/tasks/{task_id}/node-objec
 check("PUT /node-objectives -> 200", st, 200)
 check("two links kept", len(body.get("links", [])) if isinstance(body, dict) else -1, 2)
 
+# One objective is still supported by nothing. The old gate checked only "every
+# node has a goal", so this passed; step 3 checks **both** ends, and the walk
+# proves it by advancing anyway and being refused.
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("an unsupported objective blocks the outline even with every node linked",
+      any("没有任何知识/技能点支撑" in g for g in body["gaps"]), True)
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("advance graph -> outline refused for it -> 409", st, 409)
+show("refusal", body)
+
+# Now give the second outcome something behind it, and sign the graph off.
+st, body = req(owner, "PUT", f"/api/curriculum/design/tasks/{task_id}/node-objectives", {
+    "links": [{"nodeId": n_http, "objectiveId": obj["id"], "supportLevel": "secondary"},
+              {"nodeId": n_sql, "objectiveId": obj["id"], "supportLevel": "primary"},
+              {"nodeId": n_sql, "objectiveId": obj2["id"], "supportLevel": "primary"}]})
+check("linking the second objective -> 200", st, 200)
+st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/phase")
+check("the sign-off is still the only thing left", body["gaps"],
+      ["知识技能图还没有确认（确认后才会进入大纲阶段）"])
+st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/knowledge")
+check("sign the graph off -> 200", st, 200)
+check("the sign-off records the user",
+      (body.get("confirmation") or {}).get("confirmedBy"), "user")
+
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/dependencies", {
     "sourceId": n_http, "targetId": n_sql, "sourceKind": "node", "targetKind": "node",
     "edgeType": "prerequisite", "strength": 0.9})
@@ -279,7 +303,7 @@ show("cycle refusal", body)
 
 # the graph is now fully linked, so the outline may be entered
 st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}/phase")
-check("graph gaps clear after linking", body["gaps"], [])
+check("graph gaps clear after linking AND confirming", body["gaps"], [])
 st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{task_id}/phase")
 check("advance graph -> outline", st, 200)
 
@@ -565,6 +589,72 @@ else:
             check("then it can be signed off -> 200", st, 200)
             st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/phase")
             check("a conversation-built course can leave step 2", st, 200)
+
+            print()
+            print("STEP 3 CONVERSATION (live model)")
+            st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/knowledge/turn", {
+                "instruction": "从这些目标反推需要哪些知识点和技能点，"
+                               "Web 和 Pwn 拆细一点，Crypto 只留密码学基础；"
+                               "这一轮先不排章节",
+            })
+            if st == 400 and body.get("error", {}).get("code") == "MISSING_MODEL":
+                print("SKIP  no language model configured for the design slot")
+            else:
+                check("POST /knowledge/turn -> 200", st, 200)
+                show("model message", body.get("message", ""), 300)
+                nodes = body.get("nodes", [])
+                links = body.get("nodeObjectives", [])
+                objectives = body.get("objectives", [])
+                check("the turn wrote at least one node", len(nodes) > 0, True)
+                check("every stored node names something",
+                      all(n.get("name") for n in nodes), True)
+                print(f"    nodes={len(nodes)} links={len(links)}")
+                for n in nodes[:4]:
+                    print(f"    - [{n['nodeType']}] {n['name']}")
+                node_ids = {n["id"] for n in nodes}
+                goal_ids = {o["id"] for o in objectives}
+                check("no link points at a node that is not there",
+                      all(l.get("nodeId") in node_ids for l in links), True)
+                check("no link points at an outcome that is not there",
+                      all(l.get("objectiveId") in goal_ids for l in links), True)
+                for gap in body.get("gaps", [])[:4]:
+                    print(f"    gap: {gap['text']}")
+
+                # The load-bearing assertion: re-link one node and check that every
+                # other node kept its links. This is the failure that a whole-set
+                # replace would cause silently.
+                before = {(l["nodeId"], l["objectiveId"]) for l in links}
+                if len(nodes) >= 2 and len(links) >= 1:
+                    target = nodes[0]
+                    keep = [l for l in links if l["nodeId"] != target["id"]]
+                    st, body = req(owner, "POST",
+                                   f"/api/curriculum/design/tasks/{ai_id}/knowledge/turn",
+                                   {"instruction": f"让「{target['name']}」同时支撑所有目标，"
+                                                   "其余知识点的支撑关系不要动"})
+                    check("the re-link turn -> 200", st, 200)
+                    after_links = body.get("nodeObjectives", [])
+                    kept = {(l["nodeId"], l["objectiveId"]) for l in after_links
+                            if l["nodeId"] != target["id"]}
+                    want_kept = {(l["nodeId"], l["objectiveId"]) for l in keep}
+                    check("links of untouched nodes survived a re-link", kept, want_kept)
+
+                # Whatever the model left open, the author closes it by hand.
+                st, state = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_id}/knowledge")
+                for n in state["nodes"]:
+                    if not any(l["nodeId"] == n["id"] for l in state["nodeObjectives"]):
+                        req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/node-objectives", {
+                            "links": [{"nodeId": n["id"], "objectiveId": state["objectives"][0]["id"]}]})
+                for o in state["objectives"]:
+                    if not any(l["objectiveId"] == o["id"] for l in state["nodeObjectives"]):
+                        req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/node-objectives", {
+                            "links": [{"nodeId": state["nodes"][0]["id"], "objectiveId": o["id"]}]})
+                        break
+                st, body = req(owner, "GET", f"/api/curriculum/design/tasks/{ai_id}/knowledge")
+                check("a hand-completed graph has no gaps", body["gaps"], [])
+                st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/knowledge")
+                check("then it can be signed off -> 200", st, 200)
+                st, body = req(owner, "POST", f"/api/curriculum/design/tasks/{ai_id}/phase")
+                check("a conversation-built course can leave step 3", st, 200)
 
 st, snap = req(owner, "GET", f"/api/curriculum/design/tasks/{task_id}")
 check("GET snapshot -> 200", st, 200)

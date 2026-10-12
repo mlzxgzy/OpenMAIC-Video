@@ -951,6 +951,30 @@ async function withdrawOutcomesSignOff(
   await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'outcomes');
 }
 
+/**
+ * Drop the `graph` sign-off because the knowledge graph really changed.
+ *
+ * Step 3's rule is step 2's: the confirmation signs *that* graph, so a node or a
+ * link edited after the author read it back has to be read again. Two consequences
+ * worth stating, because they are where a reviewer will look:
+ *
+ * - It is **not** called on a no-op write. The model rewrites a node to change one
+ *   link, and revoking on an unchanged row would make the badge flicker on every
+ *   message.
+ * - It is a separate function from `withdrawOutcomesSignOff` even though the body
+ *   is one line, and that is deliberate. The two signs cover different lists; a
+ *   parameterised helper would let a caller pass the wrong step silently, and the
+ *   failure would be "a confirmed step quietly unlocked" — the exact failure the
+ *   whole table exists to prevent.
+ */
+async function withdrawKnowledgeSignOff(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<void> {
+  await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'graph');
+}
+
 async function readObjectiveRow(
   queryable: Queryable,
   ownerId: string,
@@ -1346,6 +1370,38 @@ export async function phaseCompletionGaps(
     );
     if (Number(orphanNodes.rows[0]?.count ?? 0) > 0) {
       gaps.push(`${orphanNodes.rows[0].count} 个知识/技能节点不支撑任何学习目标`);
+    }
+    // The other end of the same relation, and it was missing here. Every node
+    // having a goal does not mean every goal has a node: an outcome nobody can
+    // point at a piece of knowledge for reaches the outline phase with nothing to
+    // teach, and the failure surfaces as a teaching design that invents content.
+    // The step-3 rules already report this gap to the model and the card, so a
+    // gate that does not check it would let the workbench advance on a graph the
+    // conversation itself calls unfinished.
+    const unsupportedObjectives = await queryable.query<{ count: number | string }>(
+      `SELECT count(*)::int AS count
+         FROM curriculum_objective o
+        WHERE o.owner_id = $1 AND o.task_id = $2 AND o.status <> 'archived'
+          AND NOT EXISTS (SELECT 1 FROM curriculum_node_objective no
+                           WHERE no.owner_id = $1 AND no.objective_id = o.id)`,
+      [ownerId, taskId],
+    );
+    if (Number(unsupportedObjectives.rows[0]?.count ?? 0) > 0) {
+      gaps.push(`${unsupportedObjectives.rows[0].count} 个学习目标没有任何知识/技能点支撑`);
+    }
+    // The graph being complete is not the same fact as the user having agreed to
+    // it — the same distinction step 1 draws for the brief and step 2 for the
+    // outcome list. The outline is arranged on top of this graph, so the sign-off
+    // is checked here rather than in the UI; a client that POSTs the phase route
+    // directly meets the same gate.
+    const graphConfirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'graph',
+    );
+    if (!graphConfirmation) {
+      gaps.push('知识技能图还没有确认（确认后才会进入大纲阶段）');
     }
   }
 
@@ -1786,6 +1842,9 @@ export async function createCurriculumLearningNode(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('知识/技能节点创建失败');
+  // Adding a node is always a real change — there is no "no-op create" — and the
+  // sign-off covers the graph the author read, not the one that now exists.
+  await withdrawKnowledgeSignOff(queryable, ownerId, taskId);
   return mapNode(row);
 }
 
@@ -1824,7 +1883,37 @@ export async function updateCurriculumLearningNode(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
-  return mapNode(row);
+  const updated = mapNode(row);
+  await withdrawKnowledgeSignOffIfChanged(queryable, ownerId, updated, current);
+  return updated;
+}
+
+/**
+ * Withdraw the `graph` sign-off only when the merge produced a different node.
+ *
+ * Same rule, same reason, as `withdrawOutcomesSignOffIfChanged`: a patch is a
+ * merge, and the model routinely sends every field to change one of them.
+ */
+async function withdrawKnowledgeSignOffIfChanged(
+  queryable: Queryable,
+  ownerId: string,
+  updated: CurriculumLearningNodeRecord,
+  current: NodeRow,
+): Promise<void> {
+  if (sameNodeShape(updated, current)) return;
+  await withdrawKnowledgeSignOff(queryable, ownerId, updated.taskId);
+}
+
+/** The fields an author reads. `updatedAt` is excluded: it moves on every write. */
+function sameNodeShape(updated: CurriculumLearningNodeRecord, current: NodeRow): boolean {
+  return (
+    updated.name === current.name &&
+    updated.nodeType === current.node_type &&
+    updated.summary === current.summary &&
+    updated.difficulty === current.difficulty &&
+    updated.parentId === current.parent_id &&
+    updated.code === current.code
+  );
 }
 
 export async function deleteCurriculumLearningNode(
@@ -1832,11 +1921,13 @@ export async function deleteCurriculumLearningNode(
   ownerId: string,
   nodeId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_learning_node WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_learning_node WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, nodeId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
+  const row = result.rows[0];
+  if (!row) throw new CurriculumDesignNotFoundError('知识/技能节点不存在');
+  await withdrawKnowledgeSignOff(queryable, ownerId, row.task_id);
 }
 
 export async function setCurriculumNodeObjectives(
@@ -1849,7 +1940,7 @@ export async function setCurriculumNodeObjectives(
   // Dedupe on the pair, which is this table's own UNIQUE key. Keying on the
   // objective alone silently keeps one supporter per outcome, which is the
   // opposite of what the layer is for: an outcome built from several knowledge
-  // nodes loses all but the last, and the audit then reports it as unsupported
+  // nodes loses all-but-the-last, and the audit then reports it as unsupported
   // on a design that does support it.
   const unique = new Map<string, CurriculumNodeObjectiveInput>();
   for (const link of links) {
@@ -1866,6 +1957,15 @@ export async function setCurriculumNodeObjectives(
       throw new CurriculumDesignValidationError('知识/技能节点和学习目标必须属于同一个课程任务');
     }
   }
+
+  // The step-3 turn route calls this with the *whole* set it computed, merging the
+  // nodes it did not name back in before calling (see `mergeNodeLinks`). This
+  // function itself stays the blunt "replace everything" it always was, because
+  // the workbench's save button means exactly that. The guard therefore belongs
+  // on the comparison below: whatever the caller intended, the stored set is what
+  // the sign-off has to be compared against.
+  if (await sameLinkSet(queryable, ownerId, taskId, unique))
+    return listLinksForTask(queryable, ownerId, taskId);
 
   await queryable.query(
     'DELETE FROM curriculum_node_objective WHERE owner_id = $1 AND task_id = $2',
@@ -1891,7 +1991,49 @@ export async function setCurriculumNodeObjectives(
     const row = result.rows[0];
     if (row) created.push(mapNodeObjective(row));
   }
+  await withdrawKnowledgeSignOff(queryable, ownerId, taskId);
   return created;
+}
+
+/**
+ * Whether the stored link set already equals `wanted`, comparing what the author
+ * reads: the pair, the support level and the note.
+ *
+ * `note` is included because it is a column the workbench edits (and the step-3
+ * turn may set), and because a change to only the note is still a change the
+ * author would need to read back.
+ */
+async function sameLinkSet(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  wanted: ReadonlyMap<string, CurriculumNodeObjectiveInput>,
+): Promise<boolean> {
+  const current = await listLinksForTask(queryable, ownerId, taskId);
+  if (current.length !== wanted.size) return false;
+  const byPair = new Map(current.map((row) => [`${row.nodeId}:${row.objectiveId}`, row]));
+  for (const [pair, link] of wanted) {
+    const row = byPair.get(pair);
+    if (!row) return false;
+    if (row.supportLevel !== (link.supportLevel ?? 'primary')) return false;
+    if ((row.note ?? null) !== optionalText(link.note)) return false;
+  }
+  return true;
+}
+
+function listLinksForTask(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<CurriculumNodeObjectiveRecord[]> {
+  return queryable
+    .query<NodeObjectiveRow>(
+      `SELECT ${NODE_OBJECTIVE_COLUMNS} FROM curriculum_node_objective
+        WHERE owner_id = $1 AND task_id = $2
+        ORDER BY node_id, created_at`,
+      [ownerId, taskId],
+    )
+    .then((result) => result.rows.map((row) => mapNodeObjective(row)));
 }
 
 // ── Dependency CRUD ─────────────────────────────────────────────────────────

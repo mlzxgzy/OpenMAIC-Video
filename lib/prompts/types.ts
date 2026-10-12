@@ -11,6 +11,7 @@ export type PromptId =
   | 'outline-revision'
   | 'course-direction'
   | 'course-outcomes'
+  | 'course-knowledge'
   | 'web-search-query-rewrite'
   | 'agent-system'
   | 'agent-system-wb-teacher'

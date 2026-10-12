@@ -29,6 +29,7 @@ export const PROMPT_IDS = {
   OUTLINE_REVISION: 'outline-revision',
   COURSE_DIRECTION: 'course-direction',
   COURSE_OUTCOMES: 'course-outcomes',
+  COURSE_KNOWLEDGE: 'course-knowledge',
   WEB_SEARCH_QUERY_REWRITE: 'web-search-query-rewrite',
   AGENT_SYSTEM: 'agent-system',
   AGENT_SYSTEM_WB_TEACHER: 'agent-system-wb-teacher',

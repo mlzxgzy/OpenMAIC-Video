@@ -158,8 +158,9 @@ describe('outcome-first design tools (PGlite)', () => {
       nodeId: withNode.nodes[0]!.id,
       objectives: [{ objectiveId }],
     });
-    // `graph` returns without advancing: the node work is graph work, and
-    // crossing into `outline` is the caller's next gate.
+    // Steps past `graph` require step 3's sign-off too, which is the caller's job:
+    // `advanceTo('graph')` stops there on purpose, and `drillItem` confirms before
+    // crossing. Walking the machine means honouring each step's gate.
     await call(tools, 'advance_course_design_phase', { taskId: id });
     return id;
   }
@@ -168,10 +169,12 @@ describe('outcome-first design tools (PGlite)', () => {
     it('registers every design tool and keeps the allowlist in step', () => {
       const names = [...tools.keys()].sort();
       expect(names).toEqual([...CURRICULUM_DESIGN_ALLOWLIST].sort());
-      // 22 design tools + confirm_course_outcomes (step 2's sign-off, added with
-      // the outcomes gate). Keep this count honest so a new tool cannot be added
-      // without the allowlist, the phase map and this number all moving together.
-      expect(names.length).toBe(23);
+      // 22 design tools + the three step sign-offs: confirm_course_direction
+      // (step 1), confirm_course_outcomes (step 2), confirm_course_knowledge
+      // (step 3, added with the graph gate). Keep this count honest so a new tool
+      // cannot be added without the allowlist, the phase map and this number all
+      // moving together.
+      expect(names.length).toBe(24);
     });
   });
 
@@ -347,9 +350,29 @@ describe('outcome-first design tools (PGlite)', () => {
   describe('lab design integrity', () => {
     /** An item that drills the seeded outcome, in the outline phase. */
     async function drillItem(taskId: string) {
-      // advanceTo('graph') leaves the task in `graph`; units are `outline` work,
-      // so cross that gate first. (create_curriculum_unit is refused below
-      // without it — that refusal is the phase lock this file exists to pin.)
+      // advanceTo('graph') returns the task **in** `graph`, before any node work,
+      // on purpose: the graph-phase tests above are about an empty graph. Step 3's
+      // rule is that a complete graph is still not an agreed one, so this helper
+      // has to build the node, link it to the outcome and sign it off before the
+      // phase will open — which is exactly the sequence a real design follows.
+      const graph = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+        objectives: { id: string }[];
+      };
+      await call(tools, 'create_learning_node', {
+        taskId,
+        name: 'SQL 注入原理',
+        nodeType: 'knowledge',
+      });
+      const withNode = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+        nodes: { id: string }[];
+      };
+      await call(tools, 'set_node_objectives', {
+        taskId,
+        nodeId: withNode.nodes[0]!.id,
+        objectives: [{ objectiveId: graph.objectives[0]!.id }],
+      });
+      const confirmation = await call(tools, 'confirm_course_knowledge', { taskId });
+      expect(confirmation.isError).toBe(false);
       const toOutline = await call(tools, 'advance_course_design_phase', { taskId });
       expect(toOutline.details!.designPhase).toBe('outline');
       const unit = await call(tools, 'create_curriculum_unit', {

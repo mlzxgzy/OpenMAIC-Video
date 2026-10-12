@@ -138,6 +138,28 @@ minimum criterion and leave the outcome unverifiable. So:
 Editing an outcome or adding evidence re-opens the step, so a correction after
 the sign-off needs one more `confirm_course_outcomes` — say so.
 
+## Signing the knowledge graph off — the same rule, on a graph
+
+Phase 3 obeys the same rule again, with one more condition: **the graph must be
+connected at both ends.** Every node has to support an outcome *and* every outcome
+has to have a node behind it. Work back from each outcome to what it takes to
+reach it, create the nodes with `create_learning_node`, wire them with
+`set_node_objectives`, read the graph back, and call `confirm_course_knowledge`
+only when the user plainly agrees.
+
+Two hazards are specific to this phase:
+
+- **`set_node_objectives` replaces the whole task's link set.** Send every link
+  every time, not only the ones you changed. Sending a subset silently deletes the
+  rest of the graph, and a graph that lost an edge looks fine until the outline
+  stage finds an outcome with nothing to teach.
+- **Do not arrange anything here.** No chapters, no items, no teaching order: the
+  outline is phase 4. A node is one teachable, checkable thing — 「Web 安全」 is a
+  chapter, 「联合查询读数据」 is a node.
+
+Editing a node or a link re-opens the step, so a correction after the sign-off
+needs one more `confirm_course_knowledge` — say so.
+
 ## When the request is one classroom, not a course
 
 A single lesson is a different shape. If the user wants one classroom for one

@@ -67,6 +67,7 @@ import {
 } from '@/components/ui/select';
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
+import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
 import {
   CreateForm,
   InlineEdit,
@@ -625,7 +626,9 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <CardTitle className="text-base">知识技能与依赖</CardTitle>
-              <CardDescription>每个知识点都要支撑至少一个目标，否则进不了大纲阶段</CardDescription>
+              <CardDescription>
+                两端都要连上：每个知识点支撑至少一个目标，每个目标也至少有一个知识点
+              </CardDescription>
             </div>
             <CreateForm
               kind="nodes"
@@ -669,6 +672,22 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
               }
             />
           </div>
+          {/* Same arrangement as the outcome list above, for the same reason: the
+              nodes below and this sign-off are two faces of the same step, so the
+              strip lives inside this card rather than beside it. */}
+          <DesignKnowledgeSignOff
+            taskId={snapshot.task.id}
+            nodes={nodes}
+            nodeObjectives={snapshot.nodeObjectives ?? []}
+            objectives={objectives}
+            confirmation={snapshot.confirmations.find((entry) => entry.step === 'graph') ?? null}
+            run={run}
+            busy={busy}
+            onRefresh={async () => {
+              await load();
+              await onChanged();
+            }}
+          />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           {nodes.length === 0 ? (

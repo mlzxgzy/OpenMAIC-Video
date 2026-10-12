@@ -213,6 +213,8 @@ describe('design workbench authoring gates', () => {
     await setCurriculumNodeObjectives(pool, OWNER, task.id, [
       { nodeId: node.id, objectiveId: objective.id },
     ]);
+    // Step 3 sign-off, same as steps 1 and 2: a complete graph is not an agreed one.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → outline
     if (phase === 'outline') return task.id;
 

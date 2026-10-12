@@ -54,6 +54,7 @@ import {
   formatDirectionCard,
 } from '@/lib/curriculum/design-direction';
 import { formatOutcomeList, outcomeGapsOfRecords } from '@/lib/curriculum/design-outcomes';
+import { formatKnowledgeList, knowledgeGapsOfRecords } from '@/lib/curriculum/design-knowledge';
 import { traceFromObjective } from '@/lib/curriculum/traceability';
 import {
   CurriculumDesignNotFoundError,
@@ -828,6 +829,25 @@ function evidenceByObjective(
   return grouped;
 }
 
+/**
+ * The node-to-outcome links grouped by node, the shape `formatKnowledgeList` takes.
+ *
+ * The counterpart to `evidenceByObjective`: both exist because a graph or an
+ * outcome's support is a question about a whole set, and answering it by grouping
+ * at each call site is how two tools end up rendering the same design differently.
+ */
+function linksByNodeOf(
+  links: readonly CurriculumDesignSnapshot['nodeObjectives'][number][],
+): Map<string, { objectiveId: string }[]> {
+  const grouped = new Map<string, { objectiveId: string }[]>();
+  for (const row of links) {
+    const list = grouped.get(row.nodeId);
+    if (list) list.push(row);
+    else grouped.set(row.nodeId, [row]);
+  }
+  return grouped;
+}
+
 function renderSnapshot(snapshot: CurriculumDesignSnapshot): string {
   const { task, objectives, evidence, nodes, nodeObjectives, dependencies, units, unitCoverage } =
     snapshot;
@@ -1172,6 +1192,66 @@ export function buildCurriculumDesignTools(
           '\n' +
           (next
             ? `Call advance_course_design_phase to enter "${next}", or keep editing the outcomes first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
+    },
+  };
+
+  const confirmCourseKnowledge: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_knowledge',
+    label: 'Confirm the knowledge and skill graph',
+    description:
+      'Record that the user has agreed to the knowledge/skill graph. Step 3 of the design is not finished when every node supports an outcome: it is finished when the user has read the graph and said yes, and the phase machine refuses to leave "graph" until then. The graph must be connected at **both** ends — every node supports an outcome and every outcome has a node — and editing either re-opens the step, so this has to be called again after either. Call it only after the user plainly agrees; anything missing is refused here, so build the missing nodes or links first.',
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const gaps = knowledgeGapsOfRecords(
+        snapshot.nodes.map((row) => ({ id: row.id, name: row.name, nodeType: row.nodeType })),
+        snapshot.nodeObjectives,
+        snapshot.objectives.map((row) => ({ id: row.id, title: row.title })),
+      );
+      if (gaps.length > 0) {
+        return toolResult(
+          `Cannot confirm the knowledge graph yet: ${gaps.map((gap) => gap.text).join('；')}. ` +
+            'Write the missing nodes or links first, show the graph to the user, and confirm once they agree.',
+          { error: 'knowledge-incomplete', gaps: gaps.map((gap) => gap.text) },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'graph',
+        'assistant',
+      );
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Knowledge and skill graph confirmed by the user (step 3 of 7). ${snapshot.nodes.length} nodes, ` +
+          `${snapshot.nodeObjectives.length} links.\n` +
+          formatKnowledgeList({
+            nodes: snapshot.nodes.map((row) => ({
+              id: row.id,
+              name: row.name,
+              nodeType: row.nodeType,
+            })),
+            objectives: snapshot.objectives.map((row) => ({ id: row.id, title: row.title })),
+            linksByNode: linksByNodeOf(snapshot.nodeObjectives),
+          }) +
+          '\n' +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing the graph first.`
             : ''),
         {
           taskId: params.taskId,
@@ -1785,6 +1865,7 @@ export function buildCurriculumDesignTools(
     patchCourseTask,
     confirmCourseDirection,
     confirmCourseOutcomes,
+    confirmCourseKnowledge,
     getCourseDesign,
     advancePhase,
     createOutcome,
@@ -1859,6 +1940,7 @@ export const CURRICULUM_DESIGN_ALLOWLIST: ReadonlySet<string> = new Set([
   'patch_course_task',
   'confirm_course_direction',
   'confirm_course_outcomes',
+  'confirm_course_knowledge',
   'get_course_design',
   'advance_course_design_phase',
   'create_learning_outcome',
@@ -1886,6 +1968,7 @@ export const CURRICULUM_DESIGN_TOOL_PHASES: Readonly<Record<string, CurriculumDe
   patch_course_task: 'task',
   confirm_course_direction: 'task',
   confirm_course_outcomes: 'outcomes',
+  confirm_course_knowledge: 'graph',
   get_course_design: 'task',
   advance_course_design_phase: 'task',
   create_learning_outcome: 'outcomes',
@@ -1921,6 +2004,7 @@ export const CURRICULUM_DESIGN_TOOLS_PROMPT = [
   'The store enforces this order and refuses writes that skip a phase, naming what is missing.',
   'Step 1 is the course direction (the brief): settle who is trained, what the course covers and for how long, then let the user confirm. Ask at most two questions per turn instead of interviewing slot by slot; write every fact the user states with `patch_course_task` as it arrives; and call `confirm_course_direction` only after the user plainly agrees to the card. `get_course_design` says whether the direction is confirmed, and the phase machine refuses to leave the brief until it is.',
   'Step 2 is the learning outcomes and their assessment criteria: each outcome needs a title, an observable behavior, at least one minimum criterion and at least one piece of evidence, and then the user has to agree to the list. Editing an outcome or adding evidence re-opens the step, so `confirm_course_outcomes` has to be called again after either. The phase machine refuses to leave "outcomes" until the list is both complete and confirmed.',
+  'Step 3 is the knowledge and skill graph: work back from each outcome to the knowledge and the operations it needs, create the nodes with `create_learning_node`, and wire each to the outcomes it supports with `set_node_objectives`. The graph must be connected at BOTH ends — every node supports an outcome and every outcome has a node — because an outcome with nothing behind it reaches the outline with nothing to teach, and a node with nothing behind it is never taught. `set_node_objectives` replaces the whole task link set, so send every link each time. Editing a node or a link re-opens the step, so `confirm_course_knowledge` has to be called again after either. Do not create chapters or items here: the outline is step 4.',
   'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete.',
   'An outcome is verifiable only when it has an expected behavior and at least one minimum criterion; the store refuses to mark one verifiable otherwise, and every outcome needs evidence before the graph phase opens.',
   'A chapter classifies; it carries no content. An item is a lecture, practice or exam, and the design may not assume a practice and an exam after every lecture — decide from the outcome and its evidence.',

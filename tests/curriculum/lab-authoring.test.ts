@@ -268,6 +268,8 @@ describe('the store and the database both refuse a warm exam', () => {
     await setCurriculumNodeObjectives(pool, OWNER, task.id, [
       { nodeId: node.id, objectiveId: objective.id },
     ]);
+    // Step 3 sign-off, same as steps 1 and 2: a complete graph is not an agreed one.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → outline
 
     const unit = await createCurriculumUnit(pool, OWNER, task.id, {

@@ -143,6 +143,67 @@
 
   未做浏览器端驱动验证（同第一步：Playwright 期望的 chromium 版本本机不具备）。
 
+### Added
+
+- **第三步「知识点与技能点拆解」同样是 AI 对话 + 用户签收**：工作台「知识技能与依赖」
+  卡片里点「用 AI 拆解知识技能点」即可对话；模型直接写 `curriculum_learning_node` 与
+  `curriculum_node_objective`。确认前 `graph → outline` 一律 409，且这个 409 写在
+  store 里（直接 POST 阶段路由也推不动）。
+  - 规则层 `lib/curriculum/design-knowledge.ts`：解析、缺口、确认判定。`ref` 指名
+    节点、`objectiveRef` 指名目标，两个指向都对不上就丢弃并记账。
+  - **连线按节点合并，绝不整表替换**：store 的 `setCurriculumNodeObjectives` 是
+    「删掉本任务全部连线再重建」，那是工作台保存按钮的语义；模型一轮只提到它改的
+    几个节点，照搬会**把它没提到的节点的连线连带删掉**，而且用户看不出。规则层按节点
+    算意图，合并成这一轮之后的完整集合再交给 store。
+  - **`objectiveRef: null` 可以清空一个节点的连线**：否则用户挂错一条支撑线只能删掉
+    整个节点重来。
+  - **这一步不排章节**：解析器不接受任何章节字段，模型擅自写的 `chapters` / `units`
+    被丢弃并在 `rejectedRefs` 里说明。
+  - agent 工具 `confirm_course_knowledge`，并同步
+    `CURRICULUM_DESIGN_ALLOWLIST` / `CURRICULUM_DESIGN_TOOL_PHASES` /
+    `CURRICULUM_DESIGN_TOOLS_PROMPT` 与 `course-analysis` skill。
+
+### Changed
+
+- **`phaseCompletionGaps('outline')` 补上了缺失的那一半**：原来只检查「每个节点都要有
+  目标」，**一个目标完全可以没有任何节点**——它照样通过检查，然后在大纲阶段变成
+  「讲什么都不知道」。现在两端都查，并加上 `graph` 签收检查。
+
+- **节点写入开始撤回签收**：`createCurriculumLearningNode` /
+  `deleteCurriculumLearningNode` 之前不动签收，所以确认之后新增一个节点，
+  `outline` 门禁却仍然开着（同第二步 `createCurriculumObjective` 那个洞）。
+
+- **`setCurriculumNodeObjectives` 不再无条件删表重建**：它比较 pair、支撑强度、备注
+  三项，也就是作者会读的那几项，一致就不写。否则工作台每点一次「保存」都会撤回
+  签收，即使连线集合一个字节都没变。
+
+  验证：
+
+  - 新增 `design-knowledge` 28 例、`knowledge-step` 10 例、`knowledge-route` 15 例
+    （后者为 PGlite 路由层，断言的是**数据库里的行**）；`tests/curriculum` **351 例
+    全绿**。
+  - 回归 `tests/curriculum + agent-runtime + generation + persistence`：与 stash
+    基线**逐条相同**的 60 个既有失败，**零新增**（基线
+    `artifacts/regression/step3-wide-before.txt` 与改动后 `…-after3.txt` 的 `diff`
+    为空）。
+  - 活体 walk `design-api-walk.py` **158/158**（证据
+    `artifacts/regression/design-walk-step3.txt`），含**真实模型跑完的完整第三步**：
+    一轮对话让模型从 9 条学习目标反推出 37 个知识/技能点 + 41 条支撑关系，并主动把
+    三处推断（pwntools 脚本点同时挂两个目标、Crypto 拆细后可能支撑不足等）说出来请
+    用户确认，而不是替用户决定。
+  - walk 里新增一条断言专门钉住「连线按节点合并」：改一个节点的支撑之后，
+    **其余节点的连线一条不少**。
+
+  测试抓到三个真 bug（都已修）：① `create`/`delete` 不撤回签收；
+  ② `setCurriculumNodeObjectives` 每次保存都撤回；③ 第一版把「这一轮提到过的节点」
+  排除在缺口之外，结果模型刚清空一个节点的连线，这个节点就从「待挂目标」里消失了
+  ——判据必须是**这一轮之后还有没有连线**，而不是「有没有被提到」。
+
+  活体 walk 顺带证明了新门禁：一条目标没有任何节点支撑时，即使每个节点都挂了目标，
+  推进仍然被拒（`1 个学习目标没有任何知识/技能点支撑`）。
+
+  未做浏览器端驱动验证（同第一步）。
+
 ## [1.2.0-video.3] - 2026-10-11
 
 基线是上游 `ccdc88a5`（**本版未同步上游**：`v1.2.0-video.2` 之后没有再做

@@ -230,6 +230,11 @@ describe('design routes (PGlite)', () => {
     await setCurriculumNodeObjectives(pool, OWNER, task.id, [
       { nodeId: node.id, objectiveId: objective.id },
     ]);
+    // Step 3 sign-off, the same rule as the two above: a complete graph is still
+    // not an agreed one. Every fixture that walks past `graph` needs this line —
+    // their needing it is the gate working, not a fixture that quietly stopped
+    // exercising the phase machine.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'graph', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'outline') return;
     const unit = await createCurriculumUnit(pool, OWNER, task.id, {
