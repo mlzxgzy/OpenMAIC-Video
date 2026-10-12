@@ -287,6 +287,10 @@ describe('the store and the database both refuse a warm exam', () => {
     // the assessment phase has to sign the outline on the way.
     await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → teaching
+    // Step 6 gates `teaching → assessment`, and it is the step a lab task is
+    // authored against: the drill checks what the item says it teaches. So the
+    // walk signs the lesson design on the way, like every step before it.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'teaching', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → assessment
 
     return { taskId: task.id, unitId: unit.id, objectiveId: objective.id };

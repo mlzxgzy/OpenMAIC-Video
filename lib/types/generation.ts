@@ -109,6 +109,15 @@ export interface DeckDesignPage {
   visual?: string;
   /** The snippet the page must show, verbatim. */
   code?: string;
+  /**
+   * The knowledge/skill points this page is responsible for, by **name**.
+   *
+   * Names rather than ids because this is printed into the outline prompt
+   * verbatim and the generator has never seen the curriculum's node ids. Its
+   * purpose is to keep the page plan answerable to the teaching script: a node
+   * the script says must be taught in full has to be carried by some page.
+   */
+  teaches?: string[];
 }
 
 /**

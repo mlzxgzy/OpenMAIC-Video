@@ -192,11 +192,45 @@
     `.../outline`（GET/POST/DELETE）与 `.../outline/turn`、界面
     `design-outline-dialog.tsx` + `design-outline-signoff.tsx`。
 
+- **第六步「教学内容生产」：授课脚本 → 分镜，同样是 AI 对话 + 用户签收**：工作台新增
+  「授课脚本与分镜」卡片，点「用 AI 写脚本与分镜」即可对话。每个条目写清**讲什么、讲到
+  什么程度**（讲透 / 带过 / 点名 / 不讲），讲课条目再把这件事落成**分镜**——每页一句
+  目标、一句核心信息、一种呈现方式。确认前 `teaching → assessment` 一律 409。
+  - **脚本和分镜写在同一个 plan 对象里进出**，不是两个数组：分镜是脚本的逐页化身，拆成
+    两处写，模型就会改了一处忘了另一处，而两者的矛盾在界面上看不出来——脚本一个表格、
+    分镜一个列表，各自都完整——直到生成出一份与设计无关的课件。
+  - **新增两条审核规则**（`teach_covers` 层）：`unit_lesson_undesigned`（条目没有教学
+    设计、讲课条目没有分镜）与 `deck_script_conflict`（脚本说要讲透的节点没有任何一页
+    担着，或分镜在讲脚本写明不讲的东西）。判定函数只有规则层那一个，面板、对话提示词、
+    门禁三处都调它。
+  - **节点引用存 id，入口和出口各有一次翻译**：`core`/`brief`/`mention` 与页面
+    `teaches` 都收 id（写名称也认并解析成 id 存），因为"脚本说要讲透 X"和"第 3 页在讲 X"
+    必须是同一种寻址才能互相比较——那是这一步唯一真正新增的检查。进生成提示词前由
+    `deckDesignForGeneration` 换回**名称**（生成器不认识 `node_xxx`），并把解析不到的
+    引用丢掉。
+  - **`nodes` 与 `objectives` 由规则层推导**，解析器显式拒收模型给的版本：它们是同一件
+    事的两种说法，让模型同时维护就是让它们漂移，而审核读的恰好是推导出来的那个。
+    `omit` 是唯一收自由文本的档——最值得写进"不讲"的，恰恰是本条目不涉及的、读者可能
+    以为会讲的东西。
+  - **分镜只属于讲课条目**：练习和考试条目生成的是场景不是幻灯片，给它们写分镜是一次
+    静默的空操作，所以规则层直接拒收并记账。
+  - **签收与写入在同一个事务里**（同第五步）：缺口在**写完之后**重算，确认记录与它覆盖
+    的那份文档一次提交落地；真正的改动撤回签收，重述不撤回。
+  - 规则层 `lib/curriculum/design-teaching.ts`、步骤层 `teaching-step.ts`、状态层
+    `teaching-state.ts`、提示词 `course-teaching`、路由
+    `.../teaching`（GET/POST/DELETE）与 `.../teaching/turn`、界面
+    `design-teaching-dialog.tsx` + `design-teaching-signoff.tsx` 与工作台卡片。
+  - 分镜进生成：`lib/types/generation.ts` 的 `DeckDesignPage.teaches`、
+    `deck-design-contract.ts` 把"这一页教什么"打印进提示词、生成路由把 id 换成名称。
+
 ### Changed
 
 - **`phaseCompletionGaps('teaching')` 加上了大纲签收检查**：`outline` 签收此前对状态机
   毫无作用——一份从没被读回的大纲也能离开 `outline` 阶段，然后教学设计就建立在没人
   批准的顺序上。现在和其它三步一样：未确认则 409。
+- **`phaseCompletionGaps('assessment')` 加上了教学内容检查**：每个条目都要有教学设计、
+  每个讲课条目都要有分镜、分镜不得与脚本矛盾，并且 `teaching` 签收必须已记录。题目和
+  实操任务是**对着**教学设计写的，所以在没人设计过的条目上写题目正是这道门禁拦的事。
 
 - **`phaseCompletionGaps('outline')` 补上了缺失的那一半**：原来只检查「每个节点都要有
   目标」，**一个目标完全可以没有任何节点**——它照样通过检查，然后在大纲阶段变成

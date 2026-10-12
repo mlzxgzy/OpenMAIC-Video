@@ -199,6 +199,7 @@ function deckDesignOf(value: unknown): Parsed<DeckDesign | undefined> {
       coreInfo,
       mode: mode as DeckDesignPage['mode'],
       ...(stringListOf(page.emphasis) ? { emphasis: stringListOf(page.emphasis)! } : {}),
+      ...(stringListOf(page.teaches) ? { teaches: stringListOf(page.teaches)! } : {}),
       ...(typeof page.visual === 'string' && page.visual.trim()
         ? { visual: page.visual.trim() }
         : {}),

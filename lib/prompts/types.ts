@@ -13,6 +13,7 @@ export type PromptId =
   | 'course-outcomes'
   | 'course-knowledge'
   | 'course-outline'
+  | 'course-teaching'
   | 'web-search-query-rewrite'
   | 'agent-system'
   | 'agent-system-wb-teacher'

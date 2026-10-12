@@ -378,10 +378,14 @@ describe('traceFromUnit', () => {
     snapshot.units[0].teachingDesign = {
       nodes: ['node-http'],
       prerequisites: ['node-http', 'node-sql'],
-      core: ['payload construction'],
+      core: ['node-xss'],
     };
     const trace = traceFromUnit(snapshot, 'unit-1');
-    expect(trace?.teachingNodeIds).toEqual(['node-http', 'node-sql']);
+    // The depth buckets are id lists too. `nodes` is the union the rules layer
+    // derives from them, but the workbench editor writes a single bucket on its
+    // own — so reading only `nodes` would miss "this item teaches X in full"
+    // typed by hand, which is exactly the claim this trace exists to carry.
+    expect(trace?.teachingNodeIds).toEqual(['node-http', 'node-xss', 'node-sql']);
   });
 });
 

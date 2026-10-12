@@ -72,6 +72,7 @@ import {
   type CurriculumAuditFinding,
 } from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
+import { teachingGapsOfRecords } from '@/lib/curriculum/design-teaching';
 import { changedDirectionKeys, directionValuesOf } from '@/lib/curriculum/design-direction';
 import {
   CURRICULUM_DIRECTED_EDGE_TYPES,
@@ -1008,6 +1009,16 @@ async function withdrawOutlineSignOff(
  * {@link withdrawKnowledgeSignOffIfChanged}: a step-5 conversation re-sends units
  * it did not change, and a badge that clears on every message trains the author
  * to ignore it.
+ *
+ * **Only the outline's own fields are compared.** `teaching_design` and
+ * `deck_design` used to be in this list, which was wrong in a way nothing could
+ * see: a teaching script is not part of the outline document, so editing one
+ * withdrew the *outline* sign-off (the author's approval of the chapter/item
+ * structure) while leaving the step the edit actually belonged to untouched.
+ * Since step 6 has its own sign-off, each field now withdraws the signature of
+ * the document it is part of. `stage_id` belongs to neither: it is production
+ * state written by the generation hook, and refusing to let a produced course
+ * keep its approved design would be a surprising way to punish generating.
  */
 async function withdrawOutlineSignOffIfChanged(
   queryable: Queryable,
@@ -1022,15 +1033,45 @@ async function withdrawOutlineSignOffIfChanged(
     'unit_role',
     'hours',
     'order_index',
-    'teaching_design',
-    'deck_design',
-    'stage_id',
   ];
   const same = fields.every(
     (field) => JSON.stringify(updated[field] ?? null) === JSON.stringify(current[field] ?? null),
   );
   if (same) return;
   await withdrawOutlineSignOff(queryable, ownerId, updated.task_id);
+}
+
+/**
+ * Withdraw the `teaching` sign-off because the script or the storyboard changed.
+ *
+ * Step 6's version of the rule every step above applies: the confirmation signs
+ * *that* script and *that* storyboard, so an edit after the author read them back
+ * has to be read again. It is a separate function for the reason spelled out on
+ * {@link withdrawKnowledgeSignOff} — the six signs cover six different documents,
+ * and a shared helper with a `step` parameter fails by quietly unlocking a
+ * confirmed step.
+ */
+async function withdrawTeachingSignOff(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<void> {
+  await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'teaching');
+}
+
+/** The changed-only variant, for the same reason as the two above. */
+async function withdrawTeachingSignOffIfChanged(
+  queryable: Queryable,
+  ownerId: string,
+  updated: UnitRow,
+  current: UnitRow,
+): Promise<void> {
+  const fields: (keyof UnitRow)[] = ['teaching_design', 'deck_design'];
+  const same = fields.every(
+    (field) => JSON.stringify(updated[field] ?? null) === JSON.stringify(current[field] ?? null),
+  );
+  if (same) return;
+  await withdrawTeachingSignOff(queryable, ownerId, updated.task_id);
 }
 
 async function readObjectiveRow(
@@ -1510,6 +1551,35 @@ export async function phaseCompletionGaps(
     );
     if (Number(untaught.rows[0]?.count ?? 0) > 0) {
       gaps.push(`${untaught.rows[0].count} 个学习目标还没有被讲授`);
+    }
+
+    // The teaching half of the same boundary. `assessment` authors questions and
+    // lab tasks **against** the lesson design: a question is written to check what
+    // an item teaches, and a lab task to drill what an item practises. Letting the
+    // task in while an item still has no script, or a lecture item has no
+    // storyboard, produces questions aimed at a lesson nobody designed — and the
+    // generation step would then invent the lesson on the way out.
+    //
+    // Read from `teachingGapsOfRecords`, the same function the step's own rules
+    // and the audit rule call, so the gate cannot refuse something the card calls
+    // finished (or the other way round).
+    const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
+    const teachingGaps = teachingGapsOfRecords(
+      snapshot.units,
+      snapshot.unitCoverage,
+      snapshot.nodes,
+      snapshot.nodeObjectives,
+    );
+    for (const gap of teachingGaps) gaps.push(gap.text);
+
+    const teachingConfirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'teaching',
+    );
+    if (!teachingConfirmation) {
+      gaps.push('授课脚本与分镜还没有确认（确认后才会进入评价设计阶段）');
     }
   }
 
@@ -2380,7 +2450,31 @@ export async function createCurriculumUnit(
   if (!row) throw new CurriculumDesignValidationError('大纲单元创建失败');
   // A new unit is always a change to the document the author signed.
   await withdrawOutlineSignOff(queryable, ownerId, taskId);
+  // …and a new unit that arrives with a script or a storyboard is a change to the
+  // teaching document as well. Creating an empty item is not: nothing about the
+  // teaching design moved, and clearing a sign-off the author just gave for an
+  // unrelated reason is how a badge becomes noise.
+  if (hasTeachingContent(input)) await withdrawTeachingSignOff(queryable, ownerId, taskId);
   return mapUnit(row);
+}
+
+/**
+ * Whether a unit input carries teaching-design content.
+ *
+ * `{}` and an absent field are the same fact — "no script here" — and treating an
+ * empty object as content would clear the teaching sign-off on every programmatic
+ * create that passes the field through.
+ */
+function hasTeachingContent(input: {
+  teachingDesign?: CurriculumTeachingDesign;
+  deckDesign?: CurriculumDeckDesign;
+}): boolean {
+  const design = input.teachingDesign;
+  const deck = input.deckDesign;
+  return (
+    (design !== undefined && Object.keys(design).length > 0) ||
+    (deck !== undefined && (deck.pages?.length ?? 0) > 0)
+  );
 }
 
 export async function updateCurriculumUnit(
@@ -2436,6 +2530,7 @@ export async function updateCurriculumUnit(
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   await withdrawOutlineSignOffIfChanged(queryable, ownerId, row, current);
+  await withdrawTeachingSignOffIfChanged(queryable, ownerId, row, current);
   return mapUnit(row);
 }
 
@@ -2452,8 +2547,9 @@ export async function deleteCurriculumUnit(
   if (!row) throw new CurriculumDesignNotFoundError('大纲单元不存在');
   // Deleting a chapter takes its whole subtree with it (the FK cascades), so this
   // is not a small edit: the signed outline can lose a section's worth of items
-  // in one call.
+  // in one call, and their teaching scripts and storyboards go with them.
   await withdrawOutlineSignOff(queryable, ownerId, row.task_id);
+  await withdrawTeachingSignOff(queryable, ownerId, row.task_id);
 }
 
 /**
@@ -2589,6 +2685,12 @@ export async function setCurriculumUnitCoverage(
     if (out) created.push(mapUnitCoverage(out));
   }
   await withdrawOutlineSignOff(queryable, ownerId, taskId);
+  // The coverage ledger decides **which knowledge points an item may teach**, and
+  // the teaching rules resolve names and ids against it. A ledger edit can
+  // therefore invalidate a stored script without touching it — an item that just
+  // lost the outcome behind a page's knowledge point now carries a page that
+  // cannot be honoured, which is exactly what the step refuses to confirm.
+  await withdrawTeachingSignOff(queryable, ownerId, taskId);
   return created;
 }
 

@@ -53,6 +53,7 @@ import {
   createCurriculumUnitDependency,
   setCurriculumNodeObjectives,
   setCurriculumUnitCoverage,
+  updateCurriculumUnit,
 } from '@/lib/server/curriculum/design-store';
 
 const OWNER = 'owner:design-editing';
@@ -237,6 +238,27 @@ describe('design workbench authoring gates', () => {
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → teaching
     if (phase === 'teaching') return task.id;
 
+    // Step 6 closes the same way the five before it do, and it is the step where
+    // "how the lesson is taught" has to exist before anything can be authored
+    // against it: a question checks what an item teaches, so the item has to say
+    // what it teaches (and, being a lecture, plan the pages that carry it).
+    await updateCurriculumUnit(pool, OWNER, unit.id, {
+      teachingDesign: { core: [node.id] },
+      deckDesign: {
+        estPages: 1,
+        pages: [
+          {
+            order: 1,
+            title: '参数拼接就是注入点',
+            goal: '学员能指出注入点',
+            coreInfo: '参数被拼进 SQL 的地方就是注入点',
+            mode: 'explain',
+            teaches: ['SQL 查询与参数化'],
+          },
+        ],
+      },
+    });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'teaching', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → assessment
     if (phase === 'assessment') return task.id;
 

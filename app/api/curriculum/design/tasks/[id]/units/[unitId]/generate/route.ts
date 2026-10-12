@@ -52,11 +52,12 @@ import { runDesignRoute } from '@/lib/server/curriculum/design-http';
 import { curriculumJsonError } from '@/lib/server/curriculum/http';
 import {
   assertCurriculumDesignExportable,
+  getCurriculumDesignSnapshot,
   getCurriculumUnit,
   listCurriculumUnitOutcomeBehaviors,
 } from '@/lib/server/curriculum/design-store';
 import {
-  deckDesignForRole,
+  deckDesignForGeneration,
   describeDesignedItem,
   unitRoleRunModes,
   unitRoleSceneTypes,
@@ -117,6 +118,15 @@ export async function POST(req: NextRequest, { params }: Params) {
 
     const outcomes = await listCurriculumUnitOutcomeBehaviors(ctx.queryable, ctx.ownerId, unitId);
     const modes = unitRoleRunModes(unit.unitRole);
+    // The page plan stores knowledge points by node id (that is what its own audit
+    // compares against the script); the generator is handed names. The names come
+    // from the same readings the gate just did, so the run's plan and the design
+    // the gate approved cannot describe different graphs.
+    const nodeNames = new Map(
+      (await getCurriculumDesignSnapshot(ctx.queryable, ctx.ownerId, ctx.taskId)).nodes.map(
+        (node) => [node.id, node.name] as const,
+      ),
+    );
 
     // 202 is a start, not a completion: the caller follows the returned run, and
     // the item's `stageId` appears when the run commits its first scene.
@@ -143,7 +153,7 @@ export async function POST(req: NextRequest, { params }: Params) {
         sceneTypes: unitRoleSceneTypes(unit.unitRole),
         interactive: modes.interactive,
         taskEngine: modes.taskEngine,
-        deckDesign: deckDesignForRole(unit.unitRole, unit.deckDesign),
+        deckDesign: deckDesignForGeneration(unit.unitRole, unit.deckDesign, nodeNames),
         curriculumTaskId: ctx.taskId,
         curriculumUnitId: unitId,
         agents: { mode: 'auto' },

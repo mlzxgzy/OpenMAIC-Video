@@ -368,6 +368,16 @@ export interface CurriculumDeckPage {
   emphasis?: string[];
   visual?: string;
   code?: string;
+  /**
+   * 这一页要讲的知识/技能点，按**节点 id** 记。
+   *
+   * id 而不是名称，因为它必须和授课脚本的 `core`/`brief`/`mention` 用同一种寻址，
+   * 否则"脚本说要讲透 X"和"第 3 页在讲 X"根本没法互相比较——而那是第六步唯一真正
+   * 新增的检查。名称只在两处出现：**入口**（模型或作者写名称也认，解析成 id 存）和
+   * **出口**（进生成提示词前换成名称，生成器不认识 `node_xxx`，见
+   * `deckDesignForGeneration`）。
+   */
+  teaches?: string[];
 }
 
 export interface CurriculumDeckDesign {

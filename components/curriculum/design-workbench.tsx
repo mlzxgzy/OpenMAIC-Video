@@ -69,6 +69,8 @@ import { DesignDirectionCard } from '@/components/curriculum/design-direction-ca
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
 import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-signoff';
+import { DesignTeachingSignOff } from '@/components/curriculum/design-teaching-signoff';
+import { ASSIGNED_NODE_BUCKETS, TEACHING_DEPTH_LABELS } from '@/lib/curriculum/design-teaching';
 import {
   CreateForm,
   InlineEdit,
@@ -931,6 +933,90 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
                 </tbody>
               </table>
             </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Teaching design: the script and the storyboard ──────────────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">授课脚本与分镜</CardTitle>
+              <CardDescription>
+                每个条目讲什么、讲到什么程度，以及这件事落在哪几页上——分镜直接进生成提示词
+              </CardDescription>
+            </div>
+            {/* Same arrangement as the cards above: the scripts below and this
+                sign-off are two faces of one step. */}
+            <DesignTeachingSignOff
+              taskId={snapshot.task.id}
+              units={units}
+              confirmation={
+                snapshot.confirmations.find((entry) => entry.step === 'teaching') ?? null
+              }
+              run={run}
+              busy={busy}
+              onRefresh={async () => {
+                await load();
+                await onChanged();
+              }}
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {items.length === 0 ? (
+            <EmptySection phase={phase} kind="units">
+              还没有条目。分镜是逐条写的，先把大纲里的章、节、目排出来。
+            </EmptySection>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {items.map((unit) => {
+                const design = unit.teachingDesign ?? {};
+                const pages = unit.deckDesign?.pages ?? [];
+                return (
+                  <li key={unit.id} className="flex flex-col gap-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                        {ROLE_OPTIONS.find((option) => option.value === unit.unitRole)?.label ??
+                          unit.unitRole ??
+                          '—'}
+                      </Badge>
+                      <span className="font-medium">{unit.title}</span>
+                      {unit.unitRole === 'lecture' ? (
+                        <span className="text-muted-foreground">{pages.length} 页</span>
+                      ) : null}
+                    </div>
+                    {ASSIGNED_NODE_BUCKETS.map((bucket) => {
+                      const ids = design[bucket] ?? [];
+                      if (ids.length === 0) return null;
+                      return (
+                        <div key={bucket} className="text-muted-foreground pl-4">
+                          {TEACHING_DEPTH_LABELS[bucket]}：
+                          {ids
+                            .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
+                            .join('、')}
+                        </div>
+                      );
+                    })}
+                    {unit.unitRole === 'lecture' && pages.length > 0 ? (
+                      <ol className="text-muted-foreground flex flex-col gap-0.5 pl-4">
+                        {pages.map((page) => (
+                          <li key={page.order}>
+                            {page.order}. {page.title}｜{page.goal}
+                            {(page.teaches ?? []).length > 0
+                              ? `｜讲：${(page.teaches ?? [])
+                                  .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
+                                  .join('、')}`
+                              : ''}
+                          </li>
+                        ))}
+                      </ol>
+                    ) : null}
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </CardContent>
       </Card>

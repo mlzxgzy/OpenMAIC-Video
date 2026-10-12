@@ -147,10 +147,35 @@ function makeSnapshot(overrides: SnapshotOverrides = {}): CurriculumDesignSnapsh
       makeCoverage({ unitId: unit.id, objectiveId: objective.id, coverageKind }),
     );
 
-  // A real lecture names the nodes it teaches. The baseline is meant to be a
-  // sound design, so it has to model that, not an empty teaching design.
-  if (units[0].teachingDesign && Object.keys(units[0].teachingDesign).length === 0) {
-    units[0].teachingDesign = { nodes: nodes.map((n) => n.id) };
+  // A real lecture names the nodes it teaches **and** plans the pages that carry
+  // them. Both are part of a sound design since step 6: the depth buckets are how
+  // a lesson decides what it is about, and the storyboard is the only channel the
+  // teaching design has to the generator. So the baseline has to model both — a
+  // design without a storyboard is not finished, and the audit now says so.
+  for (const unit of units) {
+    if (unit.teachingDesign && Object.keys(unit.teachingDesign).length === 0) {
+      unit.teachingDesign = { nodes: nodes.map((n) => n.id), core: nodes.map((n) => n.id) };
+    }
+    if (
+      unit.unitType === 'item' &&
+      unit.unitRole === 'lecture' &&
+      unit.deckDesign &&
+      Object.keys(unit.deckDesign).length === 0
+    ) {
+      unit.deckDesign = {
+        estPages: 1,
+        pages: [
+          {
+            order: 1,
+            title: 'SQL injection basics',
+            goal: 'the learner can name the injection point',
+            coreInfo: 'a parameter concatenated into SQL is the injection point',
+            mode: 'explain',
+            teaches: nodes.map((n) => n.name),
+          },
+        ],
+      };
+    }
   }
 
   const nodeObjectives =

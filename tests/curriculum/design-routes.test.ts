@@ -119,6 +119,7 @@ import {
   getCurriculumDesignSnapshot,
   getCurriculumDesignStepConfirmation,
   setCurriculumNodeObjectives,
+  updateCurriculumUnit,
 } from '@/lib/server/curriculum/design-store';
 
 class PGlitePool {
@@ -252,7 +253,27 @@ describe('design routes (PGlite)', () => {
     await confirmCurriculumDesignStep(pool, OWNER, task.id, 'outline', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'teaching') return;
-    // → assessment: the gate is teaching coverage, which is already in place.
+    // Step 6 sign-off, the fifth of the same kind. Without it `teaching →
+    // assessment` is refused: questions and lab tasks are authored **against** the
+    // lesson design, so the attempt to author them on an undesigned lesson is
+    // exactly what the gate is for.
+    await updateCurriculumUnit(pool, OWNER, unit.id, {
+      teachingDesign: { core: [node.id] },
+      deckDesign: {
+        estPages: 1,
+        pages: [
+          {
+            order: 1,
+            title: '参数拼接就是注入点',
+            goal: '学员能指出注入点',
+            coreInfo: '参数被拼进 SQL 的地方就是注入点',
+            mode: 'explain',
+            teaches: ['SQL 查询与参数化'],
+          },
+        ],
+      },
+    });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'teaching', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
   }
 
@@ -1353,7 +1374,27 @@ describe('design routes (PGlite)', () => {
       ).nodes[0]!.id;
       await patchUnit(
         patch(`/api/curriculum/design/tasks/${task.id}/units/${teach.id}`, {
+          // The `core` bucket names the node by **name** rather than by id on
+          // purpose: a name is unambiguous inside one item's own node set, and the
+          // rules layer has to translate it instead of silently dropping the
+          // claim. The stored design still holds the id.
           teachingDesign: { nodes: [nodeId], core: ['SQL 查询与参数化'] },
+          // A lecture without a storyboard is refused since step 6: the generator
+          // would invent its own page structure, and then "what this lesson
+          // teaches" would no longer be the author's decision.
+          deckDesign: {
+            estPages: 1,
+            pages: [
+              {
+                order: 1,
+                title: '参数拼接就是注入点',
+                goal: '学员能指出注入点',
+                coreInfo: '参数被拼进 SQL 的地方就是注入点',
+                mode: 'explain',
+                teaches: ['SQL 查询与参数化'],
+              },
+            ],
+          },
         }),
         childParams(task.id, 'unitId', teach.id),
       );
@@ -1378,6 +1419,23 @@ describe('design routes (PGlite)', () => {
         objectiveId,
         coverageKind: 'assess',
       });
+      // Every item needs its teaching design before the step can close — a drill
+      // and an exam included, because "what does this drill drill" is the question
+      // the questions and lab tasks below are authored against.
+      for (const [unitId, bucket] of [
+        [practise.id, 'core'],
+        [assess.id, 'mention'],
+      ] as const) {
+        await patchUnit(
+          patch(`/api/curriculum/design/tasks/${task.id}/units/${unitId}`, {
+            teachingDesign: { [bucket]: [nodeId] },
+          }),
+          childParams(task.id, 'unitId', unitId),
+        );
+      }
+      // Step 6's sign-off, the fifth of the same kind: the lesson design has to be
+      // agreed before the questions and labs that check it are authored.
+      await confirmCurriculumDesignStep(pool, OWNER, task.id, 'teaching', 'user');
       // `advanceTo` declared lab evidence for this outcome, so a lab task must
       // exist to honour it. `evidence_no_artifact` is the rule that makes the
       // loop closable in practice rather than only on paper: an outcome that
@@ -1467,6 +1525,11 @@ describe('design routes (PGlite)', () => {
                 goal: '能说出参数拼接的后果',
                 coreInfo: '值被直接拼进查询',
                 mode: 'explain',
+                // The page has to carry the node the script says it teaches to
+                // full depth: a lecture that claims "讲透 X" and plans no page for
+                // X is refused before it can be produced, which is the rule this
+                // test's rewrite exercises rather than works around.
+                teaches: ['SQL 查询与参数化'],
               },
             ],
           },

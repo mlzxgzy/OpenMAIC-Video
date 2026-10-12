@@ -63,6 +63,14 @@ function renderPage(page: DeckDesignPage, position: number): string | null {
 
   lines.push(`Present as: ${MODE_INSTRUCTIONS[page.mode] ?? page.mode}.`);
 
+  // The page's knowledge points, by name. Printed before `emphasis` because it is
+  // the stronger claim: `emphasis` is wording that must land, this is the
+  // subject the page exists to teach. A page carrying a node the teaching script
+  // marked "must be taught in full" is how the script reaches the generator at
+  // all — the page plan is the only channel it has.
+  if (page.teaches?.length) {
+    lines.push(`This page teaches: ${page.teaches.join('; ')}.`);
+  }
   if (page.emphasis?.length) {
     lines.push(`Must land: ${page.emphasis.join('; ')}.`);
   }

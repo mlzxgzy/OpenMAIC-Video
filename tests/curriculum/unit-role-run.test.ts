@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   UNIT_ROLE_SCENE_TYPES,
+  deckDesignForGeneration,
   deckDesignForRole,
   describeDesignedItem,
   unitRoleRunModes,
@@ -130,6 +131,42 @@ describe('the page plan reaches only a lecture', () => {
     expect(deckDesignForRole('lecture', {})).toBeUndefined();
     expect(deckDesignForRole('lecture', null)).toBeUndefined();
     expect(deckDesignForRole('lecture', 'two pages')).toBeUndefined();
+  });
+});
+
+describe('the page plan reaches the generator with names, not ids', () => {
+  const nodeNames = new Map([
+    ['node-sql', 'SQL 查询与参数化'],
+    ['node-union', '联合查询读数据'],
+  ]);
+  const withTeaches = {
+    ...PLAN,
+    pages: [{ ...PLAN.pages[0]!, teaches: ['node-sql', '联合查询读数据'] }],
+  };
+
+  it('translates stored ids into the names the generator can read', () => {
+    // The design stores ids, because that is the only addressing its own audit can
+    // compare against the teaching script. The generator has never seen a
+    // `node_…` id, and the prompt prints whatever it is handed.
+    const plan = deckDesignForGeneration('lecture', withTeaches, nodeNames);
+    expect(plan?.pages?.[0]?.teaches).toEqual(['SQL 查询与参数化', '联合查询读数据']);
+  });
+
+  it('drops a knowledge point that resolves to no node', () => {
+    const plan = deckDesignForGeneration(
+      'lecture',
+      { ...PLAN, pages: [{ ...PLAN.pages[0]!, teaches: ['node-ghost'] }] },
+      nodeNames,
+    );
+    expect(plan?.pages?.[0]?.teaches).toEqual([]);
+  });
+
+  it('leaves a plan with no named knowledge points exactly as it was', () => {
+    expect(deckDesignForGeneration('lecture', PLAN, nodeNames)).toEqual(PLAN);
+  });
+
+  it('still refuses a plan for a non-lecture item', () => {
+    expect(deckDesignForGeneration('practice', withTeaches, nodeNames)).toBeUndefined();
   });
 });
 

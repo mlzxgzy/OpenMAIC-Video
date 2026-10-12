@@ -154,7 +154,28 @@ describe('reverse-design store (PGlite)', () => {
     // → teaching
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
     if (phase === 'teaching') return;
-    // → assessment (teaching coverage is already in place, which is its gate)
+    // Step 6 gates `teaching → assessment`: the step's own sign-off, plus a design
+    // that says what the item teaches (and, for a lecture, the pages that carry it).
+    // This helper has now lagged one step behind three times; the walk has to carry
+    // every gate or each new step turns twenty unrelated tests red.
+    await updateCurriculumUnit(pool, OWNER, unit.id, {
+      teachingDesign: { core: [node.id], sequence: [node.id] },
+      deckDesign: {
+        estPages: 1,
+        pages: [
+          {
+            order: 1,
+            title: '参数拼接就是注入点',
+            goal: '学员能指出注入点',
+            coreInfo: '参数被拼进 SQL 的地方就是注入点',
+            mode: 'explain',
+            teaches: [node.id],
+          },
+        ],
+      },
+    });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'teaching', 'user');
+    // → assessment
     await advanceCurriculumTaskPhase(pool, OWNER, task.id);
   }
 
@@ -706,12 +727,13 @@ describe('reverse-design store (PGlite)', () => {
     await advanceTo('assessment');
     const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
     const objective = snapshot.objectives[0];
-    const node = snapshot.nodes[0];
     const unit = snapshot.units[0];
 
-    await updateCurriculumUnit(pool, OWNER, unit.id, {
-      teachingDesign: { nodes: [node.id] },
-    });
+    // `advanceTo` already wrote the lesson's script (naming this node) and its
+    // storyboard, which is what `objective_missing_prereq` reads. Overwriting the
+    // design here with just `nodes` would drop the depth buckets and break
+    // `teach_covers` — and the tests below are about the loop closing, not about
+    // re-authoring the lesson.
     await createCurriculumUnitCoverage(pool, OWNER, task.id, {
       unitId: unit.id,
       objectiveId: objective.id,

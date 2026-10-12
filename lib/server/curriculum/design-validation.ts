@@ -657,6 +657,9 @@ function readDeckDesign(r: Reader, key: string): CurriculumDeckDesign | undefine
       emphasis: entry.textList('emphasis'),
       visual: entry.text('visual'),
       code: entry.text('code'),
+      // The knowledge points the page carries, by name (see the type's comment:
+      // names, not ids, because this is printed into the generation prompt).
+      teaches: entry.textList('teaches'),
     };
   });
   const design: CurriculumDeckDesign = { estPages: sub.integer('estPages'), pages };

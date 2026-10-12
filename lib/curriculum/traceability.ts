@@ -204,10 +204,20 @@ export function traceFromUnit(
     }
   }
 
-  // Only `nodes` and `prerequisites` are id lists. `core`, `brief` and
-  // `mention` hold free-text topic strings, so they are not node references.
+  // All of these are id lists, and they are read together rather than through
+  // `nodes` alone: the workbench editor writes a single bucket, so an item
+  // hand-edited to "teach in full" would otherwise not appear in the trace of
+  // what this item teaches.
   const design = unit.teachingDesign;
-  const teachingNodeIds = [...new Set([...(design.nodes ?? []), ...(design.prerequisites ?? [])])];
+  const teachingNodeIds = [
+    ...new Set([
+      ...(design.nodes ?? []),
+      ...(design.core ?? []),
+      ...(design.brief ?? []),
+      ...(design.mention ?? []),
+      ...(design.prerequisites ?? []),
+    ]),
+  ];
 
   return {
     unit,

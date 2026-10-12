@@ -107,6 +107,40 @@ export function deckDesignForRole(
 }
 
 /**
+ * The page plan as the **generator** reads it: knowledge points by name.
+ *
+ * The stored plan holds node ids (`CurriculumDeckPage.teaches`), because that is
+ * the only addressing its own audit can compare against the teaching script. The
+ * generator has never seen a `node_…` id, so the translation happens here, at the
+ * boundary, rather than by storing names — storing names is what made the script
+ * and the storyboard impossible to compare in the first place.
+ *
+ * A name that resolves to no node is dropped rather than passed through: the page
+ * claimed a knowledge point that does not exist, and the generator prints what it
+ * is given.
+ */
+export function deckDesignForGeneration(
+  role: CurriculumUnitRole,
+  deckDesign: unknown,
+  nodeNames: ReadonlyMap<string, string>,
+): DeckDesign | undefined {
+  const plan = deckDesignForRole(role, deckDesign);
+  if (!plan?.pages) return plan;
+  // A page written by the rules layer holds ids; one written through the workbench
+  // editor holds whatever the author typed, which is usually the name. Both are
+  // accepted here — the stored id is the canonical form, not the only one.
+  const knownNames = new Set(nodeNames.values());
+  const pages = plan.pages.map((page) => {
+    if (!page.teaches?.length) return page;
+    const names = page.teaches
+      .map((entry) => nodeNames.get(entry) ?? (knownNames.has(entry) ? entry : undefined))
+      .filter((name): name is string => name !== undefined);
+    return { ...page, teaches: names };
+  });
+  return { ...plan, pages };
+}
+
+/**
  * The requirement text of one designed item.
  *
  * It exists because a run start requires one and because the stage is named

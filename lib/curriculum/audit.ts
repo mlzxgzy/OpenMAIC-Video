@@ -15,6 +15,7 @@
 
 import { CURRICULUM_ORDER_CLAIM_EDGE_TYPES } from './design-types';
 import { outlineOrderConflicts } from './design-outline';
+import { nodesForObjectives, teachingGapsOfItems, type TeachingGap } from './design-teaching';
 import type {
   CurriculumAuditSeverity,
   CurriculumDependencyEdgeType,
@@ -55,6 +56,8 @@ export const CURRICULUM_AUDIT_RULES = [
   'unit_without_role',
   'chapter_with_content',
   'unit_orphan',
+  'unit_lesson_undesigned',
+  'deck_script_conflict',
   'brief_incomplete',
 ] as const;
 
@@ -203,10 +206,13 @@ function ruleObjectiveMissingPrereq(snapshot: CurriculumDesignSnapshot): Curricu
   );
 
   /**
-   * Every node id any teaching item names. Only `nodes` and `prerequisites`
-   * are id lists — `core`/`brief`/`mention` hold free-text topic strings, so
-   * scanning them for node ids would match nothing and would make this rule
-   * fire on every correct design.
+   * Every node id any teaching item names. All five buckets are id lists:
+   * `nodes` is derived by the rules layer as the union of `core` / `brief` /
+   * `mention`, and `prerequisites` names the nodes this lesson assumes. Reading
+   * the buckets directly as well as `nodes` matters because the workbench's
+   * editor writes a bucket on its own — a hand-edited item would otherwise carry
+   * a "taught in full" claim the rule cannot see, and the rule would report a
+   * node as unnamed on a design that names it.
    */
   const mentionedNodeIds = new Set<string>();
   for (const coverage of snapshot.unitCoverage) {
@@ -214,8 +220,9 @@ function ruleObjectiveMissingPrereq(snapshot: CurriculumDesignSnapshot): Curricu
     const unit = unitById.get(coverage.unitId);
     if (!unit || unit.unitType !== 'item') continue;
     const design = unit.teachingDesign;
-    for (const nodeId of design.nodes ?? []) mentionedNodeIds.add(nodeId);
-    for (const nodeId of design.prerequisites ?? []) mentionedNodeIds.add(nodeId);
+    for (const field of ['nodes', 'core', 'brief', 'mention', 'prerequisites'] as const) {
+      for (const nodeId of design[field] ?? []) mentionedNodeIds.add(nodeId);
+    }
   }
 
   // Primary support is the load-bearing set: a node marked secondary may
@@ -848,6 +855,82 @@ function ruleUnitOrphan(snapshot: CurriculumDesignSnapshot): CurriculumAuditFind
     }));
 }
 
+/**
+ * A lesson that has not been designed: a lecture item with no storyboard, an item
+ * with no script at all, a practice item that never says what is practised.
+ *
+ * This rule is what makes step 6 load-bearing rather than advisory. A `lecture`
+ * item is produced as slides, and the page plan is the only channel the teaching
+ * design has to the generator: with no plan, the outline step invents its own page
+ * structure from a paragraph — which is the defect the whole `deck_design`
+ * contract exists to remove. Producing such an item is therefore an error rather
+ * than a warning.
+ *
+ * The gaps come from `teachingGapsOfItems`, the same function the step's rules and
+ * the phase gate call. Selecting by `kind` rather than by message text is
+ * deliberate: a rule that pattern-matches a sentence stops working the day
+ * somebody rewords it, and nothing fails loudly when it does.
+ */
+function ruleUnitLessonUndesigned(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
+  return teachingFindings(snapshot, (gap) => gap.kind !== 'script_storyboard_conflict');
+}
+
+/**
+ * A storyboard that contradicts its own script.
+ *
+ * A page teaching something the script marked out of scope, or a point the script
+ * says must be taught in full that no page carries, means the design answers two
+ * different lessons. It is invisible in the UI — the script and the storyboard are
+ * two lists that each look complete — and it is the failure step 6 exists to
+ * catch, so it is an error here as well as in the conversation.
+ */
+function ruleDeckScriptConflict(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
+  return teachingFindings(snapshot, (gap) => gap.kind === 'script_storyboard_conflict');
+}
+
+/** The teaching gaps of a snapshot, turned into findings by a `kind` predicate. */
+function teachingFindings(
+  snapshot: CurriculumDesignSnapshot,
+  want: (gap: TeachingGap) => boolean,
+): CurriculumAuditFinding[] {
+  const items = snapshot.units.filter((unit) => unit.unitType === 'item');
+  const objectiveIdsByUnit = new Map<string, string[]>();
+  for (const coverage of snapshot.unitCoverage) {
+    const list = objectiveIdsByUnit.get(coverage.unitId) ?? [];
+    list.push(coverage.objectiveId);
+    objectiveIdsByUnit.set(coverage.unitId, list);
+  }
+  const gaps = teachingGapsOfItems(
+    items.map((unit) => ({
+      id: unit.id,
+      title: unit.title,
+      role: unit.unitRole ?? 'lecture',
+      teachingDesign: unit.teachingDesign,
+      deckDesign: unit.deckDesign,
+      nodes: nodesForObjectives(
+        objectiveIdsByUnit.get(unit.id) ?? [],
+        snapshot.nodeObjectives,
+        snapshot.nodes,
+      ),
+      allNodeNames: new Map(snapshot.nodes.map((node) => [node.id, node.name])),
+    })),
+  );
+  return gaps.filter(want).map((gap) => ({
+    rule:
+      gap.kind === 'script_storyboard_conflict'
+        ? ('deck_script_conflict' as const)
+        : ('unit_lesson_undesigned' as const),
+    severity: 'error' as const,
+    message: gap.text,
+    refKind: 'unit' as const,
+    refId: gap.ref ?? snapshot.task.id,
+    refIds: [],
+    // The teaching layer, not `support_complete`: this is about *how* an item
+    // teaches, which is the same layer as "is this outcome taught at all".
+    layer: 'teach_covers' as const,
+  }));
+}
+
 /** A brief that has not answered who, what problem, how long. */
 function ruleBriefIncomplete(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
   const task = snapshot.task;
@@ -904,6 +987,8 @@ export function auditCurriculumDesign(
     ...ruleUnitWithoutRole(snapshot),
     ...ruleChapterWithContent(snapshot),
     ...ruleUnitOrphan(snapshot),
+    ...ruleUnitLessonUndesigned(snapshot),
+    ...ruleDeckScriptConflict(snapshot),
   ];
 
   const severityRank: Record<CurriculumAuditSeverity, number> = { error: 0, warning: 1, info: 2 };
