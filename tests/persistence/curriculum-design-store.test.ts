@@ -38,6 +38,7 @@ import {
   getCurriculumDesignStepConfirmation,
   listCurriculumTasks,
   reviewCurriculumTaskDesign,
+  setCurriculumAuditFindingStatus,
   setCurriculumNodeObjectives,
   updateCurriculumTask,
   updateCurriculumUnit,
@@ -910,6 +911,127 @@ describe('reverse-design store (PGlite)', () => {
     await pool.query('DELETE FROM curriculum_unit_coverage WHERE objective_id = $1', [objectiveId]);
     await expect(assertCurriculumDesignExportable(pool, OWNER, task.id)).rejects.toBeInstanceOf(
       CurriculumDesignValidationError,
+    );
+  });
+
+  /** The phase the task is actually in, read from the store rather than assumed. */
+  async function getCurriculumTaskPhaseForTest(): Promise<{ designPhase: string }> {
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    return { designPhase: snapshot.task.designPhase };
+  }
+
+  /** A design with one deliberate gap, reviewed, with the gap's finding in hand. */
+  async function reviewedGap(): Promise<{ findingId: string; fingerprint: string }> {
+    const { objectiveId } = await buildClosedCourse();
+    await pool.query(
+      "DELETE FROM curriculum_unit_coverage WHERE objective_id = $1 AND coverage_kind = 'assess'",
+      [objectiveId],
+    );
+    const review = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const gap = review.findings.find((finding) => finding.ruleCode === 'objective_uncovered');
+    if (!gap) throw new Error('expected the uncovered outcome to be reported');
+    expect(gap.status).toBe('open');
+    return { findingId: gap.id, fingerprint: gap.fingerprint };
+  }
+
+  it('refuses to mark a derived finding as fixed, and says what to do instead', async () => {
+    const { findingId } = await reviewedGap();
+    // A review is a derivation: "I fixed it" is not a state anyone can be in.
+    // Either the audit stops reporting the defect or the claim is false, and a row
+    // saying a live defect is fixed is worse than no row at all.
+    await expect(
+      setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'resolved'),
+    ).rejects.toThrow(/不能标成「已修复」/);
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    expect(snapshot.auditFindings.find((row) => row.id === findingId)?.status).toBe('open');
+  });
+
+  it('lets an accepted defect through the gate, and names what is being shipped with', async () => {
+    const { findingId } = await reviewedGap();
+    await expect(assertCurriculumDesignExportable(pool, OWNER, task.id)).rejects.toBeInstanceOf(
+      CurriculumDesignValidationError,
+    );
+
+    await setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'waived');
+    const review = await assertCurriculumDesignExportable(pool, OWNER, task.id);
+    expect(review.exportable).toBe(true);
+    expect(review.blocking).toEqual([]);
+    expect(review.accepted.map((entry) => entry.finding.rule)).toEqual(['objective_uncovered']);
+    expect(review.accepted[0].decision.id).toBe(findingId);
+    // The coverage summary still says 0/1 complete, and that is not a second veto
+    // any more: the gap is decided, and the decision is what the author sees.
+    expect(review.verdict.complete).toBe(false);
+  });
+
+  it('puts the acceptance back when the author takes it back', async () => {
+    const { findingId } = await reviewedGap();
+    await setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'waived');
+    await assertCurriculumDesignExportable(pool, OWNER, task.id);
+
+    await setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'open');
+    await expect(assertCurriculumDesignExportable(pool, OWNER, task.id)).rejects.toBeInstanceOf(
+      CurriculumDesignValidationError,
+    );
+  });
+
+  it('keeps a decision on the same row across reviews instead of duplicating it', async () => {
+    const { findingId, fingerprint } = await reviewedGap();
+    await setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'waived');
+
+    // Two more reviews. The old code deleted every open row and inserted fresh
+    // ones, so the accepted row stayed behind while its defect was re-reported as
+    // open: one problem, two rows, and the decision attached to the stale one.
+    await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+
+    const mine = (await getCurriculumDesignSnapshot(pool, OWNER, task.id)).auditFindings.filter(
+      (row) => row.fingerprint === fingerprint,
+    );
+    expect(mine).toHaveLength(1);
+    expect(mine[0].id).toBe(findingId);
+    expect(mine[0].status).toBe('waived');
+  });
+
+  it('moves production, not the workflow: a waiver never advances the phase machine', async () => {
+    const { findingId } = await reviewedGap();
+    await setCurriculumAuditFindingStatus(pool, OWNER, findingId, 'waived');
+    // The gate production must pass opens...
+    await assertCurriculumDesignExportable(pool, OWNER, task.id);
+    // ...and the phase machine still refuses, because the accepted gap means the
+    // design really is incomplete and `review` is built on top of it. A waiver is
+    // a decision about what may be produced, not a way to declare work finished.
+    await expect(advanceCurriculumTaskPhase(pool, OWNER, task.id)).rejects.toBeInstanceOf(
+      CurriculumPhaseError,
+    );
+    expect((await getCurriculumTaskPhaseForTest()).designPhase).toBe('assessment');
+  });
+
+  it('spends a decision when the defect is gone, so it cannot outlive its design', async () => {
+    const { objectiveId, unitId } = await buildClosedCourse();
+    const dropAssess =
+      "DELETE FROM curriculum_unit_coverage WHERE objective_id = $1 AND coverage_kind = 'assess'";
+    await pool.query(dropAssess, [objectiveId]);
+    const review = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const gap = review.findings.find((row) => row.ruleCode === 'objective_uncovered')!;
+    await setCurriculumAuditFindingStatus(pool, OWNER, gap.id, 'waived');
+
+    // Put the assessment back: the loop closes and the acceptance is spent. It was
+    // an acceptance of that defect in that design, not a standing permission to
+    // ignore the rule forever.
+    await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+      unitId,
+      objectiveId,
+      coverageKind: 'assess',
+    });
+    await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    const closed = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    expect(closed.auditFindings.filter((row) => row.fingerprint === gap.fingerprint)).toEqual([]);
+
+    // If the gap comes back, it comes back open and has to be decided again.
+    await pool.query(dropAssess, [objectiveId]);
+    const reopened = await reviewCurriculumTaskDesign(pool, OWNER, task.id);
+    expect(reopened.findings.find((row) => row.fingerprint === gap.fingerprint)?.status).toBe(
+      'open',
     );
   });
 

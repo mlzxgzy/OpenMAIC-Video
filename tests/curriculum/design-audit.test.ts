@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -7,6 +9,8 @@ import {
   reviewCurriculumDesign,
   type CurriculumAuditFinding,
 } from '@/lib/curriculum/audit';
+import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
+import { designPreconditions } from '@/lib/curriculum/design-review';
 import type {
   CurriculumAuditFindingRecord,
   CurriculumAuditSeverity,
@@ -896,6 +900,72 @@ describe('evaluateCurriculumQuality', () => {
   });
 });
 
+/**
+ * The coverage summary and the coverage rules are one fact.
+ *
+ * The export gate used to consult both (`quality.exportable && verdict.complete`),
+ * which is that fact computed twice: the only thing the second check could add was
+ * the ability to disagree with the first, and a gate whose two halves contradict
+ * each other explains nothing to the author. The one thing the summary was really
+ * refusing — a course with no outcomes — is not a defect and is now a
+ * precondition, which is why it appears on the right-hand side here.
+ */
+describe('coverage summary vs coverage rules', () => {
+  const COVERAGE_RULES = new Set([
+    'objective_untaught',
+    'objective_unpracticed',
+    'objective_uncovered',
+  ]);
+
+  const agrees = (snapshot: CurriculumDesignSnapshot) => {
+    const findings = auditCurriculumDesign(snapshot).filter(
+      (finding) => finding.severity === 'error' && COVERAGE_RULES.has(finding.rule),
+    );
+    const verdict = summariseCoverage(buildDesignCoverage(snapshot));
+    const preconditions = designPreconditions(snapshot);
+    return { verdict, findings, preconditions };
+  };
+
+  it('says complete exactly when no coverage rule fires and there are outcomes', () => {
+    const closed = makeSnapshot();
+    const noAssess = makeSnapshot();
+    noAssess.unitCoverage = noAssess.unitCoverage.filter((row) => row.coverageKind !== 'assess');
+    const nothingCovered = makeSnapshot();
+    nothingCovered.unitCoverage = [];
+    const noOutcomes = makeSnapshot();
+    noOutcomes.objectives = [];
+    noOutcomes.unitCoverage = [];
+    noOutcomes.nodeObjectives = [];
+
+    for (const [label, snapshot] of [
+      ['closed loop', closed],
+      ['assess coverage missing', noAssess],
+      ['no coverage at all', nothingCovered],
+      ['no outcomes at all', noOutcomes],
+    ] as const) {
+      const { verdict, findings, preconditions } = agrees(snapshot);
+      expect(
+        verdict.complete,
+        `${label}: summary says complete=${verdict.complete}, ` +
+          `${findings.length} coverage finding(s), ${preconditions.length} precondition(s)`,
+      ).toBe(findings.length === 0 && preconditions.length === 0);
+    }
+  });
+
+  it('refuses an outcome-free course by precondition, not by a coverage finding', () => {
+    // A course with nothing in it has no defect to report: there is no design to
+    // be wrong. Reading the refusal as a finding would also make it waivable, and
+    // "I accept that this course has no outcomes" is not a decision.
+    const snapshot = makeSnapshot();
+    snapshot.objectives = [];
+    snapshot.unitCoverage = [];
+    snapshot.nodeObjectives = [];
+    const { findings, preconditions } = agrees(snapshot);
+    expect(findings).toEqual([]);
+    expect(preconditions).toHaveLength(1);
+  });
+});
+
 // ── Contract ─────────────────────────────────────────────────────────────────
 
 describe('audit rule registry', () => {
@@ -911,9 +981,33 @@ describe('audit rule registry', () => {
     for (const rule of emitted) {
       expect(CURRICULUM_AUDIT_RULES).toContain(rule);
     }
-    // Every rule in the registry must be reachable from some snapshot; a
-    // registered rule that never fires is a rule nobody is relying on.
     expect(emitted.size).toBeGreaterThan(5);
+  });
+
+  it('produces every rule it declares, so no rule is a declaration only', () => {
+    // The other direction, and the one that actually rots: `objective_unmeasurable`
+    // sat in the registry produced by nothing, while the comment that used to be
+    // here claimed "every rule in the registry must be reachable from some
+    // snapshot" and the assertion only counted emitted rules. A declared rule that
+    // no code can produce reads like coverage and is not.
+    //
+    // Scanned from the source rather than from a snapshot corpus because a rule
+    // that fires on one rare design is still implemented, and because the
+    // declaration block itself has to come out of the text first — it lists every
+    // name, so leaving it in would answer "yes" for all of them.
+    const source = readFileSync(new URL('../../lib/curriculum/audit.ts', import.meta.url), 'utf8');
+    const withoutDeclaration = source.replace(
+      /export const CURRICULUM_AUDIT_RULES = \[[\s\S]*?\] as const;/,
+      '',
+    );
+    // Self-check for the strip above: the deleted rule's only occurrence was the
+    // declaration, so it must not survive in the scanned text. If this fails the
+    // regex stopped matching and the scan below is vacuous.
+    expect(withoutDeclaration).not.toContain('objective_unmeasurable');
+    const unimplemented = CURRICULUM_AUDIT_RULES.filter(
+      (rule) => !withoutDeclaration.includes(`'${rule}'`),
+    );
+    expect(unimplemented).toEqual([]);
   });
 
   it('sorts errors before warnings', () => {

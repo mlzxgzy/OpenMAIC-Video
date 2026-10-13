@@ -280,6 +280,16 @@ const SHIPPED: readonly (readonly [
     true,
     '33df13d6c3b5c35fd37da3be0f66e8751d6526b0fac5f0dfdac25569d981a569',
   ],
+  [
+    // Migration 14 gives a finding its address (`fingerprint`) so a decision can
+    // outlive the review that re-derives it, and a unique index makes "one row
+    // per defect" a guarantee instead of a convention.
+    'curriculum',
+    14,
+    'design_finding_fingerprint',
+    true,
+    '7fc7c3253d865b84bab817547500105fa43e6b200eda833dac6a83ee13bf72e4',
+  ],
 ];
 
 /**

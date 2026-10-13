@@ -33,6 +33,17 @@ export async function GET(req: NextRequest, { params }: Params) {
         blockers,
         quality: evaluation.quality,
         verdict: evaluation.verdict,
+        // What this export would ship with. Read from the same evaluation the
+        // gate decides on, so "may I produce this" and "what am I accepting by
+        // producing it" can never come from two different readings.
+        accepted: evaluation.accepted.map((entry) => ({
+          id: entry.decision.id,
+          ruleCode: entry.finding.rule,
+          severity: entry.finding.severity,
+          message: entry.finding.message,
+          refKind: entry.finding.refKind,
+          refId: entry.finding.refId,
+        })),
       },
       200,
       ctx.headers,

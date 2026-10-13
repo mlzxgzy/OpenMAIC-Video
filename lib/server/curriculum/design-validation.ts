@@ -983,6 +983,13 @@ export function parseLabTaskPatch(body: unknown): ParseResult<PatchOf<Curriculum
 
 // ── Audit finding status ────────────────────────────────────────────────────
 
+/**
+ * The vocabulary the column accepts, which is wider than the vocabulary a caller
+ * may write: `resolved` parses (it is readable on rows written before the design
+ * review was derived, and the CHECK still allows it) and the store then refuses it
+ * with the reason. Refusing here instead would mean a second copy of that
+ * explanation, and the two would drift.
+ */
 export function parseFindingStatus(body: unknown): ParseResult<'open' | 'resolved' | 'waived'> {
   const parsed = parseJsonObject(body);
   if (!parsed.ok) return parsed;

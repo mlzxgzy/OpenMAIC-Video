@@ -42,7 +42,6 @@ export const CURRICULUM_AUDIT_RULES = [
   'objective_uncovered',
   'objective_missing_prereq',
   'objective_duplicate',
-  'objective_unmeasurable',
   'node_orphan',
   'node_unsupported',
   'evidence_untaught',
@@ -96,7 +95,15 @@ export const CURRICULUM_QUALITY_LAYERS = [
 ] as const;
 export type CurriculumQualityLayer = (typeof CURRICULUM_QUALITY_LAYERS)[number];
 
-/** Outcomes that are `draft` or `archived` are not part of the commitment. */
+/**
+ * Outcomes the audit holds the course to: everything but the archived ones.
+ *
+ * `draft` is **not** excluded, though this comment used to say so while the code
+ * did not: a course is designed draft-first, so excluding drafts would audit an
+ * empty commitment and report a brand-new course as sound. The coverage matrix
+ * filters on the same predicate, which is what keeps the two readings of "which
+ * outcomes count" from drifting apart.
+ */
 function activeObjectives(snapshot: CurriculumDesignSnapshot): CurriculumObjectiveRecord[] {
   return snapshot.objectives.filter((objective) => objective.status !== 'archived');
 }

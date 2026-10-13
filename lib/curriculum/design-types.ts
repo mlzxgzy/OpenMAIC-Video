@@ -596,6 +596,14 @@ export type CurriculumAuditFindingStatus = (typeof CURRICULUM_AUDIT_FINDING_STAT
 export interface CurriculumAuditFindingRecord {
   id: string;
   taskId: string;
+  /**
+   * The address of the defect this row is about: rule + the rows it names,
+   * sorted. A review re-derives findings and writes fresh row ids, so the id
+   * cannot be what a decision is attached to — see `lib/curriculum/design-review.ts`.
+   * Unique per (task, fingerprint), which is what makes "one row per defect"
+   * a database guarantee rather than a convention.
+   */
+  fingerprint: string;
   ruleCode: string;
   severity: CurriculumAuditSeverity;
   message: string;

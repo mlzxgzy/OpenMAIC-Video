@@ -73,6 +73,14 @@ import {
 } from '@/lib/curriculum/audit';
 import { buildDesignCoverage, summariseCoverage } from '@/lib/curriculum/design-coverage';
 import { teachingGapsOfRecords } from '@/lib/curriculum/design-teaching';
+import {
+  acceptedFindings,
+  designPreconditions,
+  findingDecisions,
+  findingFingerprint,
+  partitionFindings,
+  type AcceptedFinding,
+} from '@/lib/curriculum/design-review';
 import { changedDirectionKeys, directionValuesOf } from '@/lib/curriculum/design-direction';
 import {
   CURRICULUM_DIRECTED_EDGE_TYPES,
@@ -490,6 +498,7 @@ interface LabTaskRow extends Row {
 interface AuditFindingRow extends Row {
   id: string;
   task_id: string;
+  fingerprint: string;
   rule_code: string;
   severity: string;
   message: string;
@@ -554,8 +563,8 @@ const LAB_TASK_COLUMNS = `id, task_id, unit_id, objective_id, evidence_id, asses
        score_rules, scoring_mode, time_limit_sec, hint_policy, allow_retry, hint_ladder,
        sort_order, created_at, updated_at`;
 
-const AUDIT_FINDING_COLUMNS = `id, task_id, rule_code, severity, message, ref_kind, ref_id,
-       ref_ids, status, created_at, updated_at`;
+const AUDIT_FINDING_COLUMNS = `id, task_id, fingerprint, rule_code, severity, message, ref_kind,
+       ref_id, ref_ids, status, created_at, updated_at`;
 
 const CONFIRMATION_COLUMNS = `id, task_id, step, confirmed_by, note, confirmed_at`;
 
@@ -860,6 +869,7 @@ function mapAuditFinding(row: AuditFindingRow): CurriculumAuditFindingRecord {
   return {
     id: row.id,
     taskId: row.task_id,
+    fingerprint: row.fingerprint,
     ruleCode: row.rule_code,
     severity: row.severity as CurriculumAuditSeverity,
     message: row.message,
@@ -1663,6 +1673,10 @@ export async function phaseCompletionGaps(
     // Read from `teachingGapsOfRecords`, the same function the step's own rules
     // and the audit rule call, so the gate cannot refuse something the card calls
     // finished (or the other way round).
+    //
+    // Deliberately *not* filtered by the author's accepted findings: a waiver is a
+    // decision about what may be produced, and this gate is about whether the work
+    // is done. See `syncCurriculumAuditFindings` for the boundary.
     const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
     const teachingGaps = teachingGapsOfRecords(
       snapshot.units,
@@ -1695,8 +1709,7 @@ export async function phaseCompletionGaps(
   // gate refuses, or the other way round.
   if (next === 'review') {
     const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
-    const findings = auditCurriculumDesign(snapshot);
-    const blocking = findings.filter(
+    const blocking = auditCurriculumDesign(snapshot).filter(
       (finding) =>
         (finding.layer === 'assess_covers' && finding.severity === 'error') ||
         // A question that no outcome claims is a `traceable` finding, not an
@@ -3315,52 +3328,132 @@ export async function deleteCurriculumLabTask(
 
 // ── Audit findings ──────────────────────────────────────────────────────────
 
-export async function replaceCurriculumAuditFindings(
+/** Where a finding's address comes from, whether it is derived or already stored. */
+function findingAddressOf(finding: {
+  ruleCode: string;
+  refKind?: string | null;
+  refId?: string | null;
+  refIds?: readonly string[];
+}) {
+  return {
+    rule: finding.ruleCode,
+    refKind: finding.refKind ?? null,
+    refId: finding.refId ?? null,
+    refIds: finding.refIds ?? [],
+  };
+}
+
+/**
+ * Make the stored findings agree with the ones the audit just derived.
+ *
+ * A review is a re-derivation, so this is a **sync**, not a replace. Three rules,
+ * and each of them is a bug that used to be here:
+ *
+ * 1. **One row per defect.** The fingerprint is the address; the unique index
+ *    enforces it. The old code deleted every open row and inserted fresh ones,
+ *    so an accepted defect came back as a second, open row on the next review —
+ *    the same problem reported twice, once waived and once not.
+ * 2. **A decision survives the review that re-derives it.** The upsert refreshes
+ *    the prose and the severity, and deliberately does not touch `status`: an
+ *    acceptance is the author's and the audit has no opinion about it.
+ * 3. **A decision is spent when its defect is gone.** A row whose address is no
+ *    longer derived is deleted, because the waiver was an acceptance of *that*
+ *    defect in *that* design. If it comes back, it comes back open and has to be
+ *    decided again — which is the honest reading of a re-derived audit.
+ *
+ * **Scope of a decision: production, not the workflow.** `evaluateCurriculumDesign`
+ * reads these rows, so an accepted defect stops blocking generation and export.
+ * The phase machine and the step sign-offs deliberately do not: they ask whether
+ * the *work* is finished, and accepting a defect does not finish it. Reading the
+ * decisions there as well would mean either refusing anyway (a decision with two
+ * halves that disagree) or letting a course advance on a gap that is still open,
+ * and the second is how the design would be built on top of nothing.
+ */
+export async function syncCurriculumAuditFindings(
   queryable: Queryable,
   ownerId: string,
   taskId: string,
   findings: CurriculumAuditFindingInput[],
 ): Promise<CurriculumAuditFindingRecord[]> {
-  // A review re-runs; keeping resolved and waived findings would let a fixed
-  // defect stay visible, and keeping open ones from a stale run would report
-  // problems that no longer exist.
+  const derived: { input: CurriculumAuditFindingInput; fingerprint: string }[] = [];
+  const seen = new Set<string>();
+  for (const input of findings) {
+    const fingerprint = findingFingerprint(findingAddressOf(input));
+    // Two findings with the same address are one defect. The audit should not
+    // emit that, and if it ever does, one row is the truthful answer — the
+    // unique index would otherwise decide it by write order.
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+    derived.push({ input, fingerprint });
+  }
+
   await queryable.query(
     `DELETE FROM curriculum_audit_finding
-      WHERE owner_id = $1 AND task_id = $2 AND status = 'open'`,
-    [ownerId, taskId],
+      WHERE owner_id = $1 AND task_id = $2 AND fingerprint <> ALL($3::text[])`,
+    [ownerId, taskId, derived.map(({ fingerprint }) => fingerprint)],
   );
-  const created: CurriculumAuditFindingRecord[] = [];
-  for (const finding of findings) {
-    const result = await queryable.query<AuditFindingRow>(
+
+  for (const { input, fingerprint } of derived) {
+    await queryable.query<AuditFindingRow>(
       `INSERT INTO curriculum_audit_finding
-         (id, owner_id, task_id, rule_code, severity, message, ref_kind, ref_id, ref_ids, status)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10)
-       RETURNING ${AUDIT_FINDING_COLUMNS}`,
+         (id, owner_id, task_id, fingerprint, rule_code, severity, message,
+          ref_kind, ref_id, ref_ids, status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,'open')
+       ON CONFLICT (owner_id, task_id, fingerprint) DO UPDATE
+         SET severity = EXCLUDED.severity,
+             message = EXCLUDED.message,
+             ref_kind = EXCLUDED.ref_kind,
+             ref_id = EXCLUDED.ref_id,
+             ref_ids = EXCLUDED.ref_ids,
+             updated_at = now()`,
       [
         createId('finding'),
         ownerId,
         taskId,
-        requiredText(finding.ruleCode, 'ruleCode'),
-        finding.severity ?? 'warning',
-        requiredText(finding.message, 'message'),
-        optionalText(finding.refKind),
-        optionalText(finding.refId),
-        jsonParam(finding.refIds ?? []),
-        finding.status ?? 'open',
+        fingerprint,
+        requiredText(input.ruleCode, 'ruleCode'),
+        input.severity ?? 'warning',
+        requiredText(input.message, 'message'),
+        optionalText(input.refKind),
+        optionalText(input.refId),
+        jsonParam(input.refIds ?? []),
       ],
     );
-    const row = result.rows[0];
-    if (row) created.push(mapAuditFinding(row));
   }
-  return created;
+
+  // Read back rather than assemble: the decisions that survived are in the rows,
+  // and the caller must not have to guess which of them did.
+  const stored = await queryable.query<AuditFindingRow>(
+    `SELECT ${AUDIT_FINDING_COLUMNS} FROM curriculum_audit_finding
+      WHERE owner_id = $1 AND task_id = $2
+      ORDER BY created_at, id`,
+    [ownerId, taskId],
+  );
+  return stored.rows.map(mapAuditFinding);
 }
 
+/**
+ * Record the author's decision about one finding.
+ *
+ * `resolved` is refused, and the refusal is the point of this layer rather than
+ * the route's: a finding is derived, so "I fixed it" is not a state anyone can
+ * be in — either the next review no longer derives the defect and the row goes
+ * away by itself, or it does and the claim is false. Accepting a defect is the
+ * only decision a derived audit can hold, and letting the other one through
+ * would put a row in the database that says a live defect is fine.
+ */
 export async function setCurriculumAuditFindingStatus(
   queryable: Queryable,
   ownerId: string,
   findingId: string,
   status: CurriculumAuditFindingStatus,
 ): Promise<CurriculumAuditFindingRecord> {
+  if (status === 'resolved') {
+    throw new CurriculumDesignValidationError(
+      '审核发现由设计推导得出，不能标成「已修复」：把设计改好，下一次审核它就会自己消失。' +
+        '要带着它发布，请选择「接受」。',
+    );
+  }
   const result = await queryable.query<AuditFindingRow>(
     `UPDATE curriculum_audit_finding SET status = $3, updated_at = now()
       WHERE owner_id = $1 AND id = $2
@@ -3442,8 +3535,19 @@ export async function getCurriculumDesignSnapshot(
 // ── Review ───────────────────────────────────────────────────────────────────
 
 export interface CurriculumDesignEvaluation {
-  /** The audit's verdict, before persistence — derived, not stored rows. */
+  /** Every derived finding, including the ones the author accepted. */
   findings: CurriculumAuditFinding[];
+  /**
+   * `error` findings with no decision against them. Non-empty exactly when the
+   * design may not be produced — this, and not the coverage summary, is the veto.
+   */
+  blocking: CurriculumAuditFinding[];
+  /** Defects the author decided to accept, with the decision that accepted them. */
+  accepted: AcceptedFinding[];
+  /** Warnings and notes with no decision against them. Never block. */
+  advisory: CurriculumAuditFinding[];
+  /** Facts that must hold before anything can be produced, and cannot be waived. */
+  preconditions: string[];
   quality: ReturnType<typeof evaluateCurriculumQuality>;
   coverage: ReturnType<typeof buildDesignCoverage>;
   verdict: ReturnType<typeof summariseCoverage>;
@@ -3461,20 +3565,45 @@ export interface CurriculumDesignReview extends Omit<CurriculumDesignEvaluation,
  * Split out from the persisting wrapper so a read can ask "would this export?"
  * without writing: a GET that records findings would make every prefetch and
  * retry a mutation, and the answer would then depend on who asked last.
+ *
+ * What makes a design producible is answered here once, from the findings, with
+ * the decisions that apply to them subtracted:
+ *
+ * - **Waived defects do not block.** That is what an acceptance is for; a decision
+ *   nothing reads is a button that lies, and this one used to be exactly that.
+ *   They are not dropped either — they come back as `accepted`, so an export can
+ *   say what it is shipping with.
+ * - **The coverage summary is not a second veto.** It used to be one
+ *   (`quality.exportable && verdict.complete`), which is one fact computed twice:
+ *   the coverage rules already report every uncovered outcome, so all the second
+ *   check could ever add was the ability to disagree with the first. What it was
+ *   really refusing was a course with no outcomes at all — not a defect, and so
+ *   not something to waive — which is now a precondition.
  */
 export function evaluateCurriculumDesign(
   snapshot: CurriculumDesignSnapshot,
 ): CurriculumDesignEvaluation {
   const findings = auditCurriculumDesign(snapshot);
-  const quality = evaluateCurriculumQuality(findings);
+  const decisions = findingDecisions(snapshot.auditFindings);
+  const { blocking, advisory } = partitionFindings(findings, decisions);
+  const preconditions = designPreconditions(snapshot);
+  // Quality is evaluated over what is still live, so the nine-layer strip reads
+  // "this layer is satisfied" for a layer whose only error was accepted — which
+  // is the truth — while `accepted` keeps that from being mistaken for a clean
+  // design.
+  const quality = evaluateCurriculumQuality([...blocking, ...advisory]);
   const coverage = buildDesignCoverage(snapshot);
   const verdict = summariseCoverage(coverage);
   return {
     findings,
+    blocking,
+    accepted: acceptedFindings(findings, decisions),
+    advisory,
+    preconditions,
     quality,
     coverage,
     verdict,
-    exportable: quality.exportable && verdict.complete,
+    exportable: preconditions.length === 0 && blocking.length === 0,
   };
 }
 
@@ -3484,25 +3613,28 @@ export function evaluateCurriculumDesign(
  * Reporting the FIRST broken layer rather than all of them is deliberate:
  * fixing a later layer while an earlier one is still broken produces coverage
  * that points at the wrong thing. The list is empty exactly when the design is
- * exportable.
+ * exportable — accepted defects are not blockers, and the caller reads them from
+ * `accepted` so the author still learns what is being shipped with.
  */
 export function describeCurriculumExportBlockers(
-  evaluation: Pick<CurriculumDesignEvaluation, 'quality' | 'verdict'>,
+  evaluation: Pick<CurriculumDesignEvaluation, 'quality' | 'blocking' | 'preconditions'>,
 ): string[] {
-  const parts: string[] = [];
-  if (!evaluation.quality.exportable) {
+  const parts: string[] = [...evaluation.preconditions];
+  if (evaluation.blocking.length > 0) {
     // The label, not the identifier: this line is the only explanation the
     // author gets for why the course cannot be produced, and `outcomes_verifiable`
     // is not a thing a teacher can act on.
     const layer = evaluation.quality.firstBrokenLayer;
     parts.push(
-      layer === null
+      (layer === null
         ? '设计审核未通过'
-        : `设计审核未通过：卡在「${curriculumQualityLayerLabel(layer)}」层`,
+        : `设计审核未通过：卡在「${curriculumQualityLayerLabel(layer)}」层`) +
+        `，共 ${evaluation.blocking.length} 条待处理`,
     );
-  }
-  if (!evaluation.verdict.complete) {
-    parts.push(evaluation.verdict.summary);
+    // The findings themselves, not only the layer: which outcomes are uncovered
+    // is the actionable half, and the author is the one who knows whether to add
+    // an item or to accept the gap.
+    for (const finding of evaluation.blocking) parts.push(finding.message);
   }
   return parts;
 }
@@ -3511,14 +3643,14 @@ export function describeCurriculumExportBlockers(
  * Run the full design review for one task and persist the findings.
  *
  * The audit is pure, so it runs over a snapshot that was already read; this
- * wrapper adds the two things a pure function cannot do — persist the result
- * so the workspace can show it, and fold the coverage verdict in so callers
- * get the loop state without a second query.
+ * wrapper adds the two things a pure function cannot do — persist the result so
+ * the workspace can show it, and fold the verdict in so callers get the loop
+ * state without a second query.
  *
- * Persisting is a replace, not an append: a review re-runs after an edit, and
- * carrying a fixed defect forward as `open` would report problems that no
- * longer exist. Resolved and waived findings survive so a decision to accept a
- * known gap is not silently erased by the next review.
+ * Persisting is a sync (`syncCurriculumAuditFindings`): defects the audit no
+ * longer reports are retired, everything else is refreshed in place, and the
+ * decisions attached to them survive. The returned findings are the stored rows,
+ * so the caller sees the same statuses the next snapshot will read.
  */
 export async function reviewCurriculumTaskDesign(
   queryable: Queryable,
@@ -3528,7 +3660,7 @@ export async function reviewCurriculumTaskDesign(
   const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
   const evaluation = evaluateCurriculumDesign(snapshot);
 
-  const persisted = await replaceCurriculumAuditFindings(
+  const persisted = await syncCurriculumAuditFindings(
     queryable,
     ownerId,
     taskId,
@@ -3539,7 +3671,6 @@ export async function reviewCurriculumTaskDesign(
       refKind: finding.refKind,
       refId: finding.refId,
       refIds: finding.refIds,
-      status: 'open' as const,
     })),
   );
 

@@ -195,6 +195,8 @@ export function CourseAssemblerPanel({
   const [designReady, setDesignReady] = useState<{
     exportable: boolean;
     blockers: string[];
+    /** Defects the author accepted: this export proceeds with them. */
+    accepted: { id: string; message: string }[];
   } | null>(null);
 
   const [loadingDesign, setLoadingDesign] = useState(true);
@@ -229,13 +231,19 @@ export function CourseAssemblerPanel({
       setDesignPhase(task.designPhase);
       const [snapshot, gate] = await Promise.all([
         requestJson<CurriculumDesignSnapshot>(`${base}/tasks/${task.id}`),
-        requestJson<{ exportable: boolean; blockers: string[] }>(
-          `${base}/tasks/${task.id}/export-gate`,
-        ),
+        requestJson<{
+          exportable: boolean;
+          blockers: string[];
+          accepted?: { id: string; message: string }[];
+        }>(`${base}/tasks/${task.id}/export-gate`),
       ]);
       setDesignUnits(snapshot.units);
       setDesignObjectiveCount(snapshot.objectives.length);
-      setDesignReady({ exportable: gate.exportable, blockers: gate.blockers });
+      setDesignReady({
+        exportable: gate.exportable,
+        blockers: gate.blockers,
+        accepted: gate.accepted ?? [],
+      });
     } catch (caught) {
       // A series with no design at all is the normal case for the legacy
       // screen, so a failure to read one must not become an error banner here.
@@ -846,7 +854,11 @@ function DesignProductionCard({
   title: string;
   items: { chapterTitle: string | null; unit: CurriculumUnitRecord }[];
   itemRuns: Record<string, ItemRun>;
-  ready: { exportable: boolean; blockers: string[] } | null;
+  ready: {
+    exportable: boolean;
+    blockers: string[];
+    accepted: { id: string; message: string }[];
+  } | null;
   busy: string | null;
   error: string | null;
   blockedReason: string | null;
@@ -894,6 +906,20 @@ function DesignProductionCard({
               <li key={blocker} className="flex items-start gap-2">
                 <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
                 {blocker}
+              </li>
+            ))}
+          </ul>
+        ) : null}
+
+        {/* Accepted defects do not block, and saying so here is what keeps the
+            acceptance honest: an export that carries known gaps has to name them
+            rather than look like a clean run. */}
+        {ready && ready.accepted.length > 0 ? (
+          <ul className="text-muted-foreground flex flex-col gap-1 rounded-md border px-3 py-2 text-xs">
+            {ready.accepted.map((entry) => (
+              <li key={entry.id} className="flex items-start gap-2">
+                <span className="shrink-0 font-medium">已接受</span>
+                {entry.message}
               </li>
             ))}
           </ul>

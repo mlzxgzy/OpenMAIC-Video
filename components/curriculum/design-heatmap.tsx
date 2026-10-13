@@ -65,6 +65,8 @@ interface ExportGatePayload {
   exportable: boolean;
   blockers: string[];
   quality: CurriculumQualityEvaluation;
+  /** Defects the author accepted; production proceeds with them. */
+  accepted?: { id: string; ruleCode: string; severity: string; message: string }[];
 }
 
 interface ReviewPayload {
@@ -114,7 +116,9 @@ const ROLE_LABELS: Record<string, string> = {
 
 const STATUS_LABELS: Record<CurriculumAuditFindingStatus, string> = {
   open: '待处理',
-  resolved: '已修复',
+  // Only readable, never written: a review is derived, so "fixed" is not a state
+  // an author can record — the defect leaves the list once the design is repaired.
+  resolved: '已修复（旧数据）',
   waived: '已接受',
 };
 
@@ -230,12 +234,16 @@ export function DesignHeatmap({
   }, [base, onChanged]);
 
   /**
-   * Mark a finding resolved or waived. The next review replaces open findings,
-   * so a decision to accept a known gap has to be written, not just filtered
-   * out of the view.
+   * Accept a finding, or take the acceptance back.
+   *
+   * There is no "mark as fixed" button: a finding is derived, so it disappears by
+   * itself once the design is repaired, and a button claiming otherwise would be
+   * a control that does nothing to the gate. Accepting one is a real decision —
+   * it stops the defect blocking production and every export reports it — so the
+   * button that exists is the one that means something, and it can be undone.
    */
   const setFindingStatus = useCallback(
-    async (findingId: string, status: 'resolved' | 'waived') => {
+    async (findingId: string, status: 'open' | 'waived') => {
       setBusy(findingId);
       try {
         const payload = await requestJson<{ finding: CurriculumAuditFindingRecord }>(
@@ -245,6 +253,9 @@ export function DesignHeatmap({
         setFindings((current) =>
           current.map((finding) => (finding.id === payload.finding.id ? payload.finding : finding)),
         );
+        // The gate is derived from the same decisions, so re-read it rather than
+        // guessing what the acceptance did to it.
+        setGate(await requestJson<ExportGatePayload>(`${base}/export-gate`));
         await onChanged();
       } catch (caught) {
         setError(caught instanceof Error ? caught.message : '更新失败');
@@ -269,6 +280,22 @@ export function DesignHeatmap({
       ]),
     );
   }, [coverage]);
+
+  /**
+   * The findings split by what they are worth to the author.
+   *
+   * `resolved` (a value only rows written before this step can hold) is counted
+   * as open on purpose: a claim that a defect is fixed does not stop it blocking,
+   * and the gate says so.
+   */
+  const openFindings = useMemo(
+    () => findings.filter((finding) => finding.status !== 'waived'),
+    [findings],
+  );
+  const acceptedFindings = useMemo(
+    () => findings.filter((finding) => finding.status === 'waived'),
+    [findings],
+  );
 
   if (loading) {
     return (
@@ -567,50 +594,78 @@ export function DesignHeatmap({
               还没有记录审核结果。上面的质量链是实时计算的；审核结论要点「运行审核」才会记录。
             </p>
           ) : (
-            <ul className="flex flex-col gap-2">
-              {findings.map((finding) => (
-                <li
-                  key={finding.id}
-                  className="border-border flex items-start justify-between gap-3 rounded-lg border p-2.5"
-                >
-                  <div className="flex min-w-0 flex-col gap-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge
-                        variant={finding.severity === 'error' ? 'destructive' : 'secondary'}
-                        className="px-1 py-0 text-[10px]"
-                      >
-                        {finding.severity}
-                      </Badge>
-                      <span className="text-muted-foreground font-mono text-[10px]">
-                        {finding.ruleCode}
-                      </span>
-                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                        {STATUS_LABELS[finding.status]}
-                      </Badge>
-                    </div>
-                    <span className="text-xs">{finding.message}</span>
-                  </div>
-                  <div className="flex shrink-0 gap-1">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={busy === finding.id || finding.status === 'resolved'}
-                      onClick={() => void setFindingStatus(finding.id, 'resolved')}
+            <>
+              {/* The two halves are read differently and are therefore counted
+                  separately: an open defect blocks production, an accepted one is
+                  shipping with it. One list would let the second kind read as a
+                  problem that is still waiting for an answer. */}
+              <p className="text-muted-foreground text-xs">
+                待处理 {openFindings.length} 条（阻塞生成）
+                {acceptedFindings.length > 0
+                  ? ` · 已接受 ${acceptedFindings.length} 条（不阻塞，生成时会带着它们）`
+                  : ''}
+              </p>
+              <ul className="flex flex-col gap-2">
+                {findings.map((finding) => {
+                  const accepted = finding.status === 'waived';
+                  return (
+                    <li
+                      key={finding.id}
+                      className={`flex items-start justify-between gap-3 rounded-lg border p-2.5 ${
+                        accepted ? 'border-border/60 bg-muted/30' : 'border-border'
+                      }`}
                     >
-                      已修复
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      disabled={busy === finding.id || finding.status === 'waived'}
-                      onClick={() => void setFindingStatus(finding.id, 'waived')}
-                    >
-                      接受
-                    </Button>
-                  </div>
-                </li>
-              ))}
-            </ul>
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge
+                            variant={
+                              accepted
+                                ? 'secondary'
+                                : finding.severity === 'error'
+                                  ? 'destructive'
+                                  : 'secondary'
+                            }
+                            className="px-1 py-0 text-[10px]"
+                          >
+                            {finding.severity}
+                          </Badge>
+                          <span className="text-muted-foreground font-mono text-[10px]">
+                            {finding.ruleCode}
+                          </span>
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                            {STATUS_LABELS[finding.status]}
+                          </Badge>
+                        </div>
+                        <span className={`text-xs ${accepted ? 'line-through opacity-70' : ''}`}>
+                          {finding.message}
+                        </span>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        {accepted ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy === finding.id}
+                            onClick={() => void setFindingStatus(finding.id, 'open')}
+                          >
+                            撤销接受
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={busy === finding.id}
+                            onClick={() => void setFindingStatus(finding.id, 'waived')}
+                          >
+                            接受
+                          </Button>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
           )}
         </CardContent>
       </Card>

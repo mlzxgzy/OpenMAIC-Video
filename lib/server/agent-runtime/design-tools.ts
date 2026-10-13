@@ -85,6 +85,7 @@ import {
   phaseCompletionGaps,
   assertCurriculumDesignExportable,
   reviewCurriculumTaskDesign,
+  setCurriculumAuditFindingStatus,
   setCurriculumNodeObjectives,
   updateCurriculumLabTask,
   updateCurriculumObjective,
@@ -110,6 +111,17 @@ export interface CurriculumDesignToolDeps {
 const TaskIdParams = Type.Object({
   taskId: Type.String({
     description: 'A course task id from create_course_task or list_course_tasks.',
+  }),
+});
+
+const FindingStatusParams = Type.Object({
+  taskId: TaskIdParams.properties.taskId,
+  findingId: Type.String({
+    description: 'A finding id from review_course_design or get_course_design.',
+  }),
+  status: Type.Union([Type.Literal('waived'), Type.Literal('open')], {
+    description:
+      'waived = the user accepts this defect and production may proceed with it; open = take that acceptance back. There is no "fixed": a review is derived, so the defect disappears by itself once the design is repaired.',
   }),
 });
 
@@ -1988,6 +2000,61 @@ export function buildCurriculumDesignTools(
     },
   };
 
+  /**
+   * The one decision an author can make about a finding.
+   *
+   * Derived findings mean "resolved" is not a thing to record — but *accepting*
+   * one is, and without a tool for it an agent-driven course could never be
+   * produced while any defect the user was willing to live with existed. The gate
+   * would refuse forever and the only reason would be a decision no tool could
+   * write, which is exactly the shape of the bug that left this suite red for
+   * three steps (see `confirm_course_outline`).
+   */
+  const setFindingStatus: AgentTool<typeof FindingStatusParams, unknown> = {
+    name: 'set_course_finding_status',
+    label: 'Accept or un-accept a review finding',
+    description:
+      'Record the user\'s decision about one review finding. `waived` accepts the defect: it stops blocking production, and every export reports it as something the course ships with. `open` takes the acceptance back. Use this only when the user has actually decided to live with the defect — a defect that can be repaired should be repaired, because a review is derived and the finding disappears on its own once the design is fixed. Refuses "resolved" for that reason: a live defect is not fixed no matter who says so.',
+    parameters: FindingStatusParams,
+    async execute(_id, params: Static<typeof FindingStatusParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const finding = await setCurriculumAuditFindingStatus(
+        await resolveQueryable(deps),
+        ownerId,
+        params.findingId,
+        params.status,
+      );
+      if (signal?.aborted) throw new Error('aborted');
+      const review = await reviewCurriculumTaskDesign(
+        await resolveQueryable(deps),
+        ownerId,
+        params.taskId,
+      );
+      const text = [
+        params.status === 'waived'
+          ? `Accepted finding ${finding.ruleCode}: ${finding.message}`
+          : `Re-opened finding ${finding.ruleCode}: ${finding.message}`,
+        `blocking now: ${review.blocking.length}; accepted: ${review.accepted.length}; exportable: ${review.exportable}`,
+        review.blocking.length === 0
+          ? 'Nothing left to decide: the design may be produced.'
+          : `Still blocking: ${review.blocking.map((item) => item.message).join(' | ')}`,
+      ].join('\n');
+      return toolResult(
+        text,
+        {
+          finding,
+          exportable: review.exportable,
+          blockingCount: review.blocking.length,
+          acceptedCount: review.accepted.length,
+        },
+        !review.exportable,
+      );
+    },
+  };
+
   const reviewDesign: AgentTool<typeof TaskIdParams, unknown> = {
     name: 'review_course_design',
     label: 'Review course design',
@@ -2080,6 +2147,7 @@ export function buildCurriculumDesignTools(
     patchLabTask,
     traceObjective,
     reviewDesign,
+    setFindingStatus,
     assertExportable,
   ] as unknown as AgentTool<never, never>[];
 }
@@ -2158,6 +2226,7 @@ export const CURRICULUM_DESIGN_ALLOWLIST: ReadonlySet<string> = new Set([
   'patch_lab_task',
   'trace_outcome',
   'review_course_design',
+  'set_course_finding_status',
   'assert_course_design_exportable',
 ]);
 
@@ -2189,6 +2258,7 @@ export const CURRICULUM_DESIGN_TOOL_PHASES: Readonly<Record<string, CurriculumDe
   patch_lab_task: 'assessment',
   trace_outcome: 'task',
   review_course_design: 'review',
+  set_course_finding_status: 'review',
   assert_course_design_exportable: 'review',
 };
 
@@ -2212,6 +2282,7 @@ export const CURRICULUM_DESIGN_TOOLS_PROMPT = [
   'Step 5 (teaching) is what each item teaches and how deep (core / brief / mention / omit), plus the page plan for a lecture item. `confirm_course_teaching` records the agreement, and `teaching → assessment` is refused until it is recorded AND every item has a teaching design.',
   'Steps 7–8 (assessment) are the questions and the lab tasks. A question or a lab hangs on ONE item, and it must be an item that promised that outcome — a lab needs an item that practises or grades it. Every evidence row needs its artifact, an exam evidence may not be delivered by a practice lab, and a lab is graded by its verify rules, never by its reference solution. `confirm_course_assessment` records the agreement.',
   'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete — every phase from the brief to the assessment has its own `confirm_course_*` tool, and the machine refuses to leave a phase whose sign-off is missing.',
+  'Step 8 is the review. `review_course_design` re-derives every finding from the design and records it; `assert_course_design_exportable` is the gate before producing anything. A finding has no "fixed" state to set — repair the design and it stops being derived — so the only decision is `set_course_finding_status` with `waived`: the user accepts this defect and production proceeds carrying it. Use it only when the user has actually decided to live with the defect, and say so, because the export names every accepted defect rather than hiding it.',
   'An outcome is verifiable only when it has an expected behavior and at least one minimum criterion; the store refuses to mark one verifiable otherwise, and every outcome needs evidence before the graph phase opens.',
   'A chapter classifies; it carries no content. An item is a lecture, practice or exam, and the design may not assume a practice and an exam after every lecture — decide from the outcome and its evidence.',
   'Every outcome must eventually be taught, drilled AND examined. `trace_outcome` shows what backs one outcome and where it is met; `review_course_design` runs the quality rules; `assert_course_design_exportable` is the gate before generating any content.',

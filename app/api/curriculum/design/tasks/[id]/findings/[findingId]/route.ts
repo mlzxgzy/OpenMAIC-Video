@@ -1,12 +1,16 @@
 /**
- * PATCH /api/curriculum/design/tasks/[id]/findings/[findingId] — resolve or
- * waive one recorded finding.
+ * PATCH /api/curriculum/design/tasks/[id]/findings/[findingId] — accept one
+ * recorded finding, or take the acceptance back.
  *
- * The next review replaces open findings, so this is the route that makes a
- * decision stick: a waived gap is a deliberate acceptance, and it survives a
- * re-run rather than being reported as new. Only `open`, `resolved` and
- * `waived` are accepted; the value reaches a CHECK constraint, so a typo here
- * would otherwise surface as a 500.
+ * Findings are derived, so the only decision a caller can make about one is to
+ * accept it: `waived` stops it blocking production (and the export says it is
+ * shipping with an accepted defect rather than staying silent about it), and
+ * `open` undoes that. `resolved` is a value the column can hold and a caller
+ * cannot write — the store refuses it, because a defect the audit still derives
+ * is not fixed no matter who says so.
+ *
+ * The value reaches a CHECK constraint, so the parse happens before the write:
+ * a typo here would otherwise surface as a 500.
  */
 import type { NextRequest } from 'next/server';
 

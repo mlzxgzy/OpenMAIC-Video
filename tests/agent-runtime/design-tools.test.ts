@@ -174,10 +174,13 @@ describe('outcome-first design tools (PGlite)', () => {
       // (step 3), and confirm_course_outline / confirm_course_teaching /
       // confirm_course_assessment (steps 4–7, added when the missing tools were
       // found: their gates existed since S9 but nothing could satisfy them, so the
-      // agent-side flow could not leave `outline` at all). Keep this count honest
-      // so a new tool cannot be added without the allowlist, the phase map and
-      // this number all moving together.
-      expect(names.length).toBe(27);
+      // agent-side flow could not leave `outline` at all). Plus
+      // set_course_finding_status (step 8), for the same reason one step later:
+      // the export gate reads decisions, and a decision no tool can write is a
+      // course that can never be produced while an accepted defect exists. Keep
+      // this count honest so a new tool cannot be added without the allowlist, the
+      // phase map and this number all moving together.
+      expect(names.length).toBe(28);
     });
   });
 
@@ -592,89 +595,89 @@ describe('outcome-first design tools (PGlite)', () => {
     });
   });
 
-  describe('lab design integrity', () => {
-    /** An item that drills the seeded outcome, in the outline phase. */
-    async function drillItem(taskId: string) {
-      // advanceTo('graph') returns the task **in** `graph`, before any node work,
-      // on purpose: the graph-phase tests above are about an empty graph. Step 3's
-      // rule is that a complete graph is still not an agreed one, so this helper
-      // has to build the node, link it to the outcome and sign it off before the
-      // phase will open — which is exactly the sequence a real design follows.
-      const graph = (await call(tools, 'get_course_design', { taskId })).details!.design as {
-        objectives: { id: string }[];
-      };
-      await call(tools, 'create_learning_node', {
-        taskId,
-        name: 'SQL 注入原理',
-        nodeType: 'knowledge',
-      });
-      const withNode = (await call(tools, 'get_course_design', { taskId })).details!.design as {
-        nodes: { id: string }[];
-      };
-      await call(tools, 'set_node_objectives', {
-        taskId,
-        nodeId: withNode.nodes[0]!.id,
-        objectives: [{ objectiveId: graph.objectives[0]!.id }],
-      });
-      const confirmation = await call(tools, 'confirm_course_knowledge', { taskId });
-      expect(confirmation.isError).toBe(false);
-      const toOutline = await call(tools, 'advance_course_design_phase', { taskId });
-      expect(toOutline.details!.designPhase).toBe('outline');
-      const unit = await call(tools, 'create_curriculum_unit', {
-        taskId,
-        unitType: 'item',
-        title: 'SQL 注入实操',
-        unitRole: 'practice',
-      });
-      const design = (await call(tools, 'get_course_design', { taskId })).details!.design as {
-        objectives: { id: string }[];
-      };
-      const objectiveId = design.objectives[0]!.id;
-      await call(tools, 'create_unit_coverage', {
-        taskId,
-        unitId: unit.details!.unitId as string,
-        objectiveId,
-        coverageKind: 'practice',
-      });
-      // The gate out of `outline` is "every outcome is taught somewhere", so a
-      // drill alone does not open it. This is the loop closing in the right
-      // order: taught, then drilled, then examinable.
-      await call(tools, 'create_unit_coverage', {
-        taskId,
-        unitId: unit.details!.unitId as string,
-        objectiveId,
-        coverageKind: 'teach',
-      });
-      // `outline → teaching` reads the outline's own sign-off, so the walk has to
-      // record it — this is the gate that stopped the helper at `outline` from the
-      // day the outline sign-off landed, and the reason those two lab tests were
-      // red in a file nobody's regression command ran.
-      const outline = await call(tools, 'confirm_course_outline', { taskId });
-      expect(outline.isError).toBe(false);
-      expect(
-        (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
-      ).toBe('teaching');
-      // Questions and labs belong to the `assessment` phase, and `teaching →
-      // assessment` reads the lesson's sign-off plus a design that says what the
-      // item teaches. Both are written here because a lab authored against an
-      // undesigned lesson is exactly what that gate refuses.
-      const unitId = unit.details!.unitId as string;
-      const nodesNow = (await call(tools, 'get_course_design', { taskId })).details!.design as {
-        nodes: { id: string }[];
-      };
-      await call(tools, 'patch_curriculum_unit', {
-        unitId,
-        unitRole: 'practice',
-        teachingDesign: { core: [nodesNow.nodes[0]!.id] },
-      });
-      const teaching = await call(tools, 'confirm_course_teaching', { taskId });
-      expect(teaching.isError).toBe(false);
-      expect(
-        (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
-      ).toBe('assessment');
-      return { unitId, objectiveId };
-    }
+  /** An item that drills the seeded outcome, in the outline phase. */
+  async function drillItem(taskId: string) {
+    // advanceTo('graph') returns the task **in** `graph`, before any node work,
+    // on purpose: the graph-phase tests above are about an empty graph. Step 3's
+    // rule is that a complete graph is still not an agreed one, so this helper
+    // has to build the node, link it to the outcome and sign it off before the
+    // phase will open — which is exactly the sequence a real design follows.
+    const graph = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+      objectives: { id: string }[];
+    };
+    await call(tools, 'create_learning_node', {
+      taskId,
+      name: 'SQL 注入原理',
+      nodeType: 'knowledge',
+    });
+    const withNode = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+      nodes: { id: string }[];
+    };
+    await call(tools, 'set_node_objectives', {
+      taskId,
+      nodeId: withNode.nodes[0]!.id,
+      objectives: [{ objectiveId: graph.objectives[0]!.id }],
+    });
+    const confirmation = await call(tools, 'confirm_course_knowledge', { taskId });
+    expect(confirmation.isError).toBe(false);
+    const toOutline = await call(tools, 'advance_course_design_phase', { taskId });
+    expect(toOutline.details!.designPhase).toBe('outline');
+    const unit = await call(tools, 'create_curriculum_unit', {
+      taskId,
+      unitType: 'item',
+      title: 'SQL 注入实操',
+      unitRole: 'practice',
+    });
+    const design = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+      objectives: { id: string }[];
+    };
+    const objectiveId = design.objectives[0]!.id;
+    await call(tools, 'create_unit_coverage', {
+      taskId,
+      unitId: unit.details!.unitId as string,
+      objectiveId,
+      coverageKind: 'practice',
+    });
+    // The gate out of `outline` is "every outcome is taught somewhere", so a
+    // drill alone does not open it. This is the loop closing in the right
+    // order: taught, then drilled, then examinable.
+    await call(tools, 'create_unit_coverage', {
+      taskId,
+      unitId: unit.details!.unitId as string,
+      objectiveId,
+      coverageKind: 'teach',
+    });
+    // `outline → teaching` reads the outline's own sign-off, so the walk has to
+    // record it — this is the gate that stopped the helper at `outline` from the
+    // day the outline sign-off landed, and the reason those two lab tests were
+    // red in a file nobody's regression command ran.
+    const outline = await call(tools, 'confirm_course_outline', { taskId });
+    expect(outline.isError).toBe(false);
+    expect(
+      (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
+    ).toBe('teaching');
+    // Questions and labs belong to the `assessment` phase, and `teaching →
+    // assessment` reads the lesson's sign-off plus a design that says what the
+    // item teaches. Both are written here because a lab authored against an
+    // undesigned lesson is exactly what that gate refuses.
+    const unitId = unit.details!.unitId as string;
+    const nodesNow = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+      nodes: { id: string }[];
+    };
+    await call(tools, 'patch_curriculum_unit', {
+      unitId,
+      unitRole: 'practice',
+      teachingDesign: { core: [nodesNow.nodes[0]!.id] },
+    });
+    const teaching = await call(tools, 'confirm_course_teaching', { taskId });
+    expect(teaching.isError).toBe(false);
+    expect(
+      (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
+    ).toBe('assessment');
+    return { unitId, objectiveId };
+  }
 
+  describe('lab design integrity', () => {
     it('refuses a lab with no verify rules, because nothing could be graded', async () => {
       const id = await advanceTo('graph');
       const { unitId, objectiveId } = await drillItem(id);
@@ -714,6 +717,61 @@ describe('outcome-first design tools (PGlite)', () => {
       expect(lab.isError).toBe(false);
       expect(lab.details!.verifyRuleCount).toBe(1);
       expect(lab.text).toMatch(/independent of the reference solution/i);
+    });
+  });
+  describe('the review decision', () => {
+    // Step 8's agent-side half. The export gate reads the author's decisions, and
+    // a decision no tool can write is a course that can never be produced while any
+    // defect the user is willing to live with exists — the same shape of hole as
+    // the missing `confirm_course_*` tools one step earlier.
+    it('accepts a blocking finding and reports what that unblocks', async () => {
+      const id = await advanceTo('graph');
+      const { unitId, objectiveId } = await drillItem(id);
+      await call(tools, 'create_question', {
+        taskId: id,
+        unitId,
+        objectiveId,
+        questionType: 'single',
+        stem: 'SQL 注入的成因是什么？',
+        options: [
+          { key: 'A', text: '用户输入未与语句分离' },
+          { key: 'B', text: '网络延迟过高' },
+        ],
+        answer: ['A'],
+      });
+
+      const review = await call(tools, 'review_course_design', { taskId: id });
+      const findings = (review.details as { findings: { id: string; ruleCode: string }[] })
+        .findings;
+      expect(findings.length).toBeGreaterThan(0);
+
+      // The gate refuses before anything is accepted.
+      const refused = await call(tools, 'assert_course_design_exportable', { taskId: id });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toMatch(/Not exportable/);
+
+      // Waiving a finding moves it from "blocking" to "accepted" and says so,
+      // because an export that carries accepted defects must not be silent.
+      const target = findings[0]!;
+      const waived = await call(tools, 'set_course_finding_status', {
+        taskId: id,
+        findingId: target.id,
+        status: 'waived',
+      });
+      expect(waived.text).toMatch(/Accepted finding/);
+      expect(waived.details!.acceptedCount).toBe(1);
+      expect(waived.details!.finding).toMatchObject({ status: 'waived' });
+
+      // Taking the acceptance back is a decision too, and it has to be reachable:
+      // a decision that cannot be revised is a trap.
+      const reopened = await call(tools, 'set_course_finding_status', {
+        taskId: id,
+        findingId: target.id,
+        status: 'open',
+      });
+      expect(reopened.text).toMatch(/Re-opened finding/);
+      expect(reopened.details!.acceptedCount).toBe(0);
+      expect(reopened.details!.finding).toMatchObject({ status: 'open' });
     });
   });
 });

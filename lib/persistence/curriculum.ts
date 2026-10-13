@@ -975,6 +975,64 @@ CREATE INDEX IF NOT EXISTS curriculum_design_confirmation_owner_task_idx
   ON curriculum_design_confirmation (owner_id, task_id);
 `;
 
+/**
+ * Phase 14: a finding gets an address, so a decision can outlive the review that
+ * re-derives it.
+ *
+ * Findings are derived — every review recomputes them and writes fresh row ids —
+ * while "I accept this gap" is a decision the author makes once. Without an
+ * address of its own the decision had nothing to attach to: the next review
+ * deleted the open row and inserted the same defect under a new id, leaving the
+ * accepted row behind as a duplicate of a defect that was by then reported twice,
+ * once waived and once open. `fingerprint` is that address (rule + the rows it
+ * names, sorted), and the unique index makes "one row per defect per task" a
+ * database guarantee instead of a convention.
+ *
+ * Backfilled in SQL rather than recomputed in TypeScript because every existing
+ * row has to keep whatever decision it already carried. The formula is the same
+ * one `findingFingerprint` uses; a test pins the two together, since a
+ * fingerprint computed two ways is a decision that silently stops matching.
+ *
+ * The dedupe before the index is not optional: past reviews could leave a waived
+ * row and an open row for the same defect, and a unique index cannot be built
+ * over them. The decision wins over the duplicate report, and the oldest row
+ * wins among equals so the result is deterministic.
+ */
+const CURRICULUM_DESIGN_FINDING_FINGERPRINT_SCHEMA = `
+ALTER TABLE curriculum_audit_finding
+  ADD COLUMN IF NOT EXISTS fingerprint TEXT;
+
+UPDATE curriculum_audit_finding
+   SET fingerprint = rule_code || '|' || coalesce(ref_kind, '') || '|' || coalesce(ref_id, '') || '|' ||
+       coalesce((
+         SELECT string_agg(DISTINCT value, ',' ORDER BY value)
+           FROM jsonb_array_elements_text(ref_ids) AS value
+       ), '')
+ WHERE fingerprint IS NULL;
+
+DELETE FROM curriculum_audit_finding a
+ USING curriculum_audit_finding b
+ WHERE a.owner_id = b.owner_id
+   AND a.task_id = b.task_id
+   AND a.fingerprint = b.fingerprint
+   AND a.id <> b.id
+   AND a.status = 'open'
+   AND b.status <> 'open';
+
+DELETE FROM curriculum_audit_finding a
+ USING curriculum_audit_finding b
+ WHERE a.owner_id = b.owner_id
+   AND a.task_id = b.task_id
+   AND a.fingerprint = b.fingerprint
+   AND (a.created_at, a.id) > (b.created_at, b.id);
+
+ALTER TABLE curriculum_audit_finding
+  ALTER COLUMN fingerprint SET NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_audit_finding_owner_fingerprint_idx
+  ON curriculum_audit_finding (owner_id, task_id, fingerprint);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -1054,6 +1112,15 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 13,
       name: 'design_confirmation',
       up: CURRICULUM_DESIGN_CONFIRMATION_SCHEMA,
+      transaction: true,
+    },
+    // The review's decisions needed an address before they could mean anything:
+    // a derived finding gets a new row id on every review, so acceptance had
+    // nothing stable to attach to and the gate had nothing to read.
+    {
+      version: 14,
+      name: 'design_finding_fingerprint',
+      up: CURRICULUM_DESIGN_FINDING_FINGERPRINT_SCHEMA,
       transaction: true,
     },
   ],

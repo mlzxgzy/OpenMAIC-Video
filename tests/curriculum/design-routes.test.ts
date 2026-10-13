@@ -1087,8 +1087,52 @@ describe('design routes (PGlite)', () => {
       expect(body.verdict.complete).toBe(false);
       // The summary names the fraction, which is what makes a partly covered
       // design legible. The sentence around it is Chinese because a person reads
-      // it: it is the matrix header line and one of the export-gate blockers.
+      // it: it is the matrix header line, and the count the author sees while
+      // the gate's own refusal names the outcomes that are missing.
       expect(body.verdict.summary).toContain('0/1');
+    });
+
+    it('reports an accepted defect as something the export ships with', async () => {
+      await advanceTo('outline');
+      const reviewed = await postReview(
+        post(`/api/curriculum/design/tasks/${task.id}/review`),
+        taskParams(task.id),
+      );
+      const blocking = (
+        await read<{ findings: { id: string; severity: string; message: string }[] }>(reviewed)
+      ).findings.find((finding) => finding.severity === 'error')!;
+
+      const before = await read<{ blockers: string[]; accepted: unknown[] }>(
+        await getExportGate(
+          fetch_(`/api/curriculum/design/tasks/${task.id}/export-gate`),
+          taskParams(task.id),
+        ),
+      );
+      expect(before.blockers.join('；')).toContain(blocking.message);
+      expect(before.accepted).toEqual([]);
+
+      await patchFinding(
+        patch(`/api/curriculum/design/tasks/${task.id}/findings/${blocking.id}`, {
+          status: 'waived',
+        }),
+        childParams(task.id, 'findingId', blocking.id),
+      );
+
+      const after = await read<{
+        blockers: string[];
+        accepted: { id: string; ruleCode: string; message: string }[];
+      }>(
+        await getExportGate(
+          fetch_(`/api/curriculum/design/tasks/${task.id}/export-gate`),
+          taskParams(task.id),
+        ),
+      );
+      // Out of the blockers, into the list of what is being accepted — read from
+      // the same evaluation the gate decides on, so "may I produce this" and
+      // "what am I shipping with" cannot come from two readings.
+      expect(after.blockers.join('；')).not.toContain(blocking.message);
+      expect(after.accepted.map((entry) => entry.id)).toContain(blocking.id);
+      expect(after.accepted[0]!.ruleCode).toBeTruthy();
     });
   });
 
@@ -1261,6 +1305,32 @@ describe('design routes (PGlite)', () => {
       expect(good.status).toBe(200);
       const body = await read<{ finding: { status: string } }>(good);
       expect(body.finding.status).toBe('waived');
+
+      // `resolved` is in the column's vocabulary but not in a caller's: a review is
+      // derived, so the only decision an author can make about a live defect is to
+      // accept it, and the refusal has to explain the way out rather than 500 on
+      // the CHECK constraint.
+      const refused = await patchFinding(
+        patch(`/api/curriculum/design/tasks/${task.id}/findings/${findingId}`, {
+          status: 'resolved',
+        }),
+        childParams(task.id, 'findingId', findingId),
+      );
+      expect(refused.status).toBe(400);
+      const refusal = await read<{ error: { message: string } }>(refused);
+      expect(refusal.error.message).toContain('已修复');
+      expect(refusal.error.message).toContain('接受');
+
+      // Undoing the acceptance is a decision too, and it has to be reachable:
+      // a decision that cannot be revised is a trap.
+      const reopened = await patchFinding(
+        patch(`/api/curriculum/design/tasks/${task.id}/findings/${findingId}`, {
+          status: 'open',
+        }),
+        childParams(task.id, 'findingId', findingId),
+      );
+      expect(reopened.status).toBe(200);
+      expect((await read<{ finding: { status: string } }>(reopened)).finding.status).toBe('open');
     });
   });
 

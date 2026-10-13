@@ -8,9 +8,15 @@ description: Phase 11 of outcome-first course design. Runs the full design revie
 
 ## Phase lock
 
-You are in **phase 11 (review)**. You may run the review and set finding
-statuses. You may not author design rows to silence a finding: a finding that
-is correct must be fixed in the phase that owns it, not marked resolved.
+You are in **phase 11 (review)**. You may run the review and record the user's
+decision about a finding. You may not author design rows to silence a finding:
+a finding that is correct must be fixed in the phase that owns it.
+
+There is no "mark as fixed". A review is *derived* — it is recomputed from the
+design every time — so a finding disappears on its own once the design is
+repaired, and `resolved` is refused for that reason: a live defect is not fixed
+no matter who says so. The only decision you can record is `waived`, and it
+means the user has accepted this defect and production may proceed carrying it.
 
 ## Run it before spending, not after
 
@@ -22,6 +28,7 @@ questions and a lab nobody can grade.
 ```text
 review_course_design                    full findings + quality gate
 assert_course_design_exportable         the gate production must pass
+set_course_finding_status               accept a finding, or take it back
 get_course_design                       see the current state
 trace_outcome                           one outcome, both directions
 ```
@@ -96,8 +103,11 @@ Two habits that make audits worthless, and what to do instead:
 
 **Do not waive a finding because it is inconvenient.** `waived` exists for a
 decision someone has actually made — 「本题只讲原理，不上机」 is a legitimate
-scope decision. An audit that waves away the findings it dislikes is an audit
-that reports nothing. If you waive one, say so in the conversation and say why.
+scope decision, and the user is the one who makes it. An audit that waves away
+the findings it dislikes is an audit that reports nothing. If you waive one, say
+so in the conversation and say why, and remember that every export reports what
+it is shipping with: an accepted defect is named on the way out, so accepting one
+is never a way to make it invisible.
 
 **Do not treat warnings as errors, or errors as warnings.** `error` blocks
 production. `warning` is a real defect that will not stop the build. `info` is
