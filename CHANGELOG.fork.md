@@ -26,7 +26,39 @@
 
 ## [Unreleased]
 
+## [1.2.0-video.4] - 2026-10-13
+
+基线是上游 `ccdc88a5`（**本版未同步上游**：`v1.2.0-video.3` 之后没有再做
+`git merge upstream/main`）。本节收录自 `v1.2.0-video.3` 以来的 **11 个**二开提交，
+它们全部落在同一个方向上：**成果导向课程设计**——把设计流程的八步全部接成闭环
+（方向 → 学习目标 → 知识技能图 → 教学排序 → 课程大纲 → 授课脚本 → 题目与实操
+→ 审核与导出）。视频链路本版**一行未动**。
+
+**版本号说明**：沿用 `1.2.0-video.N` 版本线，本次递增到 `1.2.0-video.4`。
+本版**未改动 `packages/@openmaic/` 下任何文件**（`git diff --name-only
+v1.2.0-video.3..HEAD -- packages/` 为空），因此不发 `npm` 包、不消耗
+`@openmaic/*` 版本号，也不触发 `publish-packages.yml`。
+
+**读法**：11 个提交里 8 个是功能、3 个是「前面留下的洞」的修补。条目沿用提交里的
+叙述（讲**为什么**这么改，而不是改了什么），按步骤顺序排列。**课程产品层的整体设计
+与分阶段落地记录**另见 `docs/curriculum-redesign/COURSE-DESIGN-REFACTOR.md`。
+
+本版的主题，可以概括成一句：**签收要能被推翻，而"接受一处缺陷"必须是一份决定。**
+
+- **八步各自成形**：每一步的结论都是一个 AI 写进库、作者签收的**文档**，而不是一次
+  模型调用。学习目标、知识技能图、课程大纲、授课脚本、题目与实操，各自有了
+  「AI 对话 → 用户签收 → 门禁」的形态（设计工具注册表 24 → 27）。
+- **第八步**：审核从纯函数变成**对齐**而不是替换，缺陷有了稳定地址（指纹），
+  于是「我接受这个缺口」终于可以是一行**带决定**的记录——这行决定现在被导出闸门读。
+- **签收不是不可撤销**：本版同时补上了多处「写入却不撤回签收」——确认大纲之后模型
+  还能在确认背后加一章十条目、确认题目之后还能加十道题改判分规则，而这些路径现在都会
+  撤回签收（并区分「什么都没改的重述」）。
+
+本版共 **118 个文件、+31,072 / −304 行**（`git diff --shortstat v1.2.0-video.3..HEAD`）。
+
 ### Added
+
+> 下列条目原样来自本次的 `[Unreleased]`，未作改写。
 
 - **第八步「审核与导出」：审核是推导出来的，而"接受一处缺陷"必须是一份决定**。
   导出闸门（`assert_course_design_exportable`）与生成入口早就在了，`open`/`resolved`/
@@ -1294,6 +1326,41 @@ v1.2.0-video.2..HEAD -- packages/` 为空），因此不发 `npm` 包、不消�
   `tests/curriculum/human-facing-messages.test.ts` 断言五种位置形状都被识别。提交信息记录
   两半都做了变异测试（还原单个站点会让测试点名文件与行号）。
 
+### `1.2.0-video.4` 的验证状态
+
+**通过**（本机，本次发布提交之前）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `tsc --noEmit --pretty false` | exit 0 |
+| `pnpm exec eslint .` | **0 error**，18 个既有 warning（与上一版同数，非本次引入） |
+| `prettier --check`（改动文件） | All matched files use Prettier code style |
+| `pnpm check:i18n-keys` | 12 语包通过 |
+| `pnpm check:node-engine` | 通过 |
+| `vitest run tests/curriculum` + 设计存储 / migration 校验 / `design-tools` | **36 文件 696 例全绿** |
+
+上表那 696 例的覆盖面：`tests/curriculum`（33 个文件，含本版新增的
+`design-outcomes` / `design-knowledge` / `design-outline` / `design-teaching` /
+`design-assessment` / `design-review` 及各自的 route 套件）、真 PostgreSQL 契约套件
+`curriculum-design-schema.pg.test.ts`、`schema-migration-checksums.test.ts`、
+`curriculum-design-store.test.ts`，以及 `tests/agent-runtime/design-tools.test.ts`
+（本版修复了它自 S9 起一直红的两个 lab 用例，现已能从工具侧走到 `review`）。
+
+**本版未改动 `packages/@openmaic/`**：`git diff --name-only v1.2.0-video.3..HEAD -- packages/`
+为空，因此不发 `npm` 包、不提 `@openmaic/*` 版本号、不触发 `publish-packages.yml`。
+
+**未做 / 未跑**（逐条说明，避免与上面那份「全绿」读成同一件事）：
+
+- **未跑全量 `vitest`**：本仓库全量存在既有失败（缺 `DEEPSEEK_API_KEY`、需浏览器上下文、
+  5 秒超时）。上一版做过「与同环境 stash 基线按失败集合逐条比对」的全量差集核对，
+  **本次发布没有重跑这项**，所以本版**没有**「真实引入失败为 0」这一结论。
+- **未跑活体校验脚本**：`scripts/verification/` 下 13 个脚本（含本版多次使用的
+  `design-api-walk.py`，其步骤四证据在 `artifacts/regression/design-walk-step4.txt`
+  达到 168/168）**未在本次发布时重跑**。条目里引用的各次 walk 结果来自对应提交时点。
+- **未做浏览器端驱动验证**：Playwright 期望的 chromium 版本本机不具备（与前几版同一原因）。
+- **未跑 `pnpm build`**、未发 `npm` 包、未跑整门课的真实生成与 MP4 渲染
+  （视频链路本版一行未动）。
+
 ### `1.2.0-video.3` 的验证状态
 
 **通过**（本机，本次发布提交之前）：`tsc --noEmit`（exit 0）、`eslint`（**0 error**，
@@ -1991,8 +2058,9 @@ git log --oneline --first-parent ccdc88a5..HEAD   # 只看主干（上游 sync �
 | --- | --- |
 | 基线 `ccdc88a5` → 首个独立版本 `v1.2.0-video.1`（`fb94ab3c`） | 9 |
 | `v1.2.0-video.1` → `v1.2.0-video.2`（`57a35712`，含一次上游 `git merge upstream/main`） | 7 |
-| `v1.2.0-video.2` → `v1.2.0-video.3`（本提交） | 36 |
-| **合计** | **53** |
+| `v1.2.0-video.2` → `v1.2.0-video.3`（`b62c71f0`） | 36 |
+| `v1.2.0-video.3` → `v1.2.0-video.4`（本提交） | 11 |
+| **合计** | **64** |
 
 本仓库第一个二开提交是 `939c9027`（docs: 新增 AGENT.md 二开上下文文档）。
 

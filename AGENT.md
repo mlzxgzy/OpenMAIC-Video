@@ -12,8 +12,8 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交；`1.2.0-video.3` 未再同步上游） |
-| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`，tag `v1.2.0-video.3`） |
+| 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交；`1.2.0-video.3` 与 `1.2.0-video.4` 均未再同步上游） |
+| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`、`1.2.0-video.4`，tag `v1.2.0-video.4`） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**（视频导出 / 渲染服务 / 视频生成能力）+ **课程产品层**（系列 → 课程 → 成果导向设计 → 讲/练/考闭环 → 生成 → 导出） |
 | 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 2.8 万行 / 60 个 API 路由 / 27 张表，见 **§9**） |
@@ -26,8 +26,8 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 53 个提交并发布了 `v1.2.0-video.1`、
-    `v1.2.0-video.2`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+  - **用 merge，不要用 rebase**：二开已有 64 个提交并发布了 `v1.2.0-video.1`、
+    `v1.2.0-video.2`、`v1.2.0-video.3`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
   - **已有例外**：首页「场景类型」筛选是课程生成功能（非视频链路），落在 L4
