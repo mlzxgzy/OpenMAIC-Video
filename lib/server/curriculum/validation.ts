@@ -699,6 +699,17 @@ export function parseCurriculumBatchInput(body: unknown): ParseResult<ParsedCurr
 export interface ParsedCurriculumExportJobsInput {
   batchId?: string;
   batchItemIds: string[];
+  /**
+   * 按 stage 排队。
+   *
+   * 批量队列是从"课程 → 批量项 → 课堂"这条路来的，而目工作台是"设计 → 课堂"，
+   * 中间没有批量项。这两条路产出的都是同一个课程文档（stage），所以导出的最小
+   * 单位就是 stage：设计已经出片、但从来没有进过批量队列的课程，用这一组字段
+   * 也能导出。
+   */
+  stageIds: string[];
+  /** 这批 stage 的展示名。下载文件名取它；不传就是「课堂」。 */
+  stageTitle?: string;
   resolution: '720p' | '1080p' | '4k';
   fps: number;
   quality: 'draft' | 'standard' | 'high';
@@ -706,8 +717,9 @@ export interface ParsedCurriculumExportJobsInput {
 }
 
 /**
- * Enqueue body for MP4 export. The request either names one batch (all its
- * completed, staged items) or an explicit list of completed batch-item ids.
+ * Enqueue body for MP4 export. The request names one batch (all its completed,
+ * staged items), an explicit list of completed batch-item ids, or an explicit
+ * list of stage ids (the 目工作台 path, which has no batch item).
  * Render options are validated against the same constants the browser UI
  * offers, so the worker always starts from a known archive shape.
  */
@@ -719,11 +731,31 @@ export function parseCurriculumExportJobsInput(
 
   const value: ParsedCurriculumExportJobsInput = {
     batchItemIds: [],
+    stageIds: [],
     resolution: '1080p',
     fps: 30,
     quality: 'standard',
     burnInSubtitles: false,
   };
+
+  if ('stageTitle' in record && record.stageTitle !== undefined) {
+    if (typeof record.stageTitle !== 'string' || record.stageTitle.trim().length === 0) {
+      return { ok: false, message: 'stageTitle 必须是非空字符串' };
+    }
+    value.stageTitle = record.stageTitle.trim();
+  }
+
+  if ('stageIds' in record && record.stageIds !== undefined) {
+    if (!Array.isArray(record.stageIds)) {
+      return { ok: false, message: 'stageIds 必须是数组' };
+    }
+    for (const [index, item] of record.stageIds.entries()) {
+      if (typeof item !== 'string' || item.trim().length === 0) {
+        return { ok: false, message: `stageIds[${index}] 必须是非空字符串` };
+      }
+      value.stageIds.push(item.trim());
+    }
+  }
 
   if ('batchId' in record && record.batchId !== undefined) {
     if (typeof record.batchId !== 'string' || record.batchId.trim().length === 0) {
@@ -744,11 +776,14 @@ export function parseCurriculumExportJobsInput(
     }
   }
 
-  if (!value.batchId && value.batchItemIds.length === 0) {
-    return { ok: false, message: 'batchId 或 batchItemIds 为必填' };
+  if (!value.batchId && value.batchItemIds.length === 0 && value.stageIds.length === 0) {
+    return { ok: false, message: 'batchId、batchItemIds 或 stageIds 为必填' };
   }
   if (value.batchItemIds.length > 50) {
     return { ok: false, message: 'batchItemIds 数量过多' };
+  }
+  if (value.stageIds.length > 50) {
+    return { ok: false, message: 'stageIds 数量过多' };
   }
 
   if ('resolution' in record && record.resolution !== undefined) {

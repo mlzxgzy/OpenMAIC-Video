@@ -24,6 +24,7 @@ import { ArrowRight, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DesignHeatmap } from '@/components/curriculum/design-heatmap';
+import { DesignProducePanel } from '@/components/curriculum/design-produce';
 import { DesignWorkbench } from '@/components/curriculum/design-workbench';
 import type { CurriculumDesignPhase } from '@/lib/curriculum/design-types';
 
@@ -157,6 +158,7 @@ export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) 
         <TabsList>
           <TabsTrigger value="matrix">目标闭环矩阵</TabsTrigger>
           <TabsTrigger value="editor">设计编辑器</TabsTrigger>
+          <TabsTrigger value="produce">生成与导出</TabsTrigger>
         </TabsList>
         {phaseState && phaseState.nextPhase ? (
           <div className="flex flex-col items-end gap-1">
@@ -218,6 +220,15 @@ export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) 
           // live walk for the hands-on-task form is what found it.
           <DesignWorkbench taskId={taskId} phase={phase} version={version} onChanged={reload} />
         )}
+      </TabsContent>
+      {/*
+        第三步 Tab，不是第 8 个阶段：`CURRICULUM_DESIGN_PHASES` 的 7 个阶段是
+        后端的门禁与 agent 工具授权所依赖的，不改；出片发生在第 7 步之后，并且
+        可以由任意一次设计改动重新打开，所以它是同一页上的另一件事，不是流程里
+        的一步。
+      */}
+      <TabsContent value="produce">
+        <DesignProducePanel taskId={taskId} version={version} onChanged={reload} />
       </TabsContent>
     </Tabs>
   );

@@ -26,6 +26,36 @@
 
 ## [Unreleased]
 
+### Added
+
+- **课程生产台 UI 大修 B3/B4 落地（系列驾驶舱之后的收尾）**。五步共用一套「AI 起草 →
+  逐行签字」的通用骨架（`lib/curriculum/step-draft.ts` 起草引擎 + `step-draft-route.ts`
+  骨架路由 + `step-copilot.tsx` 副驾面板），"草稿不落库"从自觉升级为类型不变量（骨架交出的
+  `DesignContext` 不含 `write`）。审查副驾那一步不做——它是确定性规则，没有可起草的东西。
+  旧 6 Tab 台账整体归档为 `/curriculum/legacy`，`/curriculum` 变成重定向（书签与旧文档不死）；
+  旧台账只迁「生成与导出」进目工作台第三个 Tab（`design-produce.tsx`）——原来设计做完之后
+  这个页面上没有任何按钮能拿到视频；导出支持按 stage 入队（`POST /api/curriculum/export-jobs`
+  收 `{stageIds}`，逐 stage 幂等，`batch_item_id` 为 NULL 的普通任务，不需要新表），浏览器侧
+  认领/构建 ZIP/提交渲染/轮询抽成 `lib/curriculum/export-worker.ts` 两个页面共用（认领是按
+  owner 取全局最旧，各写一份会出现只在某个入口复现的"导出永远卡住"）；首页新增「继续上次」
+  （`continue-last-card.tsx`），与驾驶舱同源同函数（`/overview` + `chooseNextItem`），
+  没有待做一目时整块不渲染。设计与取舍另见
+  `docs/curriculum-redesign/SERIES-UI-REDESIGN.md` §8.3。
+
+### Fixed
+
+- **模型没标 Bloom 层级 / 难度时，那条建议永远采纳不了，且同类问题共有四处。**
+  `POST /questions` 与 `PATCH /questions/<id>`、`POST /nodes`、`PATCH /nodes/<id>` 用同一个
+  `oneOf` 读枚举字段，模型省略可选项时值为 `null`，界面报"只能是以下之一"而与建议无关。
+  现在允许的键名名单从 `design-validation.ts` 源码读出（漏一个就红），起草引擎在发出前兜底
+  剔除 null 值，被丢掉的"清空"变成一行看得见的 warnings。
+- **副驾里"改一改"对新建类行不生效**：`renamed()` 返回新对象而调用处丢弃返回值，界面改得动、
+  库里还是模型给的原名。单元测试只覆盖了返回值那条路所以全绿，e2e 读数据库才暴露。
+- **少 `warnings` 字段的回包把整个设计编辑器打死**（五步面板同页挂载，一个字段缺失整页
+  Runtime TypeError）；顺带修正"还有 N 行等你决定"的计数把无按钮的说明行也算进去，永远归零。
+- 删除 `curriculum-knowledge-copilot.spec.ts`：它 mock 的是重构前的回包契约，编码了
+  "面板是知识那步专用"这个刚被取消的前提；用例并入通用副驾 spec 并改为真实写入路由。
+
 ## [1.2.0-video.4] - 2026-10-13
 
 基线是上游 `ccdc88a5`（**本版未同步上游**：`v1.2.0-video.3` 之后没有再做

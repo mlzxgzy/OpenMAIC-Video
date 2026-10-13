@@ -43,6 +43,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { outlineItems } from '@/lib/curriculum/outline-items';
 import { chooseProductionPath, type ProductionPath } from '@/lib/curriculum/production-path';
 import type { CourseAssemblyPlan } from '@/lib/curriculum/assembly';
 import {
@@ -144,25 +145,6 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
     throw new Error(payload?.error?.message ?? `请求失败：HTTP ${response.status}`);
   }
   return payload as T;
-}
-
-/** Items in outline order, with their chapter as a grouping prefix. */
-function outlineItems(units: readonly CurriculumUnitRecord[]): {
-  chapterTitle: string | null;
-  unit: CurriculumUnitRecord;
-}[] {
-  const chapters = new Map(
-    units
-      .filter((unit) => unit.unitType === 'chapter')
-      .map((chapter) => [chapter.id, chapter.title]),
-  );
-  return units
-    .filter((unit) => unit.unitType === 'item')
-    .sort((a, b) => a.orderIndex - b.orderIndex)
-    .map((unit) => ({
-      chapterTitle: unit.parentId ? (chapters.get(unit.parentId) ?? null) : null,
-      unit,
-    }));
 }
 
 function downloadJson(fileName: string, value: unknown): void {

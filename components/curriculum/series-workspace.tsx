@@ -327,12 +327,6 @@ export function SeriesWorkspace() {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/curriculum">
-              <Layers />
-              全部课程
-            </Link>
-          </Button>
           <Button variant="outline" onClick={() => void load()} disabled={busy !== null}>
             {busy === 'load' ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             刷新
@@ -554,6 +548,19 @@ export function SeriesWorkspace() {
           })}
         </div>
       )}
+
+      {/*
+        存档入口。原来是页头的一个"全部课程"主按钮，但那个按钮指向的正是
+        "看一眼没有想法"的六 Tab 台账；放在页头等于把废弃路径当主路径推荐。
+        留成页脚一句小字：找得到，但不引导。
+      */}
+      <p className="text-muted-foreground text-xs">
+        跨系列的课程台账、知识点先修关系、培养方案矩阵与批量生成队列在
+        <Link href="/curriculum/legacy" className="mx-1 underline">
+          课程台账（存档）
+        </Link>
+        。日常做课用上面的系列。
+      </p>
     </div>
   );
 }

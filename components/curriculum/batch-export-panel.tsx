@@ -1,17 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { Download, Loader2, RotateCcw, Square, Video } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import {
+  patchCurriculumExportJob,
+  requestExportJson,
+  sleep,
+  useCurriculumExportWorker,
+} from '@/lib/curriculum/export-worker';
 import type {
   CurriculumBatchItemRecord,
   CurriculumCourseRecord,
   CurriculumExportJobRecord,
   CurriculumExportJobStatus,
 } from '@/lib/curriculum/types';
-import type { Scene, Stage } from '@/lib/types/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
 
 interface BatchExportPanelProps {
@@ -32,6 +37,7 @@ const STATUS_LABELS: Record<CurriculumExportJobStatus, string> = {
   cancelled: '已取消',
 };
 
+/** 任务状态的中文名与颜色。认领与处理在 `lib/curriculum/export-worker.ts`。 */
 function statusClass(status: CurriculumExportJobStatus): string {
   if (status === 'succeeded') return 'text-emerald-700';
   if (status === 'failed') return 'text-destructive';
@@ -41,49 +47,12 @@ function statusClass(status: CurriculumExportJobStatus): string {
   return 'text-muted-foreground';
 }
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, {
-    credentials: 'same-origin',
-    cache: 'no-store',
-    ...init,
-    headers: {
-      'content-type': 'application/json',
-      ...(init?.headers ?? {}),
-    },
-  });
-  const payload = (await response.json().catch(() => null)) as {
-    error?: { message?: string };
-    [key: string]: unknown;
-  } | null;
-  if (!response.ok) {
-    throw new Error(payload?.error?.message ?? `请求失败：HTTP ${response.status}`);
-  }
-  return payload as T;
-}
-
-async function patchExportJob(
-  id: string,
-  body: Record<string, unknown>,
-): Promise<CurriculumExportJobRecord> {
-  const payload = await requestJson<{ job: CurriculumExportJobRecord }>(
-    `/api/curriculum/export-jobs/${id}`,
-    { method: 'PATCH', body: JSON.stringify(body) },
-  );
-  return payload.job;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Browser-side export queue worker.
+ * 批量导出 MP4（旧台账的「视频导出」Tab）。
  *
- * The Hyperframes ZIP needs off-screen DOM snapshots and the local asset view,
- * so it can only be built in a browser page. The server owns the queue and
- * render job id; this component claims one job at a time, builds the ZIP for
- * its stage, uploads it to the existing render route, then polls the render
- * service until the MP4 is ready.
+ * 这里只剩"这一页看到哪些任务、怎么排队、怎么展示"；认领、构建 ZIP、提交渲染
+ * 与轮询都在共用的 `useCurriculumExportWorker` 里，目工作台的出片面板用的是
+ * 同一份。
  */
 export function BatchExportPanel({
   seriesId,
@@ -92,24 +61,7 @@ export function BatchExportPanel({
   exportJobs,
   onChanged,
 }: BatchExportPanelProps) {
-  const [busy, setBusy] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
   const { locale } = useI18n();
-  const [workerEnabled, setWorkerEnabled] = useState(true);
-  const jobsRef = useRef(exportJobs);
-  const onChangedRef = useRef(onChanged);
-  const workerEnabledRef = useRef(true);
-  const workerRunningRef = useRef(false);
-
-  useEffect(() => {
-    jobsRef.current = exportJobs;
-  }, [exportJobs]);
-  useEffect(() => {
-    onChangedRef.current = onChanged;
-  }, [onChanged]);
-  useEffect(() => {
-    workerEnabledRef.current = workerEnabled;
-  }, [workerEnabled]);
 
   const visibleCourses = useMemo(() => {
     if (!seriesId) return courses;
@@ -169,135 +121,17 @@ export function BatchExportPanel({
       job.status === 'rendering',
   );
 
-  const pollRenderJob = useCallback(async (job: CurriculumExportJobRecord): Promise<void> => {
-    if (!job.renderJobId) throw new Error('渲染任务缺少 jobId');
-    const pollIntervalMs = 3000;
-    const maxAttempts = Math.ceil((60 * 60 * 1000) / pollIntervalMs);
-    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-      await sleep(pollIntervalMs);
-      const response = await fetch(
-        `/api/export-video/render/${encodeURIComponent(job.renderJobId)}`,
-        { credentials: 'same-origin', cache: 'no-store' },
-      );
-      const payload = (await response.json().catch(() => ({}))) as {
-        status?: string;
-        progress?: number;
-        error?: string;
-      };
-      if (!response.ok) {
-        throw new Error(payload.error ?? `渲染状态查询失败：HTTP ${response.status}`);
-      }
-      const progress = Math.max(0, Math.min(1, Number(payload.progress) || 0));
-      if (Number.isFinite(progress)) {
-        try {
-          await patchExportJob(job.id, { action: 'progress', progress });
-        } catch {
-          // A transient ledger update must not fail the render itself.
-        }
-      }
-      if (payload.status === 'succeeded') {
-        await patchExportJob(job.id, { action: 'complete' });
-        return;
-      }
-      if (payload.status === 'failed' || payload.status === 'cancelled') {
-        throw new Error(payload.error || `渲染任务${payload.status}`);
-      }
-    }
-    throw new Error('渲染超时');
-  }, []);
-
-  const processJob = useCallback(
-    async (job: CurriculumExportJobRecord): Promise<void> => {
-      if (job.renderJobId && (job.status === 'rendering' || job.status === 'submitting')) {
-        await pollRenderJob(job);
-        return;
-      }
-
-      const [{ accessDocument }, { buildExportZip }] = await Promise.all([
-        import('@/lib/document-store'),
-        import('@/lib/video-export-app/build-export-zip'),
-      ]);
-      const accessed = await accessDocument(job.stageId);
-      if (!accessed.document) throw new Error('找不到课程文档');
-      const source = {
-        stage: accessed.document.stage as unknown as Stage,
-        scenes: accessed.document.scenes as unknown as Scene[],
-      };
-      const built = await buildExportZip({
-        resolution: job.resolution as '720p' | '1080p' | '4k',
-        burnInSubtitles: job.burnInSubtitles,
-        locale,
-        source,
-      });
-
-      const form = new FormData();
-      form.append('project', built.zipBlob, 'project.zip');
-      form.append('fps', String(job.fps));
-      form.append('quality', job.quality);
-      form.append('format', 'mp4');
-
-      const submitResponse = await fetch('/api/export-video/render', {
-        method: 'POST',
-        credentials: 'same-origin',
-        body: form,
-      });
-      const submitPayload = (await submitResponse.json().catch(() => ({}))) as {
-        jobId?: string;
-        error?: string;
-        details?: string;
-      };
-      if (!submitResponse.ok || !submitPayload.jobId) {
-        throw new Error(
-          [submitPayload.error, submitPayload.details].filter(Boolean).join(': ') ||
-            `提交渲染失败：HTTP ${submitResponse.status}`,
-        );
-      }
-
-      const attached = await patchExportJob(job.id, {
-        action: 'attach-render',
-        renderJobId: submitPayload.jobId,
-      });
-      await pollRenderJob(attached);
-    },
-    [locale, pollRenderJob],
-  );
-
-  const runWorker = useCallback(async () => {
-    if (workerRunningRef.current || !workerEnabledRef.current) return;
-    workerRunningRef.current = true;
-    try {
-      for (let guard = 0; guard < 50; guard += 1) {
-        if (!workerEnabledRef.current) break;
-        const rendering = jobsRef.current.find(
-          (job) => job.status === 'rendering' && job.renderJobId,
-        );
-        if (rendering) {
-          await processJob(rendering);
-          await onChangedRef.current();
-          continue;
-        }
-        const claimed = await requestJson<{ job: CurriculumExportJobRecord | null }>(
-          '/api/curriculum/export-jobs/claim',
-          { method: 'POST' },
-        );
-        if (!claimed.job) break;
-        try {
-          await processJob(claimed.job);
-        } catch (cause) {
-          const message = cause instanceof Error ? cause.message : String(cause);
-          await patchExportJob(claimed.job.id, {
-            action: 'fail',
-            error: { code: 'EXPORT_FAILED', message },
-          });
-        }
-        await onChangedRef.current();
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      workerRunningRef.current = false;
-    }
-  }, [processJob]);
+  const worker = useCurriculumExportWorker({ jobs: visibleExportJobs, onChanged, locale });
+  const {
+    busy,
+    error,
+    setError,
+    setBusy,
+    enabled: workerEnabled,
+    setEnabled: setWorkerEnabled,
+    runWorker,
+    download: downloadJob,
+  } = worker;
 
   useEffect(() => {
     if (workerEnabled && hasQueueWork) void runWorker();
@@ -308,7 +142,7 @@ export function BatchExportPanel({
     setBusy('enqueue');
     setError(null);
     try {
-      await requestJson('/api/curriculum/export-jobs', {
+      await requestExportJson('/api/curriculum/export-jobs', {
         method: 'POST',
         body: JSON.stringify({
           batchItemIds: exportableItems.map((item) => item.id),
@@ -330,32 +164,8 @@ export function BatchExportPanel({
     setBusy(`${action}-${job.id}`);
     setError(null);
     try {
-      await patchExportJob(job.id, { action });
+      await patchCurriculumExportJob(job.id, { action });
       await onChanged();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const downloadJob = async (job: CurriculumExportJobRecord) => {
-    if (!job.renderJobId) return;
-    setBusy(`download-${job.id}`);
-    setError(null);
-    try {
-      const response = await fetch(
-        `/api/export-video/render/${encodeURIComponent(job.renderJobId)}/download`,
-        { credentials: 'same-origin' },
-      );
-      if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${job.title || 'classroom'}.mp4`;
-      anchor.click();
-      URL.revokeObjectURL(url);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {

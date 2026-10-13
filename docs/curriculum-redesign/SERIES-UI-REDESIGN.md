@@ -1,6 +1,7 @@
 # 课程生产台 UI 大修方案
 
-> 状态：**B1（系列驾驶舱）与 B2 试点（第三步「知识技能图」两栏化）已落地**，B2 余下五步、B3、B4 未动。已确认的四项：① `/curriculum`
+> 状态：**B1 驾驶舱、B2 试点、B3（五步铺开 + 旧 Tab 归档 + 生成与导出迁入目工作台）、B4（首页「继续上次」）全部落地**。
+> 已确认的四项：① `/curriculum`
 > 降级为 `/legacy` 存档页；② 旧台账**只迁「生成与导出」**，其余归档；③ B2 先只改
 > 「知识技能图」一步做试点再铺开；④ 首页「继续上次」取**最近更新的未出片目**。
 >
@@ -435,11 +436,43 @@ export const OLD_PANEL_LABEL = {
 - 被丢掉的如果是"清空这一项"（改写路径上发 `null` 的原意），它会变成草稿的一句 `warnings`——
   那一行仍然会成功，所以不说出来就是一个看不出来的半执行。
 
-### 8.3 旧 Tab 的去向
+### 8.3 旧 Tab 的去向（B3 尾段，已落地）
 
-`/curriculum`（全部课程总览）与 6 Tab 台账**尚未归档**（§十.1、§十.2 的 B3 尾段）。当前这一批
-只做了"五步铺开"，驾驶舱与目工作台都还没接上 `series-cockpit` 的路由收敛。
+**归档。** 6 Tab 台账整体搬到 `/curriculum/legacy`（`app/curriculum/legacy/page.tsx`），顶部一条
+存档横幅说明"日常做课的顺序是：课程序列 → 系列驾驶舱 → 这一目"，页头加了「去课程序列」。
+`/curriculum` 变成一个 `redirect('/curriculum/series')`——不删这个路径，是因为它在浏览器书签、
+外部链接与旧文档里都已经存在，删掉会得到一个 404。
 
+主路径上的入口同步收敛：`series-workspace` 页头那个「全部课程」主按钮**删掉**了（它指向的正是
+"看一眼没有想法"的那一页），换成页脚一句小字；驾驶舱页脚的链接改指向 `/curriculum/legacy`。
+
+**只迁「生成与导出」，已落地为目工作台的第三个 Tab**（`components/curriculum/design-produce.tsx`）。
+原来设计编辑器把七步做完之后，这个页面上**没有任何一个按钮能拿到视频**：要先去旧台账的「课程组装」
+找到同一个设计、点生成，再去「视频导出」排队。现在这一目的条目、门禁结论、每条生成的 run 状态
+和导出任务都在同一页。
+
+这一迁移带出三处只有跨层才看得见的东西：
+
+| 现象 | 根因 | 怎么发现的 |
+|---|---|---|
+| 点「导出 MP4」什么也没发生 | 那一行显示的 stage 来自**刚跑完的 run**（`unit.stageId ?? run.stageId`），而 handler 里现读 `unit.stageId`——生成 hook 还没把 `stage_id` 写回库。界面看到的和发出去的是两个来源 | e2e 读队列 |
+| 导出队列多出一种来源，却一条服务端测试都没有 | 批量导出原来只有"入队"和"读取"是服务端的事，而这两条路之前**完全没有测试** | 加 stage 入队时发现 |
+| `/curriculum/legacy` 的 Tab 名字不能用全名匹配 | `TabsTrigger` 里还挂着这一块的说明文字，可访问名字是"课程台账 先建系列和课程"整串 | e2e strict mode |
+
+**导出按 stage 入队**（而不是先造"批量项"）：`curriculum_export_job.batch_item_id` 本来就允许
+NULL，而认领与 worker 只读 `stage_id`，所以"设计直接产出的课堂"是一条普通任务，不需要新表。
+`POST /api/curriculum/export-jobs` 现在收 `{ stageIds, stageTitle }`，并且**逐 stage 幂等**——
+已有未失败任务的 stage 原样返回，不排第二条 MP4。`GET /api/curriculum/export-jobs?stageIds=`
+是新的读取路径，目工作台靠它看到自己那几个课堂的进度。
+
+浏览器侧的认领/构建 ZIP/提交渲染/轮询抽成了 `lib/curriculum/export-worker.ts` 一份实现，两个页面
+共用。这不是省代码：认领是**按 owner 取全局最旧一条**，两个页面本来就会互相认领对方排的队；
+各写一份，一份修了"被中断的 building 任务"另一份没修，就会出现只在某个入口复现的"导出永远卡住"。
+
+**B4 也做了：首页「继续上次」**（`components/curriculum/continue-last-card.tsx`）。它调的是驾驶舱
+用的同一个 `/api/curriculum/design/overview`，排的是同一个 `chooseNextItem`。三条边界：没有待做的
+一目时整块不渲染、接口失败静默隐藏（首页不能因为一次附带读取失败而报错）、读取期间不出占位
+（它在 2×2 入口网格上方，出了占位会让下面两块按钮跳一次位置）。
 
 ---
 
@@ -459,6 +492,10 @@ export const OLD_PANEL_LABEL = {
 | 8 | "改一改"写到库里 | 引擎单测（新建与改写两条路）+ e2e 读数据库 | ✅ |
 | 9 | 多跳失败说得出是第几跳 | e2e：第 2 跳 500 时右栏报"第 2 跳失败"，而第 1 跳真的落了库 | ✅ |
 | 10 | 五个步骤各发各的起草路径 | e2e：五个面板各发一次请求，断言请求打到的路径集合 | ✅ |
+| 11 | 设计做完之后，同一页拿得到视频 | e2e：生成打到 `units/[id]/generate`，run 出片后出现「打开课堂」与「导出 MP4」 | ✅（`curriculum-produce.spec.ts`） |
+| 12 | 目工作台的导出真的进了队列 | e2e 读 `GET /api/curriculum/export-jobs?stageIds=`（读库，不读 DOM）；路由测试钉住 `batch_item_id` 为 NULL 与逐 stage 幂等 | ✅（`export-jobs-route.test.ts`，9 条） |
+| 13 | 旧路径不成为主路径 | e2e：`/curriculum` 重定向到 `/curriculum/series`；`/curriculum/legacy` 六块功能都在且有存档横幅 | ✅（`curriculum-produce.spec.ts`） |
+| 14 | 首页与驾驶舱推的是同一目 | 首页卡片调同一个 `/overview`、排同一个 `chooseNextItem`；e2e 断言卡片指向那一目 | ✅ |
 
 ---
 

@@ -139,6 +139,16 @@ export interface CurriculumExportJobOptions {
 export interface CurriculumExportJobsInput extends CurriculumExportJobOptions {
   batchId?: string;
   batchItemIds: string[];
+  /**
+   * 直接按 stage 排队（目工作台的出片面板）。
+   *
+   * `batchItemIds` 那条路要求课程先经过"批量项"，而设计驱动的那条路（设计 →
+   * 生成 → 课堂）没有批量项。两条路产出的都是同一个课程文档，所以导出这里
+   * 允许以 stage 为单位入队，落库时 `batch_item_id` 为 NULL。
+   */
+  stageIds?: string[];
+  /** 下载文件名用的展示名；不传就是「课堂」。 */
+  stageTitle?: string;
 }
 
 export type CurriculumExportJobAction =
@@ -2031,16 +2041,125 @@ async function readExportJobRowForUpdate(
 }
 
 /**
+ * Read export jobs for one owner, optionally narrowed to a set of stages.
+ *
+ * The 目工作台 needs only the jobs belonging to the classrooms this design
+ * produced. Reading the whole snapshot (`GET /api/curriculum`) would work but
+ * ships every series, course, knowledge point and program on a page that wants
+ * six rows — and it would make the panel's read depend on tables it never
+ * displays.
+ */
+export async function listCurriculumExportJobs(
+  queryable: Queryable,
+  ownerId: string,
+  stageIds?: string[],
+): Promise<CurriculumExportJobRecord[]> {
+  const result = await queryable.query<ExportJobRow>(
+    `SELECT ${EXPORT_JOB_COLUMNS}
+       FROM curriculum_export_job
+      WHERE owner_id = $1
+        AND ($2::text[] IS NULL OR stage_id = ANY($2::text[]))
+      ORDER BY created_at DESC`,
+    [ownerId, stageIds && stageIds.length > 0 ? stageIds : null],
+  );
+  return result.rows.map(mapExportJob);
+}
+
+/**
+ * Queue exports for stage ids that have no batch item behind them.
+ *
+ * The 目工作台 produces a classroom straight from a design (`units/[id]/generate`),
+ * so there is no `curriculum_batch_item` row to name — but the export worker only
+ * ever reads `stage_id`, so a job with `batch_item_id = NULL` is an ordinary job.
+ *
+ * Idempotent per stage the same way the batch path is: a stage that already has a
+ * live job (anything but failed/cancelled) is returned as-is instead of queued a
+ * second time. Ownership of the stage is deliberately **not** re-checked here:
+ * the stage id is only written into a row, and the browser worker's
+ * `accessDocument` is owner-scoped, so a stranger's id produces a job that fails
+ * with "找不到课程文档" rather than one that reads or renders someone else's
+ * classroom. Rejecting it earlier would mean teaching this store about document
+ * ownership, which it does not otherwise know about — and the id would have to be
+ * resolvable server-side for the check to be worth anything.
+ */
+async function createStageExportJobs(
+  queryable: Queryable,
+  ownerId: string,
+  stageIds: string[],
+  input: CurriculumExportJobsInput,
+): Promise<CurriculumExportJobRecord[]> {
+  // Dedupe before the query: a caller that sends the same stage twice (two units
+  // sharing one generated classroom) would otherwise get two jobs for one MP4.
+  const unique = [...new Set(stageIds)];
+
+  const live = await queryable.query<ExportJobRow>(
+    `SELECT ${EXPORT_JOB_COLUMNS}
+       FROM curriculum_export_job
+      WHERE owner_id = $1
+        AND stage_id = ANY($2::text[])
+        AND status NOT IN ('failed','cancelled')
+      ORDER BY created_at DESC`,
+    [ownerId, unique],
+  );
+  const queued = new Map<string, CurriculumExportJobRecord>();
+  for (const row of live.rows) {
+    const job = mapExportJob(row);
+    if (!queued.has(job.stageId)) queued.set(job.stageId, job);
+  }
+
+  const created: CurriculumExportJobRecord[] = [];
+  for (const stageId of unique) {
+    const existing = queued.get(stageId);
+    if (existing) {
+      created.push(existing);
+      continue;
+    }
+    const result = await queryable.query<ExportJobRow>(
+      `INSERT INTO curriculum_export_job
+         (id, owner_id, course_id, batch_item_id, stage_id, title,
+          resolution, fps, quality, burn_in_subtitles)
+       VALUES ($1, $2, NULL, NULL, $3, $4, $5, $6, $7, $8)
+       RETURNING ${EXPORT_JOB_COLUMNS}`,
+      [
+        createId('export'),
+        ownerId,
+        stageId,
+        input.stageTitle ?? '课堂',
+        input.resolution,
+        input.fps,
+        input.quality,
+        input.burnInSubtitles,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('导出任务创建失败');
+    created.push(mapExportJob(row));
+  }
+  return created;
+}
+
+/**
  * Enqueue MP4 exports for completed, staged batch items. The request names
  * either one batch or explicit completed item ids. Jobs already present for an
  * item are returned as-is, so clicking "export" twice is idempotent; failed or
  * cancelled jobs are replaced by a fresh queued row.
+ *
+ * Two entry shapes share this function because they produce the same kind of
+ * job: batch items (the 旧台账 path) and bare stage ids (the 目工作台 path,
+ * where a design was generated into a classroom without ever passing through a
+ * batch). The difference is only which column identifies the source — and for a
+ * stage-sourced job `batch_item_id` is NULL, which the claim route and the
+ * worker do not care about: both read `stage_id`.
  */
 export async function createCurriculumExportJobs(
   queryable: Queryable,
   ownerId: string,
   input: CurriculumExportJobsInput,
 ): Promise<CurriculumExportJobRecord[]> {
+  if (input.stageIds && input.stageIds.length > 0) {
+    return createStageExportJobs(queryable, ownerId, input.stageIds, input);
+  }
+
   const candidateResult = await queryable.query<ExportCandidateRow>(
     `SELECT item.id AS batch_item_id,
             item.course_id,

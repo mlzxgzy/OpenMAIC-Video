@@ -34,6 +34,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { LanguageSwitcher } from '@/components/language-switcher';
 import { createLogger } from '@/lib/logger';
 import { Button } from '@/components/ui/button';
+import { ContinueLastCard } from '@/components/curriculum/continue-last-card';
 import { InputGroup, InputGroupInput, InputGroupButton } from '@/components/ui/input-group';
 import { Textarea as UITextarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
@@ -951,6 +952,11 @@ function HomePage() {
               </button>
             </div>
           </div>
+        </div>
+
+        {/* ── 继续上次：待做的一目才渲染，没有就整块不出现 ── */}
+        <div className={heroEnter('fade-in duration-300 delay-[400ms]')}>
+          <ContinueLastCard />
         </div>
 
         {/* ── Two ways in: one-off lesson vs. a managed course system ── */}

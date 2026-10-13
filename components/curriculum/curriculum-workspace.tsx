@@ -1,3 +1,18 @@
+/**
+ * 课程台账的**存档页**（`/curriculum/legacy`）。
+ *
+ * 这里原来叫"全部课程总览"并挂在 `/curriculum` 上，是首页的"进入课程序列"
+ * 入口。它同时渲染六块平级内容（课程台账 / 知识体系 / 培养方案 / 课程组装 /
+ * 批量生成 / 视频导出），`activeTab` 只切 `hidden` class，所以六个 Tab 的 DOM
+ * 全部在页面里——这就是"进入系列后铺天盖地、不知道下一步干什么"的那一页。
+ *
+ * 现在它是存档：主路径是 `/curriculum/series` → 系列驾驶舱 → 这一目的工作台
+ * （生成与导出已经搬进目工作台）。这里保留的功能是**还没有等价替代**的那些，
+ * 顶部有一条横幅把这件事说明白。
+ *
+ * 不要再往这里加新的主路径功能。新功能进目工作台或驾驶舱。
+ */
+
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -658,9 +673,7 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
           </Button>
           <div className="min-w-0">
             <p className="text-muted-foreground text-sm">
-              {isSeriesScoped
-                ? '课程产品层 / Curriculum / 课程序列'
-                : '课程产品层 / Curriculum / 全部课程'}
+              {isSeriesScoped ? '课程台账（存档） / 课程序列' : '课程台账（存档） / 全部课程'}
             </p>
             <h1 className="text-2xl font-semibold">
               {isSeriesScoped ? currentSeriesName : '全部课程总览'}
@@ -673,14 +686,12 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {isSeriesScoped ? null : (
-            <Button variant="outline" asChild>
-              <Link href="/curriculum/series">
-                <Library />
-                课程序列
-              </Link>
-            </Button>
-          )}
+          <Button variant="outline" asChild>
+            <Link href="/curriculum/series">
+              <Library />
+              去课程序列
+            </Link>
+          </Button>
           <Button variant="outline" onClick={() => router.push('/')}>
             <BookOpen />
             去单课生成
@@ -691,6 +702,25 @@ export function CurriculumWorkspace({ seriesId }: CurriculumWorkspaceProps = {})
           </Button>
         </div>
       </header>
+
+      {/*
+        存档横幅。这一页的功能一条都没删——六块内容里有些（跨系列台账、知识点
+        先修关系、培养方案矩阵、批量生成队列）在目工作台里还没有等价替代。但
+        它不再是主路径，所以必须在最上面说清楚这件事，否则用户会以为"进入课程"
+        就该从这里开始，而这里恰恰是最初"看一眼没有想法"的那一页。
+      */}
+      <Card size="sm" className="border-amber-500/30 bg-amber-500/5" aria-label="存档说明">
+        <CardContent className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <span className="font-medium">这是旧台账的存档页。</span>
+          <span className="text-muted-foreground">
+            日常做课的顺序是：课程序列 → 系列驾驶舱 → 这一目（设计、生成、导出）。
+            这里的六块功能保留下来是因为其中一部分还没有搬过去。
+          </span>
+          <Link href="/curriculum/series" className="text-primary font-medium underline">
+            回到课程序列
+          </Link>
+        </CardContent>
+      </Card>
 
       <Tabs value={activeTab} onValueChange={handleTabChange} className="gap-6">
         <Card size="sm">

@@ -312,8 +312,8 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
       </div>
 
       <p className="text-muted-foreground text-xs">
-        知识体系、培养方案、课程组装、批量生成与视频导出这些旧台账功能已经挪到
-        <Link href="/curriculum" className="mx-1 underline">
+        每一目的生成与导出在那一目的工作台里（打开任意一目的「生成与导出」Tab）。跨系列的课程台账、知识体系、培养方案与批量队列在
+        <Link href="/curriculum/legacy" className="mx-1 underline">
           课程台账（存档）
         </Link>
         ，不在这个页面的主路径上。条目角色：
