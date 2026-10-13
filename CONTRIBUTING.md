@@ -57,6 +57,10 @@ pnpm dev
 `pnpm db:down` stops the development database and keeps its data. The E2E
 suite (`pnpm test:e2e`) also needs `DATABASE_URL`.
 
+`pnpm dev` also builds the standalone HTML player (`lib/standalone-player`,
+used by "Export as HTML") once at startup. It is not rebuilt on change: after
+editing the player, run `pnpm build:standalone-player` before exporting again.
+
 ## Development Workflow
 
 1. **Fork** the repository and create a branch from `main`:
@@ -169,6 +173,8 @@ PRs built with AI tools (Codex, Claude, Cursor, etc.) are welcome! We just ask f
 - **Mark it** — note in the PR title or description that the PR is AI-assisted
 - **AI-review your own code first** — before requesting maintainer review, run an AI code review (e.g. Claude, Codex, Copilot) on your changes and address the findings. This is **required** for AI-assisted PRs to avoid dumping large amounts of unreviewed generated code on maintainers.
 - **You are responsible for what you submit** — understand the code, not just the prompt.
+
+Every non-draft PR also gets an automated Codex review on each push. Treat its findings as advisory: fix what is valid, or reply with your reasoning. A maintainer still makes the final review and merge decision.
 
 AI-assisted PRs are held to the same quality standard as any other PR. Community members are also encouraged to leave constructive feedback on any PR — peer review helps everyone improve.
 

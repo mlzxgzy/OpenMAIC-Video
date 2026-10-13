@@ -105,6 +105,7 @@ export interface PlaybackChromeRootHandle {
 
 interface PlaybackChromeRootProps {
   readonly onRetryOutline?: (outlineId: string) => Promise<void>;
+  readonly generationFailureMessage?: string;
   /** Whether the Pro Switch in Header should be enabled. */
   readonly canEnterProMode?: boolean;
   /** Pro Switch click handler — parent coordinates teardown + mode flip. */
@@ -136,6 +137,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
   function PlaybackChromeRoot(
     {
       onRetryOutline,
+      generationFailureMessage,
       canEnterProMode,
       onEnterProMode,
       proModeActive,
@@ -1831,6 +1833,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 isPendingScene && failedOutlines.some((f) => f.id === generatingOutlines[0]?.id)
               }
               isGenerationInterrupted={isPendingScene && generationInterrupted}
+              generationFailureMessage={generationFailureMessage}
               onRetryGeneration={
                 onRetryOutline && generatingOutlines[0]
                   ? () => onRetryOutline(generatingOutlines[0].id)

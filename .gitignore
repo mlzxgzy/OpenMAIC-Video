@@ -37,6 +37,7 @@ CLAUDE.local.md
 
 # generated: synced from packages/@openmaic/importer/dist for runtime URL import
 /public/vendor/maic-importer
+/public/vendor/standalone-player
 
 # misc
 .DS_Store
@@ -98,6 +99,9 @@ e2e/__screenshots-619/
 
 # Operator model configuration (see openmaic.yml in RFC #1701); it names secrets via ${VAR}
 /openmaic.yml
+
+# Temporary render-service sources extracted by the mixed-pool regression test
+render-service/.owner-bound-parent-*/
 
 # Output of the live verification harnesses in scripts/verification/: screenshots,
 # console logs and full test-runner dumps. Regenerable by re-running the harness,
