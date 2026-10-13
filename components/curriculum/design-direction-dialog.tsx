@@ -68,6 +68,11 @@ interface DesignDirectionDialogProps {
    * own words just created. Absent when the dialog is already inside the task.
    */
   onOpenTask?: (taskId: string) => void;
+  /**
+   * The series a task created by this conversation joins. Only sent while no
+   * task exists yet; revisions of an existing task never move it.
+   */
+  seriesId?: string | null;
 }
 
 const EMPTY_VALUES: CurriculumDirectionValues = {
@@ -95,6 +100,7 @@ export function DesignDirectionDialog({
   onTaskChange,
   onChanged,
   onOpenTask,
+  seriesId,
 }: DesignDirectionDialogProps) {
   const [currentTaskId, setCurrentTaskId] = useState<string | null>(taskId);
   const [turns, setTurns] = useState<DirectionTurn[]>([initialTurn()]);
@@ -145,7 +151,12 @@ export function DesignDirectionDialog({
     setError(null);
     setNotice(null);
     try {
-      const payload = await sendDirectionTurn({ taskId: currentTaskId, instruction, history });
+      const payload = await sendDirectionTurn({
+        taskId: currentTaskId,
+        instruction,
+        history,
+        seriesId: currentTaskId ? undefined : (seriesId ?? undefined),
+      });
       setTurns((current) => [
         ...current,
         {
@@ -171,7 +182,7 @@ export function DesignDirectionDialog({
     } finally {
       setBusy(null);
     }
-  }, [busy, currentTaskId, draft, onChanged, onTaskChange, turns]);
+  }, [busy, currentTaskId, draft, onChanged, onTaskChange, seriesId, turns]);
 
   const confirm = useCallback(async () => {
     if (!currentTaskId) {

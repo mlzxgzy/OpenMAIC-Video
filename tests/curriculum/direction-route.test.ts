@@ -55,6 +55,7 @@ import {
   getCurriculumDesignStepConfirmation,
   getCurriculumTask,
 } from '@/lib/server/curriculum/design-store';
+import { createCurriculumSeries } from '@/lib/server/curriculum/store';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { SlotUnassignedError } from '@/lib/server/model-config/runtime';
 
@@ -174,6 +175,44 @@ describe('POST course direction turn', () => {
     });
     expect(body.gaps).toEqual(['缺课程范围（要解决的问题）']);
     expect(body.confirmed).toBe(false);
+  });
+
+  it('joins a newly created task to the series the request names, and never moves an existing one', async () => {
+    const series = await createCurriculumSeries(pool, OWNER, { name: 'CTF 序列' });
+    mocks.callLLM.mockResolvedValue(
+      answer({
+        message: '已建好。',
+        fields: { title: 'Web 方向第一课', audience: '大二学生' },
+        confirm: false,
+      }),
+    );
+
+    const created = await call({ instruction: '开一门 Web 课', seriesId: series.id });
+    expect(created.status).toBe(200);
+    const createdBody = (await created.json()) as { task: { id: string } | null };
+    await expect(getCurriculumTask(pool, OWNER, createdBody.task!.id)).resolves.toMatchObject({
+      seriesId: series.id,
+    });
+
+    // A revision turn carrying the same body must not relocate the task, and a
+    // foreign series id is refused rather than quietly attached.
+    const taskId = createdBody.task!.id;
+    const revised = await call({
+      taskId,
+      instruction: '改成 Web 逆向',
+      seriesId: series.id,
+    });
+    expect(revised.status).toBe(200);
+    await expect(getCurriculumTask(pool, OWNER, taskId)).resolves.toMatchObject({
+      seriesId: series.id,
+    });
+
+    const other = await createCurriculumSeries(pool, OTHER, { name: '别家序列' });
+    const foreign = await call({ taskId, instruction: '再改一次', seriesId: other.id });
+    expect(foreign.status).toBe(200);
+    await expect(getCurriculumTask(pool, OWNER, taskId)).resolves.toMatchObject({
+      seriesId: series.id,
+    });
   });
 
   it('does not create a row for a turn that names no course', async () => {

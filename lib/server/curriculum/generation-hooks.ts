@@ -14,6 +14,7 @@ import type { GenerationRunHookEvent } from '@/lib/server/generation-run-hooks';
 import {
   bindCurriculumBatchItemByRun,
   bindCurriculumGenerationRunStage,
+  bindCurriculumUnitStageByRun,
   getCurriculumProvider,
 } from './store';
 import type { CurriculumBatchRunUpdate, CurriculumGenerationRunUpdate } from './store';
@@ -87,6 +88,13 @@ export async function onCurriculumGenerationRunEvent(event: GenerationRunHookEve
       }
       if (batchUpdate) {
         await bindCurriculumBatchItemByRun(tx, event.currentOwnerId, event.runId, batchUpdate);
+      }
+      // Design-unit runs have no curriculum job row: the unit is named by the
+      // run's own input. Every stage-carrying event writes the unit, so a
+      // refresh mid-run already shows 「打开课堂」 and a dropped `completed`
+      // notification is not lost (a `scene-appended` carried the same id).
+      if (event.type === 'scene-appended' || event.type === 'completed') {
+        await bindCurriculumUnitStageByRun(tx, event.currentOwnerId, event.runId, event.stageId);
       }
     });
     // An item finished or paused: fill any free generation slot now instead

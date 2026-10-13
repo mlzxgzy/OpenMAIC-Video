@@ -370,6 +370,8 @@ export const DIRECTION_MAX_TURN_CHARS = 4000;
  */
 export function parseConversationTurnRequest(body: unknown): ParseResult<{
   taskId?: string;
+  /** The series a new task joins; only read when the turn creates one. */
+  seriesId?: string;
   instruction: string;
   history: DirectionTurn[];
 }> {
@@ -378,6 +380,7 @@ export function parseConversationTurnRequest(body: unknown): ParseResult<{
   const r = new Reader(parsed.value);
   const instruction = r.text('instruction', { required: true });
   const taskId = r.text('taskId');
+  const seriesId = r.text('seriesId');
   const history = r.objectList<DirectionTurn>('history', (entry, index) => {
     const role = entry.oneOf('role', DIRECTION_TURN_ROLES, { required: true });
     const content = entry.text('content', { required: true });
@@ -396,6 +399,7 @@ export function parseConversationTurnRequest(body: unknown): ParseResult<{
   // keeps the empty string from being mistaken for a real turn.
   const result = r.result({
     ...(taskId !== undefined ? { taskId } : {}),
+    ...(seriesId !== undefined ? { seriesId } : {}),
     instruction: instruction ?? '',
     history: history ?? [],
   });

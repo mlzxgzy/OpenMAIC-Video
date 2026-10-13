@@ -245,7 +245,12 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
                 : '这个系列还没有目。新建一个目，就是现在的下一步。'}
             </p>
             <Button asChild>
-              <Link href="/curriculum/design">新建目</Link>
+              {/* The query is the point: without it the design list and the AI
+                  dialog create the new task outside this series, and it never
+                  shows up in this cockpit's matrix. */}
+              <Link href={`/curriculum/design?seriesId=${encodeURIComponent(seriesId)}`}>
+                新建目
+              </Link>
             </Button>
           </CardContent>
         </Card>

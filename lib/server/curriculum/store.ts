@@ -1610,6 +1610,61 @@ export async function bindCurriculumGenerationRunStage(
   return row ? mapGenerationJob(row) : null;
 }
 
+/**
+ * Write a produced stage back to the design unit a run was started from.
+ *
+ * Design-unit generation (`POST .../units/[unitId]/generate`) does not create a
+ * `curriculum_generation_job` — it starts the run directly with
+ * `curriculumUnitId` in the run input. That id rides the persisted run row, so
+ * the write-back resolves the unit from `generation_runs.input` rather than
+ * from a browser callback: a refresh or a restart loses nothing, and a hook
+ * notification that arrives late still finds the unit.
+ *
+ * Guards mirror `bindCurriculumGenerationRunStage`: the unit is owner-scoped
+ * and a stage already held by a *different* unit or course is refused instead
+ * of silently stealing the link. Regenerating a unit replaces its stage — the
+ * same semantics the course ledger path has, where re-running a course
+ * overwrites `stage_id`.
+ */
+export async function bindCurriculumUnitStageByRun(
+  queryable: Queryable,
+  ownerId: string,
+  runId: string,
+  stageId: string,
+): Promise<'bound' | 'unchanged' | 'no-unit' | 'stage-taken'> {
+  const unitResult = await queryable.query<{ id: string; stage_id: string | null }>(
+    `SELECT u.id, u.stage_id
+       FROM curriculum_unit u
+       JOIN generation_runs r ON r.owner_id = $1 AND r.id = $2
+      WHERE u.owner_id = $1 AND u.id = r.input->>'curriculumUnitId'
+      FOR UPDATE OF u`,
+    [ownerId, runId],
+  );
+  const unit = unitResult.rows[0];
+  if (!unit) return 'no-unit';
+
+  if (unit.stage_id === stageId) return 'unchanged';
+
+  const taken = await queryable.query<{ kind: 'unit' | 'course'; id: string }>(
+    `SELECT 'unit' AS kind, id FROM curriculum_unit
+      WHERE owner_id = $1 AND stage_id = $2 AND id <> $3
+      UNION ALL
+      SELECT 'course' AS kind, id FROM curriculum_course
+      WHERE owner_id = $1 AND stage_id = $2
+      LIMIT 1`,
+    [ownerId, stageId, unit.id],
+  );
+  if (taken.rows[0]) return 'stage-taken';
+
+  await queryable.query(
+    `UPDATE curriculum_unit
+        SET stage_id = $3, updated_at = now()
+      WHERE owner_id = $1 AND id = $2`,
+    [ownerId, unit.id, stageId],
+  );
+  return 'bound';
+}
+
 export interface ClaimedCurriculumBatchItem {
   record: CurriculumBatchItemRecord;
   request: Record<string, unknown>;

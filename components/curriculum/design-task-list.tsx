@@ -23,6 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { AlertTriangle, Loader2, Plus, RotateCcw, Sparkles } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 
@@ -97,6 +98,11 @@ const EMPTY_BRIEF: BriefForm = {
 
 export function DesignTaskList() {
   const router = useRouter();
+  // Set by the cockpit's 「新建目」 link: tasks created here join that series,
+  // and the list narrows to it. Absent, the page behaves as before — every
+  // task, new ones outside any series.
+  const searchParams = useSearchParams();
+  const seriesId = searchParams.get('seriesId')?.trim() || null;
   const [tasks, setTasks] = useState<CurriculumTaskRecord[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -110,7 +116,9 @@ export function DesignTaskList() {
     setError(null);
     try {
       const payload = await requestJson<{ tasks: CurriculumTaskRecord[] }>(
-        '/api/curriculum/design/tasks',
+        seriesId
+          ? `/api/curriculum/design/tasks?seriesId=${encodeURIComponent(seriesId)}`
+          : '/api/curriculum/design/tasks',
       );
       setTasks(payload.tasks);
     } catch (caught) {
@@ -118,7 +126,7 @@ export function DesignTaskList() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [seriesId]);
 
   useEffect(() => {
     void load();
@@ -144,6 +152,7 @@ export function DesignTaskList() {
             audience: brief.audience.trim(),
             problemStatement: brief.problemStatement.trim(),
             durationHours: Number(brief.durationHours),
+            ...(seriesId ? { seriesId } : {}),
           }),
         },
       );
@@ -171,6 +180,14 @@ export function DesignTaskList() {
           <p className="text-muted-foreground text-xs">
             逆向设计：先确定学习成果与评价证据，再反推知识技能、依赖关系和大纲
           </p>
+          {seriesId ? (
+            <p className="text-muted-foreground text-xs">
+              正在为课程序列新建目，新建的目会挂进这个序列。
+              <Link href="/curriculum/design" className="underline">
+                查看全部设计
+              </Link>
+            </p>
+          ) : null}
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" onClick={() => setAiOpen(true)}>
@@ -299,6 +316,7 @@ export function DesignTaskList() {
         open={aiOpen}
         onOpenChange={setAiOpen}
         taskId={null}
+        seriesId={seriesId}
         onTaskChange={() => void load()}
         onChanged={() => void load()}
         onOpenTask={(id) => router.push(`/curriculum/design/${id}`)}

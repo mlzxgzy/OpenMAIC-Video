@@ -161,7 +161,12 @@ export async function POST(req: NextRequest) {
         // the dialog shows the partial card and asks for it instead of creating
         // a course called "未命名".
         if (!patch.title) return null;
-        return createCurriculumTask(tx, ctx.ownerId, patch as CurriculumTaskInput);
+        // The series a new task joins comes from the request, not from the
+        // model: the cockpit's 「新建目」 link carries it, and the model has no
+        // way to know it. An existing task is never moved here — this route
+        // also revises tasks, and a revision must not relocate one.
+        const seed = parsed.value.seriesId ? { seriesId: parsed.value.seriesId } : {};
+        return createCurriculumTask(tx, ctx.ownerId, { ...seed, ...patch } as CurriculumTaskInput);
       }
       if (Object.keys(patch).length > 0) {
         await updateCurriculumTask(tx, ctx.ownerId, existing.id, patch);

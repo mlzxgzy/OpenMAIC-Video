@@ -76,11 +76,14 @@ export function sendDirectionTurn(input: {
   taskId: string | null;
   instruction: string;
   history: DirectionTurn[];
+  /** The series a newly created task joins; ignored once a task exists. */
+  seriesId?: string;
 }): Promise<DirectionTurnPayload> {
   return requestJson<DirectionTurnPayload>(`${BASE}/direction`, {
     method: 'POST',
     body: JSON.stringify({
       ...(input.taskId ? { taskId: input.taskId } : {}),
+      ...(input.seriesId ? { seriesId: input.seriesId } : {}),
       instruction: input.instruction,
       history: input.history,
     }),
