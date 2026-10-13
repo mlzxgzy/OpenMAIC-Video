@@ -1755,9 +1755,14 @@ describe('design routes (PGlite)', () => {
    * `curriculum_audit_finding`: that table is only synced when a review is
    * explicitly requested (`syncCurriculumAuditFindings`), so counting its rows
    * would make "我有 3 处阻塞" depend on when the user last pressed 审核 — a
-   * dependency the cockpit never states. The route derives instead, and the test
-   * asserts the derived count on a task that has *never* been reviewed, where the
-   * stored table is empty.
+   * dependency the cockpit never states. The route derives instead.
+   *
+   * `blockingCount` is therefore **not** `evaluation.blocking.length`: the
+   * derived audit reports "there are no items yet" and "there are no questions
+   * yet" — steps the design has not reached — so counting it raw would give a
+   * brand-new 目 "4 review problems are blocking the export". Only findings on
+   * layers this design has already reached are counted (`blocking-scope.ts`).
+   * The three cases below pin both sides of that boundary.
    */
   describe('design overview (cockpit aggregate)', () => {
     it('reports the aggregate for the owner and answers from a derived audit', async () => {
@@ -1781,11 +1786,47 @@ describe('design routes (PGlite)', () => {
       expect(row.taskId).toBe(task.id);
       expect(row.phase).toBe('graph');
       expect(row.objectiveCount).toBe(1);
-      // No review has ever been requested for this task, so the stored findings
-      // table is empty and any non-zero number here can only have come from the
-      // derived audit — which is the point of the route.
-      expect(row.blockingCount).toBeGreaterThan(0);
+      // 这一目的 1–4 步都走完了，层 `outcomes_verifiable` / `support_complete` /
+      // `dependency_valid` 已经到达，但**后面**的 `teach_covers` 一层还没走到。
+      // 所以派生审计报的"还没有条目"不该计入：`blockingCount` 是 0，而
+      // `exportable` 仍然是 false——两者问的是两个不同的问题（见下）。
+      expect(row.blockingCount).toBe(0);
       expect(row.exportable).toBe(false);
+    });
+
+    it('a gap the design has already reached counts as blocking', async () => {
+      // 同一个"从派生审核算"的性质，用一个**真的走到那一步**的缺陷来证明：
+      // `advanceTo` 造出来的目标带预期行为与最低标准，所以它是可验证的；这里
+      // 追加一个不可验证的目标，`outcomes_verifiable` 层立刻破，而这一目已经
+      // 走到了 `graph`。这才是"有阻塞"的含义——不是"还没做"，是"做了但做错"。
+      await advanceTo('graph');
+      await createCurriculumObjective(pool, OWNER, task.id, {
+        title: '了解 SQL 注入',
+        objectiveType: 'knowledge',
+      });
+
+      const response = await overview(fetch_('/api/curriculum/design/overview'));
+      const body = await read<{ rows: Array<{ blockingCount: number }> }>(response);
+      // 两条，不是一条：既不可验证（没写预期行为与最低标准），也没有证据（没人
+      // 说明它将被如何检验）。两条都在 `outcomes_verifiable` 层，而这一目已经
+      // 走到了 `graph`——所以这才是"卡住"，与上面那条的 0 构成对照。
+      expect(body.rows[0]!.blockingCount).toBe(2);
+    });
+
+    it('counts the export gate exactly once the design has walked every phase', async () => {
+      // 走完 `assessment` 之后所有层都到达，此时 `blockingCount` 必须与闸门
+      // 口径相等——这条不变式是驾驶舱不必另设一套口径的原因，也是
+      // `blocking-scope.test.ts` 里那张阶段→层表的用途。
+      await advanceTo('assessment');
+      const response = await overview(fetch_('/api/curriculum/design/overview'));
+      const body = await read<{ rows: Array<{ blockingCount: number }> }>(response);
+      const row = body.rows[0]!;
+      const review = await getReview(
+        fetch_(`/api/curriculum/design/tasks/${task.id}/review`),
+        taskParams(task.id),
+      );
+      const gate = await read<{ blocking: unknown[] }>(review);
+      expect(row.blockingCount).toBe(gate.blocking.length);
     });
 
     it('narrows to one series and never answers with another owner’s task', async () => {

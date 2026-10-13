@@ -10,39 +10,54 @@ export default defineConfig({
   workers: process.env.CI ? 2 : undefined,
   reporter: process.env.CI ? 'html' : 'list',
   use: {
-    baseURL: 'http://localhost:3002',
+    baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3002',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
   },
   projects: [
     {
       name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      use: {
+        ...devices['Desktop Chrome'],
+        // `E2E_CHANNEL=chrome` drives the system Chrome instead of Playwright's
+        // own download. Needed wherever the download cache is read-only: the
+        // pinned revision in `package.json` will not match, and the suite fails
+        // at `browserType.launch` with nothing testable. CI keeps the default.
+        ...(process.env.E2E_CHANNEL ? { channel: process.env.E2E_CHANNEL } : {}),
+      },
     },
   ],
-  webServer: {
-    // In CI the production build runs as a dedicated workflow step before
-    // Playwright, so this only boots the already-built server (`pnpm start`).
-    // The 120s budget covers startup, not the (much slower) build. Locally we
-    // run the dev server.
-    //
-    // The server refuses to start without DATABASE_URL (courses are stored in
-    // PostgreSQL). CI provides a Postgres service and sets it for the job;
-    // locally run `pnpm db:up` and set it in .env.local or the environment.
-    // Specs seed their courses through the app's persistence endpoint
-    // (e2e/fixtures/server-seed.ts), each under a fresh id.
-    command: process.env.CI ? 'pnpm start' : 'pnpm dev',
-    url: 'http://localhost:3002',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-    // Enable the MAIC Editor (Pro mode) so editor e2e can reach it. This is a
-    // build-time NEXT_PUBLIC_* flag: in CI it must be set on the dedicated
-    // `pnpm build` step; locally `pnpm dev` reads it here.
-    env: {
-      PORT: '3002',
-      NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true',
-      // Leave Pi chat unset so the browser suite exercises the shipped default.
-      NEXT_PUBLIC_COURSEWARE_REFERENCE_ENABLED: 'true',
-    },
-  },
+  // Only boot a server when the suite is responsible for one. Pointing
+  // `E2E_BASE_URL` at a dev server the developer already has running means
+  // this must be absent, otherwise Playwright waits on (and reports) a :3002
+  // that never appears while every spec silently targets the other origin.
+  ...(process.env.E2E_BASE_URL
+    ? {}
+    : {
+        webServer: {
+          // In CI the production build runs as a dedicated workflow step before
+          // Playwright, so this only boots the already-built server (`pnpm start`).
+          // The 120s budget covers startup, not the (much slower) build. Locally we
+          // run the dev server.
+          //
+          // The server refuses to start without DATABASE_URL (courses are stored
+          // in PostgreSQL). CI provides a Postgres service and sets it for the job;
+          // locally run `pnpm db:up` and set it in .env.local or the environment.
+          // Specs seed their courses through the app's persistence endpoint
+          // (e2e/fixtures/server-seed.ts), each under a fresh id.
+          command: process.env.CI ? 'pnpm start' : 'pnpm dev',
+          url: 'http://localhost:3002',
+          reuseExistingServer: !process.env.CI,
+          timeout: 120_000,
+          // Enable the MAIC Editor (Pro mode) so editor e2e can reach it. This is a
+          // build-time NEXT_PUBLIC_* flag: in CI it must be set on the dedicated
+          // `pnpm build` step; locally `pnpm dev` reads it here.
+          env: {
+            PORT: '3002',
+            NEXT_PUBLIC_MAIC_EDITOR_ENABLED: 'true',
+            // Leave Pi chat unset so the browser suite exercises the shipped default.
+            NEXT_PUBLIC_COURSEWARE_REFERENCE_ENABLED: 'true',
+          },
+        },
+      }),
 });

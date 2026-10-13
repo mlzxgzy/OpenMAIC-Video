@@ -102,16 +102,11 @@ export function ObjectiveMatrix({
     .flatMap((chapter) => chapter.units)
     .filter((unit) => unit.produced).length;
 
-  if (chapters.length === 0) {
-    return (
-      <div className="text-muted-foreground rounded-md border border-dashed px-4 py-8 text-center text-sm">
-        这个系列还没有目。左侧那条「还没开始设计」就是现在的下一步。
-      </div>
-    );
-  }
-
+  // 空状态留在 `<section>` **里面**，而不是提前 return 掉整个区块：0 目时这一栏
+  // 仍然是一个有名字的区域，测试与读屏都能定位到它，而"这一栏该有什么"在
+  // 0 目与 1 目下必须是同一个答案。
   return (
-    <section aria-label="目进度矩阵" className="flex flex-col gap-3">
+    <section aria-label="出片看板" className="flex flex-col gap-3">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 className="text-sm font-semibold">出片看板</h2>
         <span className="text-muted-foreground text-xs tabular-nums">
@@ -119,6 +114,34 @@ export function ObjectiveMatrix({
         </span>
       </header>
 
+      {chapters.length === 0 ? (
+        <div className="text-muted-foreground rounded-md border border-dashed px-4 py-8 text-center text-sm">
+          这个系列还没有目。上面的「新建目」就是现在的下一步。
+        </div>
+      ) : (
+        <>
+          {matrixBody(chapters, recommendedTaskId)}
+          {produced === totalItems ? (
+            <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+              <CheckCircle2 className="size-3.5 text-emerald-600" />
+              这个系列的目全部出了片。改哪一目，点上面的方块。
+            </p>
+          ) : null}
+        </>
+      )}
+    </section>
+  );
+}
+
+/**
+ * 图例 + 方块。
+ *
+ * 空状态下**不**渲染：四种颜色（已出片/有阻塞/进行中/没开始）没有对象可解释，
+ * 一排图例配一块空白只会让人以为看板坏了。
+ */
+function matrixBody(chapters: MatrixChapter[], recommendedTaskId: string | null) {
+  return (
+    <>
       <div className="flex flex-wrap gap-3 text-[11px] text-muted-foreground">
         {[
           { tone: 'done' as const, icon: Film, text: '已出片' },
@@ -154,13 +177,6 @@ export function ObjectiveMatrix({
           </div>
         ))}
       </div>
-
-      {produced === totalItems ? (
-        <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
-          <CheckCircle2 className="size-3.5 text-emerald-600" />
-          这个系列的目全部出了片。改哪一目，点上面的方块。
-        </p>
-      ) : null}
-    </section>
+    </>
   );
 }

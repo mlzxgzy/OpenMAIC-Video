@@ -190,7 +190,10 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
       ) : null}
 
       {decision ? (
-        <Card className="border-primary/30">
+        // `aria-label` 而不是包一层 heading：`CardTitle` 渲染成 div，而这一块的
+        // 身份（"页面上唯一的主角"）是页面结构的事实，不是文案的事实。用文案当
+        // locator 就等于把测试焊死在措辞上，改一次"现在做这一目"要连带改测试。
+        <Card className="border-primary/30" aria-label="现在做这一目">
           <CardHeader>
             <CardTitle className="text-muted-foreground text-xs font-normal">
               现在做这一目
@@ -198,14 +201,16 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-wrap items-baseline gap-2">
-              <h2 className="text-xl font-semibold">
+              <h2 className="text-xl font-semibold" data-testid="decision-title">
                 {decision.code ? (
                   <span className="text-muted-foreground mr-2 tabular-nums">{decision.code}</span>
                 ) : null}
                 {decision.title}
               </h2>
             </div>
-            <p className="text-sm">{decision.reason}</p>
+            <p className="text-sm" data-testid="decision-reason">
+              {decision.reason}
+            </p>
             {decision.blockers.length > 0 ? (
               <ul className="text-destructive flex flex-col gap-1 text-sm">
                 {decision.blockers.map((blocker) => (
@@ -247,7 +252,7 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
       )}
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
-        <Card className="h-fit">
+        <Card className="h-fit" aria-label="待办">
           <CardHeader>
             <CardTitle className="text-sm">待办</CardTitle>
           </CardHeader>

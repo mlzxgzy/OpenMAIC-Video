@@ -19,6 +19,7 @@
 import type { NextRequest } from 'next/server';
 
 import { ownerJson } from '@/lib/server/agent-runtime/route-response';
+import { countBlockingFindings } from '@/lib/curriculum/blocking-scope';
 import { runDesignRoute } from '@/lib/server/curriculum/design-http';
 import {
   evaluateCurriculumDesign,
@@ -40,6 +41,10 @@ export async function GET(req: NextRequest) {
         // shows is the count that would actually refuse the export. Reading the
         // stored findings here instead would let the two disagree silently.
         const evaluation = evaluateCurriculumDesign(snapshot);
+        // 只数**已经走到的那几层**上的 error：`evaluation.blocking` 包含
+        // "还没有任何条目""还没有题目"这类"后面某一步还没做"的报告，直接计数
+        // 会让刚建的一目显示"4 处审核问题挡住了导出"。见 `blocking-scope.ts`。
+        const blockingCount = countBlockingFindings(evaluation.blocking, task.designPhase);
         // The code is the 目's own (`2-1-2`), not the task's title: the matrix
         // groups by chapter and labels by code, and a "code" that is a sentence
         // makes both unreadable. Falls back to empty so the UI can hide it
@@ -55,8 +60,11 @@ export async function GET(req: NextRequest) {
           itemCount: snapshot.units.filter((unit) => unit.unitType === 'item').length,
           producedCount: snapshot.units.filter((unit) => unit.stageId !== null).length,
           objectiveCount: snapshot.objectives.length,
-          blockingCount: evaluation.blocking.length,
+          blockingCount,
           acceptedCount: evaluation.accepted.length,
+          // 出片与否仍以闸门口径为准（`preconditions` + 全部 `blocking`），
+          // 不跟着 `blockingCount` 一起收窄：那一位要回答的是"点生成会不会
+          // 被拒绝"，而收缩后的计数会让早期阶段显示"能出片"。
           exportable: evaluation.exportable,
           updatedAt: task.updatedAt,
         };
