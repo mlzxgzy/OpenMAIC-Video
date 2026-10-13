@@ -68,6 +68,8 @@ import {
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
+import { KnowledgeCopilot } from '@/components/curriculum/knowledge-copilot';
+import { adoptKnowledgeDraftLine } from '@/lib/curriculum/knowledge-adopt';
 import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-signoff';
 import { DesignTeachingSignOff } from '@/components/curriculum/design-teaching-signoff';
 import { DesignAssessmentSignOff } from '@/components/curriculum/design-assessment-signoff';
@@ -699,44 +701,74 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             }}
           />
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {nodes.length === 0 ? (
-            <EmptySection phase={phase} kind="nodes">
-              还没有知识点。它们由学习目标反推，不是由章节标题得到。
-            </EmptySection>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {nodes.map((node) => (
-                <NodeBlock
-                  key={node.id}
-                  node={node}
-                  objectiveOptions={objectiveOptions}
-                  supportedObjectiveIds={
-                    new Set(
-                      (snapshot.nodeObjectives ?? [])
-                        .filter((link) => link.nodeId === node.id)
-                        .map((link) => link.objectiveId),
-                    )
-                  }
-                  base={base}
-                  busy={busy}
-                  run={run}
-                />
-              ))}
-            </ul>
-          )}
+        {/* 两栏：左边是**作者要决定的事**（手工新建、勾支撑、加先后关系），右边是 AI
+            的草稿。这不是排版偏好——右栏的每一行都要人在左边再点一次"采纳"才写库，
+            所以它必须是**看得见的另一栏**而不是一个弹窗后面的一条对话。见 B2 设计稿 §5.2。 */}
+        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex flex-col gap-3">
+            {nodes.length === 0 ? (
+              <EmptySection phase={phase} kind="nodes">
+                还没有知识点。它们由学习目标反推，不是由章节标题得到。
+              </EmptySection>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {nodes.map((node) => (
+                  <NodeBlock
+                    key={node.id}
+                    node={node}
+                    objectiveOptions={objectiveOptions}
+                    supportedObjectiveIds={
+                      new Set(
+                        (snapshot.nodeObjectives ?? [])
+                          .filter((link) => link.nodeId === node.id)
+                          .map((link) => link.objectiveId),
+                      )
+                    }
+                    base={base}
+                    busy={busy}
+                    run={run}
+                  />
+                ))}
+              </ul>
+            )}
 
-          <DependencyBlock
-            dependencies={snapshot.dependencies ?? []}
-            objectiveById={objectiveById}
-            nodeById={nodeById}
-            base={base}
-            phase={phase}
-            objectiveOptions={objectiveOptions}
-            nodeOptions={nodes.map((node) => ({ value: node.id, label: node.name }))}
-            busy={busy}
-            run={run}
-          />
+            <DependencyBlock
+              dependencies={snapshot.dependencies ?? []}
+              objectiveById={objectiveById}
+              nodeById={nodeById}
+              base={base}
+              phase={phase}
+              objectiveOptions={objectiveOptions}
+              nodeOptions={nodes.map((node) => ({ value: node.id, label: node.name }))}
+              busy={busy}
+              run={run}
+            />
+          </div>
+
+          <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+            <h3 className="text-sm font-medium">让 AI 帮你起草</h3>
+            <KnowledgeCopilot
+              taskId={snapshot.task.id}
+              nodes={nodes}
+              objectives={objectives}
+              onDraftTouched={() =>
+                setNotice('AI 给了一份草稿，左边一行都没变——你采纳哪一行，它才改哪一行。')
+              }
+              onAdopt={(line, edit, adoptedNodeIds) =>
+                adoptKnowledgeDraftLine({
+                  line,
+                  edit,
+                  base,
+                  snapshot,
+                  adoptedNodeIds,
+                  refresh: async () => {
+                    await load();
+                    await onChanged();
+                  },
+                })
+              }
+            />
+          </aside>
         </CardContent>
       </Card>
 

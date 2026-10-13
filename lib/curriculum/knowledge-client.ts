@@ -21,8 +21,10 @@ import type {
   CurriculumLearningNodeRecord,
   CurriculumNodeObjectiveRecord,
   CurriculumObjectiveRecord,
+  CurriculumSupportLevel,
 } from '@/lib/curriculum/design-types';
-import type { KnowledgeGap } from '@/lib/curriculum/design-knowledge';
+import type { KnowledgeGap, KnowledgeNodePatch } from '@/lib/curriculum/design-knowledge';
+import type { KnowledgeTurnLike } from '@/lib/curriculum/knowledge-draft';
 
 export interface KnowledgeTurn {
   role: 'user' | 'assistant';
@@ -56,6 +58,15 @@ export interface KnowledgeTurnPayload extends KnowledgeStatePayload {
 
 const BASE = '/api/curriculum/design';
 
+/** 起草路由的回包。`patches` 是数组而不是 Map——Map 序列化出来是 `{}`。 */
+export interface KnowledgeDraftPayload extends Omit<KnowledgeTurnLike, 'patches'> {
+  patches: { nodeId: string; patch: Omit<KnowledgeNodePatch, 'ref'> }[];
+  instruction: string;
+  currentLinks: { nodeId: string; objectiveId: string; supportLevel: CurriculumSupportLevel }[];
+  nodeNameById: Record<string, string>;
+  objectiveTitleById: Record<string, string>;
+}
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
     credentials: 'same-origin',
@@ -87,6 +98,24 @@ export function sendKnowledgeTurn(input: {
 /** The graph's sign-off state, for a dialog opening on an existing task. */
 export function readKnowledgeState(taskId: string): Promise<KnowledgeStatePayload> {
   return requestJson<KnowledgeStatePayload>(`${BASE}/tasks/${taskId}/knowledge`);
+}
+
+/**
+ * 起草，**不写库**。
+ *
+ * 与 {@link sendKnowledgeTurn} 的区别不是参数，是承诺：那个路由回答之前已经把这一轮
+ * 写进表了，这个路由的 handler 里没有任何写调用。它回包里带的是 `KnowledgeTurnLike`
+ * 的全部字段加一份"动手前的图"，正好是 {@link knowledgeDraftOf} 需要的输入。
+ */
+export function draftKnowledge(input: {
+  taskId: string;
+  instruction: string;
+  history?: KnowledgeTurn[];
+}): Promise<KnowledgeDraftPayload> {
+  return requestJson<KnowledgeDraftPayload>(`${BASE}/tasks/${input.taskId}/knowledge/draft`, {
+    method: 'POST',
+    body: JSON.stringify({ instruction: input.instruction, history: input.history ?? [] }),
+  });
 }
 
 export function confirmKnowledge(taskId: string, note?: string): Promise<KnowledgeStatePayload> {

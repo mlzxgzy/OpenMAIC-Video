@@ -51,6 +51,9 @@ vi.mock('@/lib/server/model-config/runtime', async (importOriginal) => {
 });
 
 import { POST as knowledgeTurn } from '@/app/api/curriculum/design/tasks/[id]/knowledge/turn/route';
+import { POST as knowledgeDraft } from '@/app/api/curriculum/design/tasks/[id]/knowledge/draft/route';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import {
   DELETE as knowledgeDelete,
   GET as knowledgeGet,
@@ -88,6 +91,17 @@ class PGlitePool {
 }
 
 const answer = (body: Record<string, unknown>) => ({ text: JSON.stringify(body) });
+
+function draftRequest(taskId: string, body: unknown, headers: Record<string, string> = {}) {
+  return knowledgeDraft(
+    new NextRequest(`http://localhost/api/curriculum/design/tasks/${taskId}/knowledge/draft`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...headers },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: taskId }) },
+  );
+}
 
 function turnRequest(taskId: string, body: unknown, headers: Record<string, string> = {}) {
   return knowledgeTurn(
@@ -334,6 +348,147 @@ describe('the step-3 knowledge routes', () => {
       expect(snapshot.task.designPhase).toBe('graph');
     });
   });
+  describe('drafting (writes nothing)', () => {
+    it('走完一整轮之后库里的节点、连线、依赖、签收一个都没变', async () => {
+      const { first } = await seedNodes();
+      const before = await getCurriculumDesignSnapshot(pool, OWNER, taskId);
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '补一个文件头，并把它排在参数化之后。',
+          added: [
+            {
+              name: '文件头结构',
+              nodeType: 'knowledge',
+              objectiveRefs: [{ objectiveRef: objWriteup, supportLevel: 'secondary' }],
+            },
+          ],
+          updated: [{ ref: first.id, summary: '参数化查询与占位符' }],
+          links: [],
+          dependencies: [
+            { sourceRef: first.id, targetRef: '文件头结构', edgeType: 'prerequisite' },
+          ],
+          confirm: true,
+        }),
+      );
+      const response = await draftRequest(taskId, {
+        instruction: '补一个文件头',
+        history: [],
+      });
+      expect(response.status).toBe(200);
+
+      const after = await getCurriculumDesignSnapshot(pool, OWNER, taskId);
+      // 这就是本文件对起草路由的全部承诺：一个节点都不建，一条连线都不改，
+      // 一条依赖都不加，作者还什么都没按。
+      expect(after.nodes.map((row) => row.name).sort()).toEqual(
+        before.nodes.map((row) => row.name).sort(),
+      );
+      expect(await storedPairs()).toEqual(
+        before.nodeObjectives.map((link) => `${link.nodeId}→${link.objectiveId}`).sort(),
+      );
+      expect(after.dependencies).toHaveLength(before.dependencies.length);
+      // `confirm: true` 在这里是**故意不落**的：签收是作者的动作，AI 说"可以签了"不算。
+      expect(after.confirmations).toHaveLength(before.confirmations.length);
+    });
+
+    it('回包带着草稿本身与动手前的图，作者能对上"现在是什么样"', async () => {
+      const { first } = await seedNodes();
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '补一个文件头。',
+          added: [
+            {
+              name: '文件头结构',
+              nodeType: 'knowledge',
+              objectiveRefs: [{ objectiveRef: objWriteup, supportLevel: 'secondary' }],
+            },
+          ],
+          updated: [{ ref: first.id, summary: '参数化查询与占位符' }],
+          confirm: false,
+        }),
+      );
+      const payload = (await (
+        await draftRequest(taskId, { instruction: '补一个文件头', history: [] })
+      ).json()) as {
+        added: { name: string }[];
+        patches: { nodeId: string; patch: Record<string, unknown> }[];
+        currentLinks: { nodeId: string; objectiveId: string }[];
+        nodeNameById: Record<string, string>;
+        objectiveTitleById: Record<string, string>;
+        instruction: string;
+      };
+      expect(payload.added[0]).toMatchObject({ name: '文件头结构' });
+      // patches 必须是数组：Map 序列化出来是 `{}`，界面会看到"有改动"却不知道改了什么。
+      expect(payload.patches).toEqual([
+        { nodeId: first.id, patch: { ref: first.id, summary: '参数化查询与占位符' } },
+      ]);
+      expect(payload.currentLinks).toHaveLength(2);
+      expect(payload.nodeNameById[first.id]).toBe('SQL 查询与参数化');
+      expect(payload.objectiveTitleById[objWriteup]).toBe('完整写出 Writeup');
+      expect(payload.instruction).toBe('补一个文件头');
+    });
+
+    it('一个闭环的边在草稿里被拒，并作为警告回到作者眼前', async () => {
+      const { first, second } = await seedNodes();
+      await createCurriculumDependency(pool, OWNER, taskId, {
+        sourceId: second.id,
+        targetId: first.id,
+        sourceKind: 'node',
+        targetKind: 'node',
+        edgeType: 'prerequisite',
+      });
+      mocks.callLLM.mockResolvedValue(
+        answer({
+          message: '把它反过来。',
+          dependencies: [{ sourceRef: first.id, targetRef: second.id, edgeType: 'prerequisite' }],
+        }),
+      );
+      const payload = (await (
+        await draftRequest(taskId, { instruction: '反过来', history: [] })
+      ).json()) as { dependencies: unknown[]; warnings: string[] };
+      // 会闭环的边必须在写库之前被拒——store 的检查会让整个事务回滚，把这一轮的其他
+      // 改动一起带走，而被拒的边不会留下任何可见痕迹。
+      expect(payload.dependencies).toHaveLength(0);
+      expect(payload.warnings.join('\n')).not.toBe('');
+    });
+
+    it('回答 400 而不是 500：没有配置模型是作者能照着做的事', async () => {
+      mocks.resolveModel.mockRejectedValue(new SlotUnassignedError('course.outline'));
+      const response = await draftRequest(taskId, { instruction: '拆几个' });
+      expect(response.status).toBe(400);
+      expect(mocks.callLLM).not.toHaveBeenCalled();
+    });
+
+    it('跨站请求在花掉模型预算之前就被拒', async () => {
+      const response = await draftRequest(
+        taskId,
+        { instruction: '拆几个' },
+        {
+          'Sec-Fetch-Site': 'cross-site',
+        },
+      );
+      expect(response.status).toBe(403);
+      expect(mocks.callLLM).not.toHaveBeenCalled();
+    });
+
+    it('源码里根本没有写库调用——"不落库"不是靠 onClick 的顺序维持的', () => {
+      // 这是上面那些断言的**前提**。给路由加一个 `dryRun` 标志也能让它们全绿，但漏看
+      // 一个写点就是一次看不见的改动；读源码让"没有写"本身成为被测试的事实。
+      const source = readFileSync(
+        fileURLToPath(
+          new URL(
+            '../../app/api/curriculum/design/tasks/[id]/knowledge/draft/route.ts',
+            import.meta.url,
+          ),
+        ),
+        'utf8',
+      );
+      expect(source).not.toMatch(/ctx\.write\s*\(/);
+      expect(source).not.toMatch(
+        /createCurriculum|updateCurriculum|deleteCurriculum|setCurriculum|confirmCurriculum|advanceCurriculum/,
+      );
+    });
+  });
+
   describe('the sign-off', () => {
     it('refuses to confirm a graph that is connected at only one end', async () => {
       // seedNodes links both nodes to the SQL goal only, so the Writeup goal has
