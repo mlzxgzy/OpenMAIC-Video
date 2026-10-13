@@ -1,4 +1,4 @@
-import { CurriculumWorkspace } from '@/components/curriculum/curriculum-workspace';
+import { SeriesCockpit } from '@/components/curriculum/series-cockpit';
 
 export const dynamic = 'force-dynamic';
 
@@ -8,5 +8,5 @@ export default async function CurriculumSeriesDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <CurriculumWorkspace seriesId={id} />;
+  return <SeriesCockpit seriesId={id} />;
 }

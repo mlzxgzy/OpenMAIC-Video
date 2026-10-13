@@ -1,6 +1,9 @@
 # 课程生产台 UI 大修方案
 
-> 状态：**待审设计稿**，未动一行前端代码。
+> 状态：**B1（系列驾驶舱）已落地**，B2～B4 未动。已确认的四项：① `/curriculum`
+> 降级为 `/legacy` 存档页；② 旧台账**只迁「生成与导出」**，其余归档；③ B2 先只改
+> 「知识技能图」一步做试点再铺开；④ 首页「继续上次」取**最近更新的未出片目**。
+>
 > 依据：`components/curriculum/` 实读（30 个组件、约 14.8k 行）、`lib/curriculum/design-types.ts`
 > 的 7 阶段定义、`app/api/curriculum/design/` 的 25 个路由、`lib/server/agent-runtime/design-tools.ts`
 > 的 28 个阶段化工具。
@@ -260,45 +263,61 @@ phase = review                           → 折叠，且**有未处理 finding 
 
 原则：**能不新增就不新增，必须新增的都写成纯函数并配测试。**
 
+### 7.0 B1 实读后的三处修正（原设计稿写错了）
+
+| 原稿 | 实读结论 |
+|---|---|
+| `chooseNextItem` 的作用对象是 `CurriculumUnitRecord` | **是 `CurriculumTaskRecord`**。库里 `curriculum_task` 才有 `designPhase`；`curriculum_unit` 是 task 下的章/目条目，一目一门课对应一个 task |
+| 54 目矩阵"现有 `GET /api/curriculum` 够用，不用新接口" | **不够**。`CurriculumSnapshot` 是课程产品层，完全不含 design 域；驾驶舱要的是 `objectiveCount` / `blockingCount` / `producedCount`，快照里一个都没有 → 新增 `GET /api/curriculum/design/overview` |
+| `FINDING_STATUS_LABEL` 含 `accepted` | 字面量是 `open / resolved / waived`，**`waived` 才是"已接受"**（`resolved` 会被拒收，因为审核是推导出来的）。翻译表按此修正 |
+
+阻塞数在**派生层**算而不是数 `curriculum_audit_finding` 的行：那张表只在显式审核时同步，
+一份改过但没点过审核的设计，表里是旧的。直接数行会让"有 3 处阻塞"取决于用户上次什么时候
+点了审核，而界面不会说这件事。`overview` 改为读快照重新派生，代价是每目一次审计，
+换来这个数字与导出闸门口径一致（路由测试第 1 条钉住）。
+
 ### 7.1 54 目矩阵的取数
 
-现有 `GET /api/curriculum` 返回全量快照，够用。**不需要新接口**，前端用 `useMemo` 聚合。
+见 §7.0：`GET /api/curriculum/design/overview?seriesId=...`，逐字返回聚合行，
+**不做推荐**。推荐是纯函数的事，混进服务端就会让"继续上次"和驾驶舱各算一遍。
 
 ### 7.2 新增纯函数 `chooseNextItem()`
 
-放在 `lib/curriculum/production-path.ts`（已有同类先例：`chooseProductionPath`）。
+放在 `lib/curriculum/next-item.ts`（已有同类先例：`chooseProductionPath`）。
 
 ```ts
-export interface NextItemDecision {
-  unitId: string;
-  unitCode: string;
-  unitTitle: string;
-  unitRole: CurriculumUnitRole;
+export interface NextItemRow {
+  taskId: string;
+  code: string | null;
+  title: string;
   phase: CurriculumDesignPhase;
-  /** 一句话说明为什么是它，用户语言。 */
-  reason: string;
-  /** 阻塞时的具体缺口，例如"3 条审核未处理"。 */
-  blockers: string[];
-  /** 下一步动作的中文动词短语，例如"定它的学习目标"。 */
-  actionLabel: string;
+  unitCount: number;      // 章 + 目，用来判断这还是不是一副骨架
+  producedCount: number;  // stageId 非空的目数，> 0 即已出片
+  objectiveCount: number; // 为 0 表示第 2 步还什么都没定
+  blockingCount: number;  // 未被接受的 error 级发现数
+  updatedAt: string;
 }
 
-export function chooseNextItem(input: {
-  seriesId: string;
-  units: readonly CurriculumUnitRecord[];
-  tasks: readonly CurriculumTaskRecord[];
-  findings: readonly { taskId: string; severity: string; status: string }[];
-}): NextItemDecision | null;
+export function pendingItems(rows: readonly NextItemRow[]): NextItemRow[];
+export function chooseNextItem(rows: readonly NextItemRow[]): NextItemDecision | null;
 ```
 
-排序规则（**必须显式写死并配测试**，否则"现在做这一目"会随机跳）：
+排序规则（已写死并配 10 条测试）：
 
 ```text
-1. 有 open 的 severity=error finding 的目最优先（阻塞出片，必须先解）
-2. 其次：designPhase 靠前（阶段机自己知道下一个阶段）
-3. 再次：unassigned 的目按 orderIndex 升序（从第一章第一节第一目开始）
-4. 已出片（stageId 存在）的目永不入选
+1. 有 open error finding 的目最优先（阻塞出片，必须先解）
+2. 其次：正在设计的目（阶段≠task 或已有目标/条目），按 updatedAt 降序 —— 这就是"继续上次"
+3. 再次：还没开始的目，按 updatedAt 升序（最早建的先做）
+4. 已出片（producedCount > 0）的目永不入选
 ```
+
+**`pendingItems` 与 `chooseNextItem` 共用一个比较函数**，因为驾驶舱同时显示"推荐一
+目"（大卡片）和"一列待办"（左栏），各自写排序就会得到两个不同的第一条，而用户
+无从判断哪个是系统的想法。这是最容易在重构中被"顺手统一"掉的一处，测试里有一条
+断言二者的第一条恒等。
+
+理由用**三种措辞**（阻塞 / 进行中 / 未开始），因为它们要求用户做的事根本不同：
+修东西、接着干、开个头。混成"继续完成 2-1-2"就是"看一眼没有想法"的成因。
 
 ### 7.3 命名映射表（前端常量）
 
@@ -355,18 +374,21 @@ export const OLD_PANEL_LABEL = {
 
 大修成功的判据不是"好看"，而是这四条能自动测：
 
-| # | 判据 | 怎么测 |
-|---|---|---|
-| 1 | 驾驶舱只有一个主 CTA | DOM 断言：主按钮数量 == 1 |
-| 2 | 每种目状态都有中文名和原因 | `chooseNextItem` 单测覆盖全部 6 个 phase × 4 个阻塞情形 |
-| 3 | 无任何禁用按钮缺理由 | 组件级断言：所有 `disabled` 按钮旁有 `title` 或说明文本 |
-| 4 | AI 草稿不落库 | 集成测试：调用起草后，库内行数不变；采纳后 +1 |
+| # | 判据 | 怎么测 | 状态 |
+|---|---|---|---|
+| 1 | 驾驶舱只有一个主 CTA | DOM 断言：主按钮数量 == 1 | 待（B2 试点时补组件测试） |
+| 2 | 每种目状态都有中文名和原因 | `chooseNextItem` 单测覆盖 6 个 phase × 4 个阻塞情形 | ✅ 10 条测试 |
+| 3 | 无任何禁用按钮缺理由 | 组件级断言：所有 `disabled` 按钮旁有 `title` 或说明文本 | 待 |
+| 4 | AI 草稿不落库 | 集成测试：调用起草后，库内行数不变；采纳后 +1 | 待（B2） |
+| 5 | 大卡片与待办第一条恒等 | `pendingItems`/`chooseNextItem` 同源排序 | ✅ |
+| 6 | 阻塞数与导出口径一致 | 路由测试：未审核过的设计仍报非零 `blockingCount` | ✅ |
 
 ---
 
-## 十、需要你拍板的四件事
+## 十、已拍板的四件事
 
-1. **`/curriculum`（全部课程总览）留还是删？** 我倾向留但降级为 `/legacy`，主路径不出现。
-2. **旧台账里 6 个 Tab 的内容要不要迁移进新目工作台？** 我倾向**只迁"生成与导出"**，其余全部归档——因为它们的语义（一门课 = 一堆知识点）已经不匹配"一目一课"。
-3. **B2 的两栏改造要一次做完还是先做大纲步试点？** 我倾向**先只改"知识技能图"这一步**给你验收，满意再铺开五步。
-4. **首页「继续上次」的"上次"如何确定？** 取"最近 updated 的未出片目"，还是让用户手动置顶一个"当前在做的目"？
+1. **`/curriculum`（全部课程总览）留还是删？** → **降级为 `/legacy` 存档**，主路径不出现（B3）。
+2. **旧台账 6 个 Tab 的内容要不要迁移？** → **只迁「生成与导出」**，其余归档（§8.1 "只迁生成与导出"）。
+3. **B2 两栏改造一次做完还是先试点？** → **先只改「知识技能图」这一步**（第 3 步）验收，满意再铺开五步。
+4. **首页「继续上次」的"上次"怎么定？** → **最近更新的未出片目**，由 `pendingItems` 给出，
+   复用同一排序，首页不另立一套。

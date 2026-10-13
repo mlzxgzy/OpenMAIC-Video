@@ -61,6 +61,8 @@ vi.mock('@/lib/server/generation/run/start', async (importOriginal) => {
   return { ...actual, startGenerationRun: mocks.startGenerationRun };
 });
 
+import { GET as overview } from '@/app/api/curriculum/design/overview/route';
+import { createCurriculumSeries } from '@/lib/server/curriculum/store';
 import { GET as listTasks, POST as createTask } from '@/app/api/curriculum/design/tasks/route';
 import {
   DELETE as deleteTask,
@@ -1740,6 +1742,85 @@ describe('design routes (PGlite)', () => {
       expect(response.status).toBe(400);
       const body = await read<{ error: { code: string } }>(response);
       expect(body.error.code).toBe('INVALID_REQUEST');
+    });
+  });
+
+  /**
+   * The cockpit aggregate.
+   *
+   * Two things are under test and both are invisible without them. The owner
+   * fence first: this route reads *every* task of an owner and derives an audit
+   * for each, so a missing fence leaks another owner's whole design rather than
+   * merely miscounting. Second, and the reason the route does not read
+   * `curriculum_audit_finding`: that table is only synced when a review is
+   * explicitly requested (`syncCurriculumAuditFindings`), so counting its rows
+   * would make "我有 3 处阻塞" depend on when the user last pressed 审核 — a
+   * dependency the cockpit never states. The route derives instead, and the test
+   * asserts the derived count on a task that has *never* been reviewed, where the
+   * stored table is empty.
+   */
+  describe('design overview (cockpit aggregate)', () => {
+    it('reports the aggregate for the owner and answers from a derived audit', async () => {
+      await advanceTo('graph');
+
+      const response = await overview(fetch_('/api/curriculum/design/overview'));
+      expect(response.status).toBe(200);
+      const body = await read<{
+        rows: Array<{
+          taskId: string;
+          phase: string;
+          unitCount: number;
+          objectiveCount: number;
+          blockingCount: number;
+          exportable: boolean;
+        }>;
+      }>(response);
+
+      expect(body.rows).toHaveLength(1);
+      const row = body.rows[0]!;
+      expect(row.taskId).toBe(task.id);
+      expect(row.phase).toBe('graph');
+      expect(row.objectiveCount).toBe(1);
+      // No review has ever been requested for this task, so the stored findings
+      // table is empty and any non-zero number here can only have come from the
+      // derived audit — which is the point of the route.
+      expect(row.blockingCount).toBeGreaterThan(0);
+      expect(row.exportable).toBe(false);
+    });
+
+    it('narrows to one series and never answers with another owner’s task', async () => {
+      const series = await createCurriculumSeries(pool, OWNER, {
+        name: '另一个系列',
+      });
+      const other = await createCurriculumTask(pool, OWNER, {
+        title: '另一个系列里的目',
+        audience: 'x',
+        problemStatement: 'y',
+        durationHours: 1,
+        seriesId: series.id,
+      });
+
+      // Two tasks for OWNER: the fixture's unassigned one and this series-scoped
+      // one. Narrowing must drop the first and keep the second.
+      const scoped = await overview(
+        fetch_(`/api/curriculum/design/overview?seriesId=${encodeURIComponent(series.id)}`),
+      );
+      const scopedBody = await read<{ rows: Array<{ taskId: string }> }>(scoped);
+      expect(scopedBody.rows.map((row) => row.taskId)).toEqual([other.id]);
+
+      mocks.resolveOwnerId.mockReturnValue(OTHER);
+      const mine = await overview(fetch_('/api/curriculum/design/overview'));
+      const body = await read<{ rows: Array<{ taskId: string }> }>(mine);
+      // Both tasks belong to OWNER; as OTHER the caller sees none of them.
+      expect(body.rows).toEqual([]);
+    });
+
+    it('returns an empty list rather than 404 for an owner with no tasks', async () => {
+      mocks.resolveOwnerId.mockReturnValue('owner:design-routes-empty');
+      const response = await overview(fetch_('/api/curriculum/design/overview'));
+      expect(response.status).toBe(200);
+      const body = await read<{ rows: unknown[] }>(response);
+      expect(body.rows).toEqual([]);
     });
   });
 });
