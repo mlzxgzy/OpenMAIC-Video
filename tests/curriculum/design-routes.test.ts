@@ -107,6 +107,8 @@ import {
 import { GET as getExportGate } from '@/app/api/curriculum/design/tasks/[id]/export-gate/route';
 import { GET as getTrace } from '@/app/api/curriculum/design/tasks/[id]/trace/route';
 
+import { assessmentDraftOf } from '@/lib/curriculum/assessment-draft';
+import { assessmentBoardOf } from '@/lib/curriculum/design-assessment';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
   advanceCurriculumTaskPhase,
@@ -1280,6 +1282,84 @@ describe('design routes (PGlite)', () => {
       const body = await read<{ question: { answer: string[]; distractors: unknown[] } }>(good);
       expect(body.question.answer).toEqual(['A']);
       expect(body.question.distractors).toHaveLength(1);
+    });
+
+    it('草稿里"模型没标 Bloom 层级"的题也能落库', async () => {
+      // 这一条测的是**两条写入路径的宽容度不同**：`assessment/turn` 路由直接调 store，
+      // 而草稿的每一行都要过 HTTP 的 `parseQuestionInput`。`QuestionWrite.bloomLevel` 在
+      // 模型没标 Bloom 层级时就是 `null`（`draft.bloomLevel ?? null`），而 `oneOf` 读见
+      // 显式 `null` 报的是"取值非法"——所以**草稿的 body 里不能带这个键**，否则每一道没标
+      // Bloom 层级的题采纳时都会收到一句与建议无关的报错。
+      await advanceTo('assessment');
+      const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+      const unitId = snapshot.units[0]!.id;
+      const objectiveId = snapshot.objectives[0]!.id;
+
+      const question = {
+        unitId,
+        objectiveId,
+        evidenceId: null,
+        questionType: 'single' as const,
+        stem: 'SQL 注入的成因是什么？',
+        options: [
+          { key: 'A', text: '用户输入未作为数据与语句分离' },
+          { key: 'B', text: '网络延迟过高' },
+        ],
+        answer: ['A'],
+        explanation: null,
+        distractors: [],
+        difficulty: 'basic' as const,
+        // 模型没写 Bloom 层级——多数情况如此。
+        bloomLevel: null,
+        score: 1,
+        sortOrder: 1,
+      };
+      const draft = assessmentDraftOf({
+        turn: {
+          message: '出了一道题。',
+          writes: {
+            createQuestions: [question],
+            updateQuestions: [],
+            createLabTasks: [],
+            updateLabTasks: [],
+            removeQuestionIds: [],
+            removeLabTaskIds: [],
+            rejectedRefs: [],
+            advisories: [],
+            changed: true,
+          },
+          modelRequestedConfirm: false,
+          confirmRequested: false,
+          gaps: [],
+          changedAnything: true,
+          userTurns: 1,
+          artifactCount: 1,
+        },
+        board: assessmentBoardOf(snapshot),
+        taskId: task.id,
+        instruction: '出题',
+      });
+      const body = draft.lines.find((row) => row.create !== undefined)!.create!.body;
+      expect(body).not.toHaveProperty('bloomLevel');
+
+      // 对照：**带** `null` 的那一份正是这条测试要挡住的写法。
+      const withNull = await createQuestion(
+        post(`/api/curriculum/design/tasks/${task.id}/questions`, {
+          ...body,
+          bloomLevel: null,
+        }),
+        taskParams(task.id),
+      );
+      expect(withNull.status).toBe(400);
+
+      const saved = await createQuestion(
+        post(`/api/curriculum/design/tasks/${task.id}/questions`, body),
+        taskParams(task.id),
+      );
+      expect(saved.status, await saved.clone().text()).toBe(201);
+      expect(
+        (await read<{ question: { stem: string; bloomLevel: string | null } }>(saved)).question,
+      ).toMatchObject({ stem: question.stem, bloomLevel: null });
     });
 
     it('validates a finding status instead of reaching a CHECK constraint', async () => {

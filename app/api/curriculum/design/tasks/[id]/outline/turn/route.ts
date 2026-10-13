@@ -63,10 +63,9 @@ import {
   draftCourseOutline,
   draftCoverageOf,
   formatDirectionLine,
-  outlineBoardOf,
   type CourseOutlineTurn,
 } from '@/lib/server/curriculum/outline-step';
-import { teachingOrder } from '@/lib/curriculum/design-knowledge';
+import { outlineBoardFromSnapshot } from '@/lib/server/curriculum/outline-board';
 import {
   outlineAuditFindings,
   outlineGapsOfSnapshot,
@@ -134,28 +133,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     if ('response' in model) return model.response;
 
     const before = await getCurriculumDesignSnapshot(ctx.queryable, ctx.ownerId, task.id);
-    const board = outlineBoardOf({
-      units: before.units.map((unit) => ({
-        id: unit.id,
-        title: unit.title,
-        unitType: unit.unitType,
-        unitRole: unit.unitRole,
-        parentId: unit.parentId,
-        orderIndex: unit.orderIndex,
-        hours: unit.hours,
-      })),
-      coverage: before.unitCoverage,
-      objectives: before.objectives
-        .filter((row) => row.status !== 'archived')
-        .map((row) => ({ id: row.id, title: row.title })),
-      nodes: before.nodes.map((node) => ({
-        id: node.id,
-        name: node.name,
-        nodeType: node.nodeType,
-      })),
-      links: before.nodeObjectives,
-      edges: before.dependencies,
-      teachingOrder: teachingOrderOf(before),
+    // 读板搬到了 `outlineBoardFromSnapshot`：起草路由读的是同一份板，两边共用一份是因为
+    // 抄一份的第一个后果就是两份"讲授顺序"在某次改动后不再一致，而那不会报错。
+    const board = outlineBoardFromSnapshot({
+      ...before,
       declaredHours: task.durationHours,
     });
 
@@ -317,24 +298,6 @@ export async function POST(req: NextRequest, { params }: Params) {
  * Only node → node edges describe the order knowledge is taught in; an edge with
  * an outcome endpoint is a plan-level claim that the outline itself reads.
  */
-function teachingOrderOf(snapshot: Awaited<ReturnType<typeof getCurriculumDesignSnapshot>>) {
-  return teachingOrder({
-    nodes: snapshot.nodes.map((node) => ({
-      id: node.id,
-      name: node.name,
-      nodeType: node.nodeType,
-    })),
-    dependencies: snapshot.dependencies
-      .filter((edge) => edge.sourceKind === 'node' && edge.targetKind === 'node')
-      .map((edge) => ({
-        id: edge.id,
-        sourceId: edge.sourceId,
-        targetId: edge.targetId,
-        edgeType: edge.edgeType,
-      })),
-  }).order;
-}
-
 /** The phase order, so "has this task reached the outline yet" reads as one line. */
 function phaseRank(phase: CurriculumDesignPhase): number {
   return CURRICULUM_DESIGN_PHASES.indexOf(phase);

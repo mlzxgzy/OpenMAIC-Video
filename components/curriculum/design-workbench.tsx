@@ -65,11 +65,37 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+/**
+ * 第二步的冲突判定：删除与改写同一个目标时，改写那一行不可按。
+ *
+ * 包一层是因为 {@link outcomesDraftConflicts} 说的是"谁挡了谁"（一个数组），而面板要的是
+ * "行 id → 人话理由"（一个对象）。转换放在这里而不是面板里，是因为它每渲染一次都要算，
+ * 放进 `useMemo` 就等于给一个纯函数套一层没有意义的缓存。
+ */
+const outcomesConflicts = (draft: StepDraft): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const one of outcomesDraftConflicts(draft)) {
+    out[one.lineId] = '这一条已经被这一轮删掉了，按它会把它改回来。';
+  }
+  return out;
+};
+
+/**
+ * 整表替换那几类行在采纳那一刻要的当前库。
+ *
+ * 一个稳定的空引用而不是 `{}` 字面量：它会进 `StepCopilot` 的 `useMemo` 依赖，字面量每次
+ * 渲染都是新引用，于是它算出同样的答案而下游以为它变了。
+ */
+const emptyLive = { nodeObjectives: [], unitCoverage: [] } as const;
+
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
-import { KnowledgeCopilot } from '@/components/curriculum/knowledge-copilot';
-import { adoptKnowledgeDraftLine } from '@/lib/curriculum/knowledge-adopt';
+import { StepCopilot } from '@/components/curriculum/step-copilot';
+import { StepCopilotSlot } from '@/components/curriculum/step-copilot-slot';
+import { outcomesDraftConflicts } from '@/lib/curriculum/outcomes-draft';
+import { assessmentDraftConflicts } from '@/lib/curriculum/assessment-draft';
+import type { StepDraft } from '@/lib/curriculum/step-draft';
 import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-signoff';
 import { DesignTeachingSignOff } from '@/components/curriculum/design-teaching-signoff';
 import { DesignAssessmentSignOff } from '@/components/curriculum/design-assessment-signoff';
@@ -293,6 +319,18 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
     }
   }, [base]);
 
+  /**
+   * 采纳一行之后刷新左栏。
+   *
+   * **刻意不经过 `run`**：`run` 把失败吞进页面的错误条然后正常返回，于是右栏会一边显示
+   * "已采纳这一行，左栏已经改好"、一边库是空的（B2 的 e2e 逮到过这个）。所以失败必须
+   * 抛回右栏，右栏才有资格决定"这一行算不算已采纳"。
+   */
+  const refreshAfterAdoption = useCallback(async () => {
+    await load();
+    await onChanged();
+  }, [load, onChanged]);
+
   useEffect(() => {
     void load();
     // `version` is the shell's shared refresh: a change means another half
@@ -416,6 +454,35 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
       });
     },
     [snapshot],
+  );
+
+  /**
+   * 整表替换那几类行在采纳那一刻要的当前库。
+   *
+   * **这里传的是真库而不是空对象**：大纲的覆盖关系是 `PUT /unit-coverage` 整份替换，传空
+   * 就等于"按一下把现有覆盖全删了"，而那**不会报错**——它只会让后面某个目标变成"没东西
+   * 可教"。`useMemo` 不是为了省算力，而是为了给这个对象一个稳定引用：它会进右栏的
+   * `useMemo` 依赖，每次渲染新建一个字面量会让它算出同样的答案而下游以为它变了。
+   *
+   * 位置在**两处早退之前**，这是这一段唯一真正难的地方：本组件有两处提前 `return`
+   * （加载中、快照为空），把 Hook 放在它们后面就成了条件调用——某次渲染走了早退那条
+   * 路径，下一次没走，React 记的调用顺序就对不上，界面直接崩。用 `snapshot?.…` 是为了
+   * 能在快照为空时也算出一个稳定的值，而不是把它挪到守卫之后。
+   */
+  const liveCoverage = useMemo(
+    () => ({ nodeObjectives: [], unitCoverage: snapshot?.unitCoverage ?? [] }),
+    [snapshot?.unitCoverage],
+  );
+
+  /**
+   * 知识技能图的当前连线。整表替换那一类行在采纳那一刻按它重算，所以必须是真库。
+   *
+   * 位置与 `liveCoverage` 同一个理由：本组件有两处提前 `return`，Hook 放在它们后面就成了
+   * 条件调用。
+   */
+  const liveKnowledge = useMemo(
+    () => ({ nodeObjectives: snapshot?.nodeObjectives ?? [], unitCoverage: [] }),
+    [snapshot?.nodeObjectives],
   );
 
   if (loading && !snapshot) {
@@ -551,84 +618,106 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             }}
           />
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {objectives.length === 0 ? (
-            <EmptySection phase={phase} kind="outcomes">
-              还没有学习目标。逆向设计从「学生最终要能做什么」开始，不是从「讲什么」开始。
-            </EmptySection>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {objectives.map((objective) => (
-                <li key={objective.id} className="border-border rounded-lg border p-3">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex min-w-0 flex-col gap-1">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                          {OBJECTIVE_TYPE_OPTIONS.find(
-                            (type) => type.value === objective.objectiveType,
-                          )?.label ?? objective.objectiveType}
-                        </Badge>
-                        {objective.code && (
-                          <span className="text-muted-foreground font-mono text-[10px]">
-                            {objective.code}
-                          </span>
-                        )}
-                        {!objective.verifiable && (
-                          <Badge variant="destructive" className="px-1 py-0 text-[10px]">
-                            不可验证
+        {/* 两栏：左边是**作者要决定的事**，右边是 AI 的草稿。右栏的每一行都要人在左边
+            再点一次"采纳"才写库，所以它必须是看得见的另一栏，而不是一个弹窗后面的一条
+            对话。见 SERIES-UI-REDESIGN §5.2。 */}
+        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex flex-col gap-3">
+            {objectives.length === 0 ? (
+              <EmptySection phase={phase} kind="outcomes">
+                还没有学习目标。逆向设计从「学生最终要能做什么」开始，不是从「讲什么」开始。
+              </EmptySection>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {objectives.map((objective) => (
+                  <li key={objective.id} className="border-border rounded-lg border p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 flex-col gap-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                            {OBJECTIVE_TYPE_OPTIONS.find(
+                              (type) => type.value === objective.objectiveType,
+                            )?.label ?? objective.objectiveType}
                           </Badge>
-                        )}
+                          {objective.code && (
+                            <span className="text-muted-foreground font-mono text-[10px]">
+                              {objective.code}
+                            </span>
+                          )}
+                          {!objective.verifiable && (
+                            <Badge variant="destructive" className="px-1 py-0 text-[10px]">
+                              不可验证
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-sm font-medium">{objective.title}</span>
                       </div>
-                      <span className="text-sm font-medium">{objective.title}</span>
+                      <DeleteButton
+                        label={`删除目标「${objective.title}」`}
+                        busyKey={`objective:${objective.id}`}
+                        busy={busy}
+                        onDelete={() =>
+                          run(`objective:${objective.id}`, async () => {
+                            await requestJson(`${base}/objectives/${objective.id}`, {
+                              method: 'DELETE',
+                            });
+                            return '已删除学习目标。';
+                          })
+                        }
+                      />
                     </div>
-                    <DeleteButton
-                      label={`删除目标「${objective.title}」`}
-                      busyKey={`objective:${objective.id}`}
-                      busy={busy}
-                      onDelete={() =>
-                        run(`objective:${objective.id}`, async () => {
-                          await requestJson(`${base}/objectives/${objective.id}`, {
-                            method: 'DELETE',
-                          });
-                          return '已删除学习目标。';
-                        })
-                      }
-                    />
-                  </div>
 
-                  <div className="mt-2">
-                    <InlineEdit
-                      rowId={objective.id}
-                      field="expectedBehavior"
-                      label="可观察行为"
-                      value={objective.expectedBehavior}
-                      multiline
-                      busyKey={`objective-save:${objective.id}`}
-                      busy={busy}
-                      onSave={(next) =>
-                        run(`objective-save:${objective.id}`, async () => {
-                          await requestJson(`${base}/objectives/${objective.id}`, {
-                            method: 'PATCH',
-                            body: JSON.stringify({ expectedBehavior: next }),
-                          });
-                          return '已保存学习目标。';
-                        })
-                      }
-                    />
-                  </div>
+                    <div className="mt-2">
+                      <InlineEdit
+                        rowId={objective.id}
+                        field="expectedBehavior"
+                        label="可观察行为"
+                        value={objective.expectedBehavior}
+                        multiline
+                        busyKey={`objective-save:${objective.id}`}
+                        busy={busy}
+                        onSave={(next) =>
+                          run(`objective-save:${objective.id}`, async () => {
+                            await requestJson(`${base}/objectives/${objective.id}`, {
+                              method: 'PATCH',
+                              body: JSON.stringify({ expectedBehavior: next }),
+                            });
+                            return '已保存学习目标。';
+                          })
+                        }
+                      />
+                    </div>
 
-                  <EvidenceBlock
-                    objective={objective}
-                    evidence={evidenceByObjective.get(objective.id) ?? []}
-                    base={base}
-                    phase={phase}
-                    busy={busy}
-                    run={run}
-                  />
-                </li>
-              ))}
-            </ul>
-          )}
+                    <EvidenceBlock
+                      objective={objective}
+                      evidence={evidenceByObjective.get(objective.id) ?? []}
+                      base={base}
+                      phase={phase}
+                      busy={busy}
+                      run={run}
+                    />
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+            <StepCopilotSlot
+              taskId={snapshot.task.id}
+              step="outcomes"
+              heading="让 AI 帮你起草学习目标"
+              examples={[
+                '这一目要学生能独立完成什么？每条目标配一条考核证据。',
+                '目标已经有了，但每条都还没有考核方式，请补上。',
+                '把「能读懂 HTTP 响应」拆成更具体、可观察的目标。',
+              ]}
+              contextLine={`现在有 ${objectives.length} 个目标；草稿只会动其中明确提到的那几个。`}
+              live={emptyLive}
+              conflicts={outcomesConflicts}
+              onAdopted={refreshAfterAdoption}
+            />
+          </aside>
         </CardContent>
       </Card>
 
@@ -746,27 +835,17 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           </div>
 
           <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
-            <h3 className="text-sm font-medium">让 AI 帮你起草</h3>
-            <KnowledgeCopilot
-              taskId={snapshot.task.id}
-              nodes={nodes}
-              objectives={objectives}
-              onDraftTouched={() =>
-                setNotice('AI 给了一份草稿，左边一行都没变——你采纳哪一行，它才改哪一行。')
-              }
-              onAdopt={(line, edit, adoptedNodeIds) =>
-                adoptKnowledgeDraftLine({
-                  line,
-                  edit,
-                  base,
-                  snapshot,
-                  adoptedNodeIds,
-                  refresh: async () => {
-                    await load();
-                    await onChanged();
-                  },
-                })
-              }
+            <StepCopilot
+              draftRoute={`/api/curriculum/design/tasks/${snapshot.task.id}/knowledge/draft`}
+              heading="让 AI 帮你起草知识点"
+              examples={[
+                '这一目要讲「目录扫描」和「指纹识别」，各自依赖什么？按已确认的学习目标补齐知识点。',
+                '把已经列出的知识点按「先学哪个」排出先后关系，并说明理由。',
+                '有一个目标到现在还没有任何知识点支撑，请补上。',
+              ]}
+              contextLine={`图上现有 ${nodes.length} 个知识点、${objectives.length} 个目标；草稿只会动其中明确提到的那几个。`}
+              live={liveKnowledge}
+              onAdopted={refreshAfterAdoption}
             />
           </aside>
         </CardContent>
@@ -841,34 +920,52 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             }}
           />
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {items.length === 0 ? (
-            <EmptySection phase={phase} kind="units">
-              还没有条目。条目是「这个目具体怎么教、怎么练、怎么考」，没有条目就没有可生产的内容。
-            </EmptySection>
-          ) : (
-            <ul className="flex flex-col gap-2">
-              {items.map((unit) => (
-                <UnitBlock
-                  key={unit.id}
-                  unit={unit}
-                  base={base}
-                  nodeOptions={nodes.map((node) => ({ value: node.id, label: node.name }))}
-                  busy={busy}
-                  run={run}
-                />
-              ))}
-            </ul>
-          )}
-          <ItemOrderBlock
-            edges={snapshot.unitDependencies ?? []}
-            unitById={unitById}
-            base={base}
-            phase={phase}
-            itemOptions={itemOptions}
-            busy={busy}
-            run={run}
-          />
+        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex flex-col gap-3">
+            {items.length === 0 ? (
+              <EmptySection phase={phase} kind="units">
+                还没有条目。条目是「这个目具体怎么教、怎么练、怎么考」，没有条目就没有可生产的内容。
+              </EmptySection>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {items.map((unit) => (
+                  <UnitBlock
+                    key={unit.id}
+                    unit={unit}
+                    base={base}
+                    nodeOptions={nodes.map((node) => ({ value: node.id, label: node.name }))}
+                    busy={busy}
+                    run={run}
+                  />
+                ))}
+              </ul>
+            )}
+            <ItemOrderBlock
+              edges={snapshot.unitDependencies ?? []}
+              unitById={unitById}
+              base={base}
+              phase={phase}
+              itemOptions={itemOptions}
+              busy={busy}
+              run={run}
+            />
+          </div>
+
+          <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+            <StepCopilotSlot
+              taskId={snapshot.task.id}
+              step="outline"
+              heading="让 AI 帮你起草大纲"
+              examples={[
+                '按上面的学习目标排出这一目的条目，每个条目说明教什么、练什么、考什么。',
+                '章和节已经在了，请补上每个条目，并勾它教/练/考哪个目标。',
+                '有一项目标没有任何条目教它，请补上。',
+              ]}
+              contextLine={`现在有 ${items.length} 个条目；草稿只会动其中明确提到的那几个。`}
+              live={liveCoverage}
+              onAdopted={refreshAfterAdoption}
+            />
+          </aside>
         </CardContent>
       </Card>
 
@@ -1003,60 +1100,77 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             />
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {items.length === 0 ? (
-            <EmptySection phase={phase} kind="units">
-              还没有条目。分镜是逐条写的，先把大纲里的章、节、目排出来。
-            </EmptySection>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {items.map((unit) => {
-                const design = unit.teachingDesign ?? {};
-                const pages = unit.deckDesign?.pages ?? [];
-                return (
-                  <li key={unit.id} className="flex flex-col gap-1 text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                        {ROLE_OPTIONS.find((option) => option.value === unit.unitRole)?.label ??
-                          unit.unitRole ??
-                          '—'}
-                      </Badge>
-                      <span className="font-medium">{unit.title}</span>
-                      {unit.unitRole === 'lecture' ? (
-                        <span className="text-muted-foreground">{pages.length} 页</span>
+        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex flex-col gap-3">
+            {items.length === 0 ? (
+              <EmptySection phase={phase} kind="units">
+                还没有条目。分镜是逐条写的，先把大纲里的章、节、目排出来。
+              </EmptySection>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {items.map((unit) => {
+                  const design = unit.teachingDesign ?? {};
+                  const pages = unit.deckDesign?.pages ?? [];
+                  return (
+                    <li key={unit.id} className="flex flex-col gap-1 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                          {ROLE_OPTIONS.find((option) => option.value === unit.unitRole)?.label ??
+                            unit.unitRole ??
+                            '—'}
+                        </Badge>
+                        <span className="font-medium">{unit.title}</span>
+                        {unit.unitRole === 'lecture' ? (
+                          <span className="text-muted-foreground">{pages.length} 页</span>
+                        ) : null}
+                      </div>
+                      {ASSIGNED_NODE_BUCKETS.map((bucket) => {
+                        const ids = design[bucket] ?? [];
+                        if (ids.length === 0) return null;
+                        return (
+                          <div key={bucket} className="text-muted-foreground pl-4">
+                            {TEACHING_DEPTH_LABELS[bucket]}：
+                            {ids
+                              .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
+                              .join('、')}
+                          </div>
+                        );
+                      })}
+                      {unit.unitRole === 'lecture' && pages.length > 0 ? (
+                        <ol className="text-muted-foreground flex flex-col gap-0.5 pl-4">
+                          {pages.map((page) => (
+                            <li key={page.order}>
+                              {page.order}. {page.title}｜{page.goal}
+                              {(page.teaches ?? []).length > 0
+                                ? `｜讲：${(page.teaches ?? [])
+                                    .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
+                                    .join('、')}`
+                                : ''}
+                            </li>
+                          ))}
+                        </ol>
                       ) : null}
-                    </div>
-                    {ASSIGNED_NODE_BUCKETS.map((bucket) => {
-                      const ids = design[bucket] ?? [];
-                      if (ids.length === 0) return null;
-                      return (
-                        <div key={bucket} className="text-muted-foreground pl-4">
-                          {TEACHING_DEPTH_LABELS[bucket]}：
-                          {ids
-                            .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
-                            .join('、')}
-                        </div>
-                      );
-                    })}
-                    {unit.unitRole === 'lecture' && pages.length > 0 ? (
-                      <ol className="text-muted-foreground flex flex-col gap-0.5 pl-4">
-                        {pages.map((page) => (
-                          <li key={page.order}>
-                            {page.order}. {page.title}｜{page.goal}
-                            {(page.teaches ?? []).length > 0
-                              ? `｜讲：${(page.teaches ?? [])
-                                  .map((id) => nodes.find((node) => node.id === id)?.name ?? id)
-                                  .join('、')}`
-                              : ''}
-                          </li>
-                        ))}
-                      </ol>
-                    ) : null}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+            <StepCopilotSlot
+              taskId={snapshot.task.id}
+              step="teaching"
+              heading="让 AI 帮你写授课脚本"
+              examples={[
+                '按大纲逐条写：这个条目讲什么、哪些知识点讲全、哪些点到为止。',
+                '讲课条目还没有分镜，请按它的脚本排页。',
+              ]}
+              contextLine={`现在有 ${items.length} 个条目；草稿只会改它明确提到的那几条。`}
+              live={emptyLive}
+              onAdopted={refreshAfterAdoption}
+            />
+          </aside>
         </CardContent>
       </Card>
 
@@ -1088,87 +1202,105 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             />
           </div>
         </CardHeader>
-        <CardContent className="flex flex-col gap-3">
-          {items.length === 0 ? (
-            <EmptySection phase={phase} kind="units">
-              还没有条目。题目和实操是逐条挂上去的，先把大纲里的章、节、目排出来。
-            </EmptySection>
-          ) : (
-            <ul className="flex flex-col gap-3">
-              {items.map((unit) => {
-                const questions = (snapshot.questions ?? []).filter(
-                  (question) => question.unitId === unit.id,
-                );
-                const labs = (snapshot.labTasks ?? []).filter((lab) => lab.unitId === unit.id);
-                return (
-                  <li key={unit.id} className="flex flex-col gap-1 text-xs">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
-                        {roleLabel(unit.unitRole)}
-                      </Badge>
-                      <span className="font-medium">{unit.title}</span>
-                      <span className="text-muted-foreground">
-                        {questions.length} 题、{labs.length} 个实操
-                      </span>
-                    </div>
-                    {questions.length === 0 && labs.length === 0 ? (
-                      <div className="pl-4 text-amber-700 dark:text-amber-300">
-                        还没有题目和实操
+        <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="flex flex-col gap-3">
+            {items.length === 0 ? (
+              <EmptySection phase={phase} kind="units">
+                还没有条目。题目和实操是逐条挂上去的，先把大纲里的章、节、目排出来。
+              </EmptySection>
+            ) : (
+              <ul className="flex flex-col gap-3">
+                {items.map((unit) => {
+                  const questions = (snapshot.questions ?? []).filter(
+                    (question) => question.unitId === unit.id,
+                  );
+                  const labs = (snapshot.labTasks ?? []).filter((lab) => lab.unitId === unit.id);
+                  return (
+                    <li key={unit.id} className="flex flex-col gap-1 text-xs">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                          {roleLabel(unit.unitRole)}
+                        </Badge>
+                        <span className="font-medium">{unit.title}</span>
+                        <span className="text-muted-foreground">
+                          {questions.length} 题、{labs.length} 个实操
+                        </span>
                       </div>
-                    ) : (
-                      <ul className="text-muted-foreground flex flex-col gap-0.5 pl-4">
-                        {questions.map((question) => (
-                          <li key={question.id}>
-                            <Badge variant="outline" className="mr-1 px-1 py-0 text-[10px]">
-                              {QUESTION_TYPE_LABELS[question.questionType]}
-                            </Badge>
-                            {question.stem}
-                            {`｜答案 ${question.answer.join('/') || '（空）'}｜${DIFFICULTY_LABELS[question.difficulty]}｜${question.score} 分`}
-                          </li>
-                        ))}
-                        {labs.map((lab) => (
-                          <li key={lab.id}>
-                            <Badge
-                              variant={lab.assessmentMode === 'exam' ? 'default' : 'secondary'}
-                              className="mr-1 px-1 py-0 text-[10px]"
-                            >
-                              {ASSESSMENT_MODE_LABELS[lab.assessmentMode]}
-                            </Badge>
-                            {lab.taskGoal}
-                            {`｜镜像 ${lab.dockerImage}｜`}
-                            {lab.verifyRules.length === 0
-                              ? '没有验证规则：这样判不了分'
-                              : lab.verifyRules.map(describeVerifyRule).join('；')}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          {/* An artifact whose `unitId` is not an item would otherwise vanish from
+                      {questions.length === 0 && labs.length === 0 ? (
+                        <div className="pl-4 text-amber-700 dark:text-amber-300">
+                          还没有题目和实操
+                        </div>
+                      ) : (
+                        <ul className="text-muted-foreground flex flex-col gap-0.5 pl-4">
+                          {questions.map((question) => (
+                            <li key={question.id}>
+                              <Badge variant="outline" className="mr-1 px-1 py-0 text-[10px]">
+                                {QUESTION_TYPE_LABELS[question.questionType]}
+                              </Badge>
+                              {question.stem}
+                              {`｜答案 ${question.answer.join('/') || '（空）'}｜${DIFFICULTY_LABELS[question.difficulty]}｜${question.score} 分`}
+                            </li>
+                          ))}
+                          {labs.map((lab) => (
+                            <li key={lab.id}>
+                              <Badge
+                                variant={lab.assessmentMode === 'exam' ? 'default' : 'secondary'}
+                                className="mr-1 px-1 py-0 text-[10px]"
+                              >
+                                {ASSESSMENT_MODE_LABELS[lab.assessmentMode]}
+                              </Badge>
+                              {lab.taskGoal}
+                              {`｜镜像 ${lab.dockerImage}｜`}
+                              {lab.verifyRules.length === 0
+                                ? '没有验证规则：这样判不了分'
+                                : lab.verifyRules.map(describeVerifyRule).join('；')}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {/* An artifact whose `unitId` is not an item would otherwise vanish from
               the one screen where the author is looking for it — and "a question
               hung on a chapter" is exactly the defect this step refuses to write
               and the audit reports. It stays visible here instead. */}
-          {(() => {
-            const itemIds = new Set(items.map((unit) => unit.id));
-            const adrift = [
-              ...(snapshot.questions ?? [])
-                .filter((question) => !itemIds.has(question.unitId))
-                .map((question) => `题目「${question.stem}」`),
-              ...(snapshot.labTasks ?? [])
-                .filter((lab) => !itemIds.has(lab.unitId))
-                .map((lab) => `实操「${lab.taskGoal}」`),
-            ];
-            if (adrift.length === 0) return null;
-            return (
-              <p className="text-[11px] text-amber-700 dark:text-amber-300">
-                挂错位置的产物（不在任何目上，考核闭环里读不到）：{adrift.join('、')}
-              </p>
-            );
-          })()}
+            {(() => {
+              const itemIds = new Set(items.map((unit) => unit.id));
+              const adrift = [
+                ...(snapshot.questions ?? [])
+                  .filter((question) => !itemIds.has(question.unitId))
+                  .map((question) => `题目「${question.stem}」`),
+                ...(snapshot.labTasks ?? [])
+                  .filter((lab) => !itemIds.has(lab.unitId))
+                  .map((lab) => `实操「${lab.taskGoal}」`),
+              ];
+              if (adrift.length === 0) return null;
+              return (
+                <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                  挂错位置的产物（不在任何目上，考核闭环里读不到）：{adrift.join('、')}
+                </p>
+              );
+            })()}
+          </div>
+
+          <aside className="border-border flex flex-col gap-2 border-t pt-4 lg:border-t-0 lg:border-l lg:pt-0 lg:pl-6">
+            <StepCopilotSlot
+              taskId={snapshot.task.id}
+              step="assessment"
+              heading="让 AI 帮你出题与实操"
+              examples={[
+                '按每条目标配的考核方式出题，并挂在承担它的那个条目上。',
+                '有一条目标承诺了考试但还没有实操，请补一个 Docker 靶场任务。',
+              ]}
+              contextLine={`现在有 ${(snapshot.questions ?? []).length} 道题、${(snapshot.labTasks ?? []).length} 个实操；草稿只会动其中明确提到的那几个。`}
+              live={emptyLive}
+              conflicts={assessmentDraftConflicts}
+              onAdopted={refreshAfterAdoption}
+            />
+          </aside>
         </CardContent>
       </Card>
 

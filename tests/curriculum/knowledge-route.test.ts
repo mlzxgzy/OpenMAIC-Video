@@ -72,6 +72,7 @@ import {
 } from '@/lib/server/curriculum/design-store';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { SlotUnassignedError } from '@/lib/server/model-config/runtime';
+import type { StepDraft } from '@/lib/curriculum/step-draft';
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
@@ -409,22 +410,45 @@ describe('the step-3 knowledge routes', () => {
       const payload = (await (
         await draftRequest(taskId, { instruction: '补一个文件头', history: [] })
       ).json()) as {
-        added: { name: string }[];
-        patches: { nodeId: string; patch: Record<string, unknown> }[];
-        currentLinks: { nodeId: string; objectiveId: string }[];
-        nodeNameById: Record<string, string>;
-        objectiveTitleById: Record<string, string>;
-        instruction: string;
+        draft: StepDraft;
       };
-      expect(payload.added[0]).toMatchObject({ name: '文件头结构' });
-      // patches 必须是数组：Map 序列化出来是 `{}`，界面会看到"有改动"却不知道改了什么。
-      expect(payload.patches).toEqual([
-        { nodeId: first.id, patch: { ref: first.id, summary: '参数化查询与占位符' } },
+      // 回包是**一个信封**：行都在 `draft.lines` 里，而每一行自己带着"打哪个路由、
+      // 带什么 body"。这是把五个步骤合成一副骨架之后刻意的形状——引擎不认识领域概念，
+      // 所以服务端必须把写入本身算出来发过去。
+      const lines = payload.draft.lines;
+      expect(lines.map((line) => line.text)).toEqual(
+        expect.arrayContaining([expect.stringContaining('文件头结构')]),
+      );
+      const patchLine = lines.find((line) => line.id === `knowledge:patch-${first.id}`);
+      // 改写这一行是一次 PATCH，body 就是模型给的那几个字段——`ref` 不发，它是给模型用的
+      // 寻址标记，不是给路由的字段。
+      expect(patchLine?.write?.method).toBe('PATCH');
+      expect(patchLine?.write?.body).toEqual({ summary: '参数化查询与占位符' });
+      expect(payload.draft.instruction).toBe('补一个文件头');
+      // 新建知识点那行带上它的支撑关系，而那一跳填的是第一跳刚拿到的 id。
+      const created = lines.find((line) => line.text.includes('文件头结构'));
+      expect(created?.create?.route).toContain('/nodes');
+      // 连线那一跳是**整表替换**：它的 body 在采纳那一刻按当前库算，而不是冻在起草时。
+      // 冻住的后果是作者先按的那一行贡献的连线会被后按的这一行抹掉，而那不报错。
+      const merge = created?.create?.mergeInto;
+      expect(merge?.method).toBe('PUT');
+      expect(merge?.route).toContain('/node-objectives');
+      // 并进去的是"要加的那几条"，**不是**整份集合：整表替换的 body 在采纳那一刻按当前库算。
+      // 冻在起草时的后果是作者先按的那一行贡献的连线会被后按的这一行抹掉，而那不报错。
+      expect(merge?.rows).toEqual([
+        { nodeId: '#id', objectiveId: objWriteup, supportLevel: 'secondary' },
       ]);
-      expect(payload.currentLinks).toHaveLength(2);
-      expect(payload.nodeNameById[first.id]).toBe('SQL 查询与参数化');
-      expect(payload.objectiveTitleById[objWriteup]).toBe('完整写出 Writeup');
-      expect(payload.instruction).toBe('补一个文件头');
+      expect(merge?.source).toBe('nodeObjectives');
+      // `parseNodeObjectiveSet` 读的是 `links`；写错就是采纳时 400。
+      expect(merge?.bodyKey).toBe('links');
+
+      // 最后一条，也是整个副驾的地基：**行必须是纯数据**。它由服务端算出来、发到浏览器、
+      // 再发回去，所以任何函数都会在 `JSON.stringify` 里变成 `undefined`。第一版这里是一个
+      // `replaceFromLive(live)` 回调——它写出了正确的合并逻辑，在服务端的每一条测试里都成立
+      // （所以全绿），而到了浏览器里那一行退化成"没有后续跳"：点采纳只建出一个知识点，它的
+      // 支撑关系一条都没写。所以这一条断言比的是**真回包**，而不是一个手写的对象字面量——
+      // 后者永远通过，它证明的只是 JSON 能序列化 JSON。
+      expect(JSON.parse(JSON.stringify(payload))).toEqual(payload);
     });
 
     it('一个闭环的边在草稿里被拒，并作为警告回到作者眼前', async () => {
@@ -444,11 +468,19 @@ describe('the step-3 knowledge routes', () => {
       );
       const payload = (await (
         await draftRequest(taskId, { instruction: '反过来', history: [] })
-      ).json()) as { dependencies: unknown[]; warnings: string[] };
+      ).json()) as { draft: StepDraft };
       // 会闭环的边必须在写库之前被拒——store 的检查会让整个事务回滚，把这一轮的其他
-      // 改动一起带走，而被拒的边不会留下任何可见痕迹。
-      expect(payload.dependencies).toHaveLength(0);
-      expect(payload.warnings.join('\n')).not.toBe('');
+      // 改动一起带走，而被拒的边不会留下任何可见痕迹。所以草稿里**没有**这一行，
+      // 而它作为一句说明回到作者眼前。
+      expect(payload.draft.lines.filter((line) => line.id.startsWith('knowledge:edge-'))).toEqual(
+        [],
+      );
+      // 被拒的那一条要**作为一句话**回到作者眼前，而不是消失：一条被环检测否掉的边在草稿里
+      // 完全没有痕迹时，作者只会觉得"AI 什么都没说"。
+      //
+      // 它落在 `warnings` 而不是说明行里，因为 `resolveKnowledgeTurn` 把环检测拒绝的边放在
+      // 那里（`droppedEdges`）。草稿把它原样带过来，而不是自己重新判断一次"哪条被拒了"。
+      expect(payload.draft.warnings.join('\n')).not.toBe('');
     });
 
     it('回答 400 而不是 500：没有配置模型是作者能照着做的事', async () => {
