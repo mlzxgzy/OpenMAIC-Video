@@ -34,11 +34,7 @@ import {
   getCurriculumTask,
   withdrawCurriculumDesignStep,
 } from '@/lib/server/curriculum/design-store';
-import {
-  teachingAuditFindings,
-  teachingGapsOfSnapshot,
-  teachingState,
-} from '@/lib/server/curriculum/teaching-state';
+import { teachingBlockers, teachingState } from '@/lib/server/curriculum/teaching-state';
 
 export const runtime = 'nodejs';
 
@@ -46,19 +42,6 @@ type Params = { params: Promise<{ id: string }> };
 
 /** The note is free text from the dialog; the column is not a log. */
 const MAX_NOTE_CHARS = 500;
-
-/**
- * Everything that blocks signing the teaching design, in the words the card shows.
- *
- * The rules' own gaps plus the audit's teaching-layer findings: two sources, one
- * list, because the author reads one list.
- */
-function teachingBlockers(snapshot: Awaited<ReturnType<typeof getCurriculumDesignSnapshot>>) {
-  return [
-    ...teachingGapsOfSnapshot(snapshot).map((gap) => gap.text),
-    ...teachingAuditFindings(snapshot).map((finding) => finding.message),
-  ];
-}
 
 export async function GET(req: NextRequest, { params }: Params) {
   return runDesignRoute(req, params, async (ctx) => {

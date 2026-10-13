@@ -158,6 +158,28 @@ export function outlineAdvisoriesOfSnapshot(snapshot: CurriculumDesignSnapshot):
   });
 }
 
+/**
+ * Everything that blocks signing the outline, in the words the card shows.
+ *
+ * The rules' own gaps plus the audit's outline-layer findings: two sources, one
+ * list, because the author reads one list. Deduplicated textually — a judgement
+ * both sides make (an item with no coverage, a chapter carrying content) arrives
+ * twice, and a refusal that repeats itself reads as two problems.
+ *
+ * It lives here rather than in the confirm route because the agent tool that signs
+ * the same step (`confirm_course_outline`) has to refuse for exactly the same
+ * reasons; a second copy in the tool is how the button and the model end up
+ * disagreeing about whether a step is finished.
+ */
+export function outlineBlockers(snapshot: CurriculumDesignSnapshot): string[] {
+  return [
+    ...new Set([
+      ...outlineGapsOfSnapshot(snapshot).map((gap) => gap.text),
+      ...outlineAuditFindings(snapshot).map((finding) => finding.message),
+    ]),
+  ];
+}
+
 export async function outlineState(
   ctx: DesignContext,
   taskId: string,

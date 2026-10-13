@@ -59,6 +59,9 @@ import {
   knowledgeGapsOfRecords,
   teachingOrder,
 } from '@/lib/curriculum/design-knowledge';
+import { assessmentBlockers } from '@/lib/server/curriculum/assessment-state';
+import { outlineBlockers } from '@/lib/server/curriculum/outline-state';
+import { teachingBlockers } from '@/lib/server/curriculum/teaching-state';
 import { traceFromObjective } from '@/lib/curriculum/traceability';
 import {
   CurriculumDesignNotFoundError,
@@ -1284,6 +1287,176 @@ export function buildCurriculumDesignTools(
     },
   };
 
+  /**
+   * The three sign-off tools steps 4–7 were missing.
+   *
+   * Steps 1–3 each got a confirm tool when they got a phase gate. Steps 4 (outline),
+   * 5 (teaching) and 6 (assessment) got the gate but **not** the tool, so the agent
+   * side of the design flow has been unable to leave `outline` since the outline
+   * sign-off landed: `advance_course_design_phase` is refused, the refusal names a
+   * confirmation that no tool can record, and the only tests that noticed were two
+   * lab-tool tests in a file the narrow regression command never ran.
+   *
+   * They refuse on exactly the list the workbench button refuses on — the same
+   * `*Blockers` function the confirm route calls — so the button and the model
+   * cannot disagree about whether a step is finished.
+   */
+  const confirmCourseOutline: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_outline',
+    label: 'Confirm the course outline',
+    description:
+      'Record that the user has agreed to the outline — the chapters, the items and what each item teaches, practises or assesses. Step 4 is not finished when every outcome has an item teaching it: it is finished when the user has read the outline and said yes, and the phase machine refuses to leave "outline" until then. Anything the step still lacks is refused here (an item with no coverage, an outcome nobody teaches, a chapter carrying content, an order that contradicts the dependency claims), and editing the outline re-opens it, so this has to be called again after an edit. Call it only after the user plainly agrees.',
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const blockers = outlineBlockers(snapshot);
+      if (blockers.length > 0) {
+        return toolResult(
+          `Cannot confirm the outline yet: ${blockers.join('；')}. ` +
+            'Fix the outline first, show it to the user, and confirm once they agree.',
+          { error: 'outline-incomplete', gaps: blockers },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'outline',
+        'assistant',
+      );
+      const items = snapshot.units.filter((unit) => unit.unitType === 'item');
+      const chapters = snapshot.units.filter((unit) => unit.unitType === 'chapter');
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Course outline confirmed by the user (step 4 of 7). ${chapters.length} groupings, ` +
+          `${items.length} items, ${snapshot.unitCoverage.length} coverage links. ` +
+          `Items: ${items
+            .map(
+              (item) =>
+                `${item.title}(${item.unitRole ?? 'no role'}, ${
+                  snapshot.unitCoverage
+                    .filter((row) => row.unitId === item.id)
+                    .map((row) => row.coverageKind)
+                    .join('/') || 'no coverage'
+                })`,
+            )
+            .join('；')}
+` +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing the outline first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
+    },
+  };
+
+  const confirmCourseTeaching: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_teaching',
+    label: 'Confirm the teaching design',
+    description:
+      "Record that the user has agreed to the teaching designs and their storyboards. Step 5 (teaching) closes only on the user's agreement: every item has to say what it teaches and how deep (core / brief / mention / omit), and every lecture item has to plan the pages that carry it, or the design refuses to confirm. Editing a script or a storyboard re-opens the step, so this has to be called again after either. Anything missing is refused here, so write it first.",
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const blockers = teachingBlockers(snapshot);
+      if (blockers.length > 0) {
+        return toolResult(
+          `Cannot confirm the teaching design yet: ${blockers.join('；')}. ` +
+            'Write the missing scripts and storyboards first, then confirm once the user agrees.',
+          { error: 'teaching-incomplete', gaps: blockers },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'teaching',
+        'assistant',
+      );
+      const items = snapshot.units.filter((unit) => unit.unitType === 'item');
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Teaching design confirmed by the user (step 5/6 of 7). ${items.length} items, ` +
+          `${items.filter((item) => (item.deckDesign?.pages ?? []).length > 0).length} with a storyboard.
+` +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
+    },
+  };
+
+  const confirmCourseAssessment: AgentTool<typeof TaskIdParams, unknown> = {
+    name: 'confirm_course_assessment',
+    label: 'Confirm the questions and lab tasks',
+    description:
+      "Record that the user has agreed to the questions and the lab tasks. Steps 7–8 (assessment) close only on the user's agreement, and only when every promise of being graded has something behind it: every item marked as assessing an outcome needs a question or a lab hanging on it, every evidence row needs its artifact, an exam evidence may not be delivered by a practice lab, and every lab needs verification rules. A question or a lab hangs on ONE item, and it is refused if that item never promised the outcome. Editing any of them re-opens the step.",
+    parameters: TaskIdParams,
+    executionMode: 'sequential',
+    async execute(_id, params: Static<typeof TaskIdParams>, signal) {
+      if (signal?.aborted) throw new Error('aborted');
+      const snapshot = await ownsTask(deps, params.taskId);
+      if (!snapshot) return notYoursResult(params.taskId);
+      if (signal?.aborted) throw new Error('aborted');
+      const blockers = assessmentBlockers(snapshot);
+      if (blockers.length > 0) {
+        return toolResult(
+          `Cannot confirm the questions and lab tasks yet: ${blockers.join('；')}. ` +
+            'Write the missing artifacts first, then confirm once the user agrees.',
+          { error: 'assessment-incomplete', gaps: blockers },
+          true,
+        );
+      }
+      const queryable = await resolveQueryable(deps);
+      const confirmation = await confirmCurriculumDesignStep(
+        queryable,
+        ownerId,
+        params.taskId,
+        'assessment',
+        'assistant',
+      );
+      const next = nextCurriculumDesignPhase(snapshot.task.designPhase);
+      return toolResult(
+        `Questions and lab tasks confirmed by the user (steps 7–8 of 11). ` +
+          `${snapshot.questions.length} questions, ${snapshot.labTasks.length} lab tasks ` +
+          `(${snapshot.labTasks.filter((lab) => lab.assessmentMode === 'exam').length} of them exams).
+` +
+          (next
+            ? `Call advance_course_design_phase to enter "${next}", or keep editing first.`
+            : ''),
+        {
+          taskId: params.taskId,
+          confirmedAt: confirmation.confirmedAt,
+          confirmedBy: confirmation.confirmedBy,
+          designPhase: snapshot.task.designPhase,
+        },
+      );
+    },
+  };
+
   const createOutcome: AgentTool<typeof CreateObjectiveParams, unknown> = {
     name: 'create_learning_outcome',
     label: 'Create learning outcome',
@@ -1887,6 +2060,9 @@ export function buildCurriculumDesignTools(
     confirmCourseDirection,
     confirmCourseOutcomes,
     confirmCourseKnowledge,
+    confirmCourseOutline,
+    confirmCourseTeaching,
+    confirmCourseAssessment,
     getCourseDesign,
     advancePhase,
     createOutcome,
@@ -1962,6 +2138,9 @@ export const CURRICULUM_DESIGN_ALLOWLIST: ReadonlySet<string> = new Set([
   'confirm_course_direction',
   'confirm_course_outcomes',
   'confirm_course_knowledge',
+  'confirm_course_outline',
+  'confirm_course_teaching',
+  'confirm_course_assessment',
   'get_course_design',
   'advance_course_design_phase',
   'create_learning_outcome',
@@ -1990,6 +2169,9 @@ export const CURRICULUM_DESIGN_TOOL_PHASES: Readonly<Record<string, CurriculumDe
   confirm_course_direction: 'task',
   confirm_course_outcomes: 'outcomes',
   confirm_course_knowledge: 'graph',
+  confirm_course_outline: 'outline',
+  confirm_course_teaching: 'teaching',
+  confirm_course_assessment: 'assessment',
   get_course_design: 'task',
   advance_course_design_phase: 'task',
   create_learning_outcome: 'outcomes',
@@ -2026,7 +2208,10 @@ export const CURRICULUM_DESIGN_TOOLS_PROMPT = [
   'Step 1 is the course direction (the brief): settle who is trained, what the course covers and for how long, then let the user confirm. Ask at most two questions per turn instead of interviewing slot by slot; write every fact the user states with `patch_course_task` as it arrives; and call `confirm_course_direction` only after the user plainly agrees to the card. `get_course_design` says whether the direction is confirmed, and the phase machine refuses to leave the brief until it is.',
   'Step 2 is the learning outcomes and their assessment criteria: each outcome needs a title, an observable behavior, at least one minimum criterion and at least one piece of evidence, and then the user has to agree to the list. Editing an outcome or adding evidence re-opens the step, so `confirm_course_outcomes` has to be called again after either. The phase machine refuses to leave "outcomes" until the list is both complete and confirmed.',
   'Step 3 is the knowledge and skill graph: work back from each outcome to the knowledge and the operations it needs, create the nodes with `create_learning_node`, and wire each to the outcomes it supports with `set_node_objectives`. The graph must be connected at BOTH ends — every node supports an outcome and every outcome has a node — because an outcome with nothing behind it reaches the outline with nothing to teach, and a node with nothing behind it is never taught. `set_node_objectives` replaces the whole task link set, so send every link each time. Editing a node or a link re-opens the step, so `confirm_course_knowledge` has to be called again after either. Do not create chapters or items here: the outline is step 4.',
-  'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete.',
+  "Step 4 is the outline: chapters group, items teach, and a coverage row is a promise that THIS item teaches, practises or assesses THAT outcome. `confirm_course_outline` records the user's agreement, and `outline → teaching` is refused until it is recorded — an outline nobody read is not an approved outline.",
+  'Step 5 (teaching) is what each item teaches and how deep (core / brief / mention / omit), plus the page plan for a lecture item. `confirm_course_teaching` records the agreement, and `teaching → assessment` is refused until it is recorded AND every item has a teaching design.',
+  'Steps 7–8 (assessment) are the questions and the lab tasks. A question or a lab hangs on ONE item, and it must be an item that promised that outcome — a lab needs an item that practises or grades it. Every evidence row needs its artifact, an exam evidence may not be delivered by a practice lab, and a lab is graded by its verify rules, never by its reference solution. `confirm_course_assessment` records the agreement.',
+  'Call `get_course_design` to read the whole design (outcomes with their evidence and teach/practice/assess coverage, nodes with dependencies, outline, questions, labs, findings) and `advance_course_design_phase` to move on once a phase is complete — every phase from the brief to the assessment has its own `confirm_course_*` tool, and the machine refuses to leave a phase whose sign-off is missing.',
   'An outcome is verifiable only when it has an expected behavior and at least one minimum criterion; the store refuses to mark one verifiable otherwise, and every outcome needs evidence before the graph phase opens.',
   'A chapter classifies; it carries no content. An item is a lecture, practice or exam, and the design may not assume a practice and an exam after every lecture — decide from the outcome and its evidence.',
   'Every outcome must eventually be taught, drilled AND examined. `trace_outcome` shows what backs one outcome and where it is met; `review_course_design` runs the quality rules; `assert_course_design_exportable` is the gate before generating any content.',

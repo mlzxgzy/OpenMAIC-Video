@@ -969,7 +969,12 @@ function makeOrderedSnapshot(orderIndexes: number[]): CurriculumDesignSnapshot {
   );
   const snapshot = makeSnapshot({ units });
   for (const unit of units.slice(1)) {
-    for (const coverageKind of ['teach', 'practice', 'assess'] as const) {
+    // `teach` and `practice` only. Since step 7 an `assess` coverage row is a
+    // promise that a question or a lab delivers *there*, and this fixture's
+    // artifacts all hang on the first item — so only the first item claims to
+    // grade the outcome. A second item claiming it with nothing to grade with is
+    // exactly the empty promise `coverage_without_artifact` reports.
+    for (const coverageKind of ['teach', 'practice'] as const) {
       snapshot.unitCoverage.push(
         makeCoverage({ unitId: unit.id, objectiveId: snapshot.objectives[0].id, coverageKind }),
       );

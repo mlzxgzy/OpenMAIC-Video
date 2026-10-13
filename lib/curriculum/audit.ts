@@ -14,6 +14,7 @@
  */
 
 import { CURRICULUM_ORDER_CLAIM_EDGE_TYPES } from './design-types';
+import { assessmentGaps, type AssessmentGap, type AssessmentGapKind } from './design-assessment';
 import { outlineOrderConflicts } from './design-outline';
 import { nodesForObjectives, teachingGapsOfItems, type TeachingGap } from './design-teaching';
 import type {
@@ -58,6 +59,10 @@ export const CURRICULUM_AUDIT_RULES = [
   'unit_orphan',
   'unit_lesson_undesigned',
   'deck_script_conflict',
+  'question_off_item',
+  'lab_off_item',
+  'coverage_without_artifact',
+  'exam_evidence_practice_lab',
   'brief_incomplete',
 ] as const;
 
@@ -549,6 +554,58 @@ function ruleLabVerifyGradesByPath(snapshot: CurriculumDesignSnapshot): Curricul
 }
 
 /**
+ * The step-7 checks, surfaced as audit rules.
+ *
+ * The three findings here all say the same thing in different places: **a question
+ * or a lab is only graded where it hangs.** Hanging it on a chapter, or on an item
+ * that never made a promise about that outcome, produces an artifact that looks
+ * complete in every list — stem, options, answer, verification rules — while the
+ * closure matrix never sees it. The step's own card, the phase gate and this audit
+ * all read {@link assessmentGaps}, so they cannot disagree about which artifacts
+ * are adrift.
+ *
+ * `lab_without_verify_rule` is deliberately **not** mapped here: `lab_no_verify_rule`
+ * already owns that finding, and two producers of one rule code would double every
+ * ungradable lab. `no_items` is a gap the step reports, not a defect of a course
+ * that has no items — `brief_incomplete` and the objective rules already say the
+ * design is empty.
+ */
+const ASSESSMENT_GAP_RULES: Partial<Record<AssessmentGapKind, CurriculumAuditRule>> = {
+  question_on_chapter: 'question_off_item',
+  question_off_item: 'question_off_item',
+  lab_off_item: 'lab_off_item',
+  coverage_without_artifact: 'coverage_without_artifact',
+  exam_evidence_practice_lab: 'exam_evidence_practice_lab',
+};
+
+function ruleAssessmentPlacement(snapshot: CurriculumDesignSnapshot): CurriculumAuditFinding[] {
+  return assessmentGaps(snapshot).flatMap((gap: AssessmentGap) => {
+    const rule = ASSESSMENT_GAP_RULES[gap.kind];
+    if (!rule) return [];
+    // The kind of thing the finding points at, so the panel can link to the right
+    // record: a lab reported as a "question" would highlight the wrong row — or
+    // nothing at all.
+    const refKind =
+      gap.kind === 'coverage_without_artifact'
+        ? ('unit' as const)
+        : gap.kind === 'lab_off_item' || gap.kind === 'exam_evidence_practice_lab'
+          ? ('lab_task' as const)
+          : ('question' as const);
+    return [
+      {
+        rule,
+        severity: 'error' as const,
+        message: gap.text,
+        refKind,
+        refId: gap.ref ?? snapshot.task.id,
+        refIds: [],
+        layer: 'assess_covers' as const,
+      },
+    ];
+  });
+}
+
+/**
  * Edges that express order, for cycle detection.
  *
  * The set itself lives in `design-types` because three layers read it now — this
@@ -989,6 +1046,7 @@ export function auditCurriculumDesign(
     ...ruleUnitOrphan(snapshot),
     ...ruleUnitLessonUndesigned(snapshot),
     ...ruleDeckScriptConflict(snapshot),
+    ...ruleAssessmentPlacement(snapshot),
   ];
 
   const severityRank: Record<CurriculumAuditSeverity, number> = { error: 0, warning: 1, info: 2 };

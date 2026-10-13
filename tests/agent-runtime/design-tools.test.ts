@@ -169,12 +169,15 @@ describe('outcome-first design tools (PGlite)', () => {
     it('registers every design tool and keeps the allowlist in step', () => {
       const names = [...tools.keys()].sort();
       expect(names).toEqual([...CURRICULUM_DESIGN_ALLOWLIST].sort());
-      // 22 design tools + the three step sign-offs: confirm_course_direction
+      // 20 design tools + the six step sign-offs: confirm_course_direction
       // (step 1), confirm_course_outcomes (step 2), confirm_course_knowledge
-      // (step 3, added with the graph gate). Keep this count honest so a new tool
-      // cannot be added without the allowlist, the phase map and this number all
-      // moving together.
-      expect(names.length).toBe(24);
+      // (step 3), and confirm_course_outline / confirm_course_teaching /
+      // confirm_course_assessment (steps 4–7, added when the missing tools were
+      // found: their gates existed since S9 but nothing could satisfy them, so the
+      // agent-side flow could not leave `outline` at all). Keep this count honest
+      // so a new tool cannot be added without the allowlist, the phase map and
+      // this number all moving together.
+      expect(names.length).toBe(27);
     });
   });
 
@@ -347,6 +350,248 @@ describe('outcome-first design tools (PGlite)', () => {
     });
   });
 
+  describe('the step sign-offs below the graph', () => {
+    // Steps 4–7 got their phase gates in S9/S10 but not their tools, so the agent
+    // side of the flow could not leave `outline`: `advance_course_design_phase` was
+    // refused for a confirmation no tool could record. These are the tools that
+    // close that hole, and they refuse on the same list the workbench button does.
+    interface OutlineRefs {
+      objectiveId: string;
+      nodeId: string;
+    }
+
+    /** Walk to `outline` **with a signed graph**, which is the gate into it. */
+    async function walkToOutline(id: string): Promise<OutlineRefs> {
+      await advanceTo('graph');
+      const graph = (await call(tools, 'get_course_design', { taskId: id })).details!.design as {
+        objectives: { id: string }[];
+      };
+      const objectiveId = graph.objectives[0]!.id;
+      await call(tools, 'create_learning_node', {
+        taskId: id,
+        name: 'SQL 注入原理',
+        nodeType: 'knowledge',
+      });
+      const withNode = (await call(tools, 'get_course_design', { taskId: id })).details!.design as {
+        nodes: { id: string }[];
+      };
+      const nodeId = withNode.nodes[0]!.id;
+      await call(tools, 'set_node_objectives', {
+        taskId: id,
+        nodeId,
+        objectives: [{ objectiveId }],
+      });
+      const knowledge = await call(tools, 'confirm_course_knowledge', { taskId: id });
+      expect(knowledge.isError).toBe(false);
+      const outline = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(outline.details!.designPhase).toBe('outline');
+      return { objectiveId, nodeId };
+    }
+
+    it('refuses to confirm an outline whose outcome nobody teaches', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId } = await walkToOutline(id);
+      await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 SQL 注入原理',
+        unitRole: 'lecture',
+      });
+      const refused = await call(tools, 'confirm_course_outline', { taskId: id });
+      expect(refused.isError).toBe(true);
+      // The refusal has to name what is missing, or the model retries the same call.
+      expect(refused.text).toContain('讲授');
+      expect(objectiveId).not.toBe('');
+    });
+
+    it('records the outline sign-off, which is what opens the teaching phase', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId } = await walkToOutline(id);
+      const unit = await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 SQL 注入原理',
+        unitRole: 'lecture',
+      });
+      await call(tools, 'create_unit_coverage', {
+        taskId: id,
+        unitId: unit.details!.unitId as string,
+        objectiveId,
+        coverageKind: 'teach',
+      });
+
+      const confirmed = await call(tools, 'confirm_course_outline', { taskId: id });
+      expect(confirmed.text).toContain('step 4');
+      expect(confirmed.isError).toBe(false);
+
+      // And the gate it exists for actually opens.
+      const advanced = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(advanced.isError).toBe(false);
+      expect(advanced.details!.designPhase).toBe('teaching');
+    });
+
+    it('refuses to confirm the lesson design while an item has none', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId } = await walkToOutline(id);
+      const unit = await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 SQL 注入原理',
+        unitRole: 'lecture',
+      });
+      await call(tools, 'create_unit_coverage', {
+        taskId: id,
+        unitId: unit.details!.unitId as string,
+        objectiveId,
+        coverageKind: 'teach',
+      });
+      await call(tools, 'confirm_course_outline', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id }); // → teaching
+
+      const refused = await call(tools, 'confirm_course_teaching', { taskId: id });
+      expect(refused.isError).toBe(true);
+      expect(refused.text).toContain('教学设计');
+    });
+
+    it('records the lesson sign-off, which is what opens the assessment phase', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId, nodeId } = await walkToOutline(id);
+      const unit = await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 SQL 注入原理',
+        unitRole: 'lecture',
+      });
+      const unitId = unit.details!.unitId as string;
+      await call(tools, 'create_unit_coverage', {
+        taskId: id,
+        unitId,
+        objectiveId,
+        coverageKind: 'teach',
+      });
+      await call(tools, 'confirm_course_outline', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id });
+      await call(tools, 'patch_curriculum_unit', {
+        unitId,
+        teachingDesign: { core: [nodeId], sequence: [nodeId] },
+        deckDesign: {
+          estPages: 1,
+          pages: [
+            {
+              order: 1,
+              title: '参数拼接就是注入点',
+              goal: '学员能指出注入点',
+              coreInfo: '参数被拼进 SQL 的地方就是注入点',
+              mode: 'explain',
+              teaches: [nodeId],
+            },
+          ],
+        },
+      });
+
+      const confirmed = await call(tools, 'confirm_course_teaching', { taskId: id });
+      expect(confirmed.text).toContain('step 5');
+      expect(confirmed.isError).toBe(false);
+      const advanced = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(advanced.details!.designPhase).toBe('assessment');
+    });
+
+    it('refuses to confirm an assessment whose evidence has no artifact', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId, nodeId } = await walkToOutline(id);
+      const unit = await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 注入实操',
+        unitRole: 'practice',
+      });
+      const unitId = unit.details!.unitId as string;
+      for (const coverageKind of ['teach', 'practice', 'assess'] as const) {
+        await call(tools, 'create_unit_coverage', {
+          taskId: id,
+          unitId,
+          objectiveId,
+          coverageKind,
+        });
+      }
+      await call(tools, 'confirm_course_outline', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id });
+      await call(tools, 'patch_curriculum_unit', {
+        unitId,
+        teachingDesign: { core: [nodeId] },
+      });
+      await call(tools, 'confirm_course_teaching', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id }); // → assessment
+
+      const refused = await call(tools, 'confirm_course_assessment', { taskId: id });
+      expect(refused.isError).toBe(true);
+      // Both promises are named: the lab evidence has no lab task, and the item
+      // that grades the outcome has nothing grading it.
+      expect(refused.text).toContain('实操');
+    });
+
+    it('records the assessment sign-off once both promises have their artifacts', async () => {
+      const id = await advanceTo('graph');
+      const { objectiveId, nodeId } = await walkToOutline(id);
+      // One quiz evidence and one lab evidence were declared by the walk, so both
+      // an artifact of each kind is needed.
+      const unit = await call(tools, 'create_curriculum_unit', {
+        taskId: id,
+        unitType: 'item',
+        title: '目一 注入实操',
+        unitRole: 'practice',
+      });
+      const unitId = unit.details!.unitId as string;
+      for (const coverageKind of ['teach', 'practice', 'assess'] as const) {
+        await call(tools, 'create_unit_coverage', {
+          taskId: id,
+          unitId,
+          objectiveId,
+          coverageKind,
+        });
+      }
+      await call(tools, 'confirm_course_outline', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id });
+      await call(tools, 'patch_curriculum_unit', {
+        unitId,
+        teachingDesign: { core: [nodeId] },
+      });
+      await call(tools, 'confirm_course_teaching', { taskId: id });
+      await call(tools, 'advance_course_design_phase', { taskId: id });
+
+      await call(tools, 'create_question', {
+        taskId: id,
+        unitId,
+        objectiveId,
+        questionType: 'single',
+        stem: '哪个参数最可能存在注入点？',
+        options: [
+          { key: 'A', text: 'id' },
+          { key: 'B', text: 'page' },
+        ],
+        answer: ['A'],
+      });
+      const lab = await call(tools, 'create_lab_task', {
+        taskId: id,
+        unitId,
+        objectiveId,
+        taskGoal: '读取 /flag',
+        dockerImage: 'web:lab',
+        verifyRules: [{ kind: 'flag', value: 'flag{ok}' }],
+      });
+      expect(lab.isError).toBe(false);
+
+      const confirmed = await call(tools, 'confirm_course_assessment', { taskId: id });
+      expect(confirmed.text).toContain('steps 7');
+      expect(confirmed.isError).toBe(false);
+
+      // The last gate a design has: review reads this sign-off plus a clean
+      // assessment layer.
+      const advanced = await call(tools, 'advance_course_design_phase', { taskId: id });
+      expect(advanced.details!.designPhase).toBe('review');
+    });
+  });
+
   describe('lab design integrity', () => {
     /** An item that drills the seeded outcome, in the outline phase. */
     async function drillItem(taskId: string) {
@@ -400,18 +645,34 @@ describe('outcome-first design tools (PGlite)', () => {
         objectiveId,
         coverageKind: 'teach',
       });
-      // Questions and labs belong to the `assessment` phase, which is two
-      // gates past `outline`: teaching first, then assessment. Both advances
-      // are here because a lab written before the teaching phase closes is
-      // refused — that refusal is the phase lock, and this test is about the
-      // verify-rules rule underneath it.
+      // `outline → teaching` reads the outline's own sign-off, so the walk has to
+      // record it — this is the gate that stopped the helper at `outline` from the
+      // day the outline sign-off landed, and the reason those two lab tests were
+      // red in a file nobody's regression command ran.
+      const outline = await call(tools, 'confirm_course_outline', { taskId });
+      expect(outline.isError).toBe(false);
       expect(
         (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
       ).toBe('teaching');
+      // Questions and labs belong to the `assessment` phase, and `teaching →
+      // assessment` reads the lesson's sign-off plus a design that says what the
+      // item teaches. Both are written here because a lab authored against an
+      // undesigned lesson is exactly what that gate refuses.
+      const unitId = unit.details!.unitId as string;
+      const nodesNow = (await call(tools, 'get_course_design', { taskId })).details!.design as {
+        nodes: { id: string }[];
+      };
+      await call(tools, 'patch_curriculum_unit', {
+        unitId,
+        unitRole: 'practice',
+        teachingDesign: { core: [nodesNow.nodes[0]!.id] },
+      });
+      const teaching = await call(tools, 'confirm_course_teaching', { taskId });
+      expect(teaching.isError).toBe(false);
       expect(
         (await call(tools, 'advance_course_design_phase', { taskId })).details!.designPhase,
       ).toBe('assessment');
-      return { unitId: unit.details!.unitId as string, objectiveId };
+      return { unitId, objectiveId };
     }
 
     it('refuses a lab with no verify rules, because nothing could be graded', async () => {

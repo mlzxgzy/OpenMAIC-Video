@@ -1459,6 +1459,12 @@ describe('design routes (PGlite)', () => {
         timeLimitSec: 900,
         verifyRules: [{ kind: 'flag', value: 'flag{ok}' }],
       });
+      // Step 7's sign-off, the sixth of the same kind: the questions and the lab
+      // tasks are what `assessment → review` is about, so the walk agrees to them
+      // before leaving the phase. Without it the gate refuses — and it is right
+      // to: entering review on top of an assessment nobody read is the hole this
+      // confirmation exists to close.
+      await confirmCurriculumDesignStep(pool, OWNER, task.id, 'assessment', 'user');
       await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → review
       return { objectiveId, teach, practise, assess };
     }

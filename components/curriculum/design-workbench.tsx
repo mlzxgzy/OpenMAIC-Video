@@ -70,7 +70,14 @@ import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-s
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
 import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-signoff';
 import { DesignTeachingSignOff } from '@/components/curriculum/design-teaching-signoff';
+import { DesignAssessmentSignOff } from '@/components/curriculum/design-assessment-signoff';
 import { ASSIGNED_NODE_BUCKETS, TEACHING_DEPTH_LABELS } from '@/lib/curriculum/design-teaching';
+import {
+  ASSESSMENT_MODE_LABELS,
+  DIFFICULTY_LABELS,
+  QUESTION_TYPE_LABELS,
+  describeVerifyRule,
+} from '@/lib/curriculum/design-assessment';
 import {
   CreateForm,
   InlineEdit,
@@ -1021,7 +1028,119 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         </CardContent>
       </Card>
 
-      {/* ── Assessment ───────────────────────────────────────────────────────── */}
+      {/* ── Assessment: the AI-written artifacts and their sign-off ─────────── */}
+      <Card>
+        <CardHeader>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <CardTitle className="text-base">题目与实操</CardTitle>
+              <CardDescription>
+                每个承诺要被考核的目标，都要有题目或实操接着，并且挂在承担它的目上——挂错条目的产物看起来完全正常，但在学员的考核闭环里读不到它
+              </CardDescription>
+            </div>
+            {/* Same arrangement as the cards above: the artifacts below and this
+                sign-off are two faces of one step. */}
+            <DesignAssessmentSignOff
+              taskId={snapshot.task.id}
+              questions={snapshot.questions}
+              labTasks={snapshot.labTasks}
+              confirmation={
+                snapshot.confirmations.find((entry) => entry.step === 'assessment') ?? null
+              }
+              run={run}
+              busy={busy}
+              onRefresh={async () => {
+                await load();
+                await onChanged();
+              }}
+            />
+          </div>
+        </CardHeader>
+        <CardContent className="flex flex-col gap-3">
+          {items.length === 0 ? (
+            <EmptySection phase={phase} kind="units">
+              还没有条目。题目和实操是逐条挂上去的，先把大纲里的章、节、目排出来。
+            </EmptySection>
+          ) : (
+            <ul className="flex flex-col gap-3">
+              {items.map((unit) => {
+                const questions = (snapshot.questions ?? []).filter(
+                  (question) => question.unitId === unit.id,
+                );
+                const labs = (snapshot.labTasks ?? []).filter((lab) => lab.unitId === unit.id);
+                return (
+                  <li key={unit.id} className="flex flex-col gap-1 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <Badge variant="outline" className="px-1 py-0 text-[10px]">
+                        {roleLabel(unit.unitRole)}
+                      </Badge>
+                      <span className="font-medium">{unit.title}</span>
+                      <span className="text-muted-foreground">
+                        {questions.length} 题、{labs.length} 个实操
+                      </span>
+                    </div>
+                    {questions.length === 0 && labs.length === 0 ? (
+                      <div className="pl-4 text-amber-700 dark:text-amber-300">
+                        还没有题目和实操
+                      </div>
+                    ) : (
+                      <ul className="text-muted-foreground flex flex-col gap-0.5 pl-4">
+                        {questions.map((question) => (
+                          <li key={question.id}>
+                            <Badge variant="outline" className="mr-1 px-1 py-0 text-[10px]">
+                              {QUESTION_TYPE_LABELS[question.questionType]}
+                            </Badge>
+                            {question.stem}
+                            {`｜答案 ${question.answer.join('/') || '（空）'}｜${DIFFICULTY_LABELS[question.difficulty]}｜${question.score} 分`}
+                          </li>
+                        ))}
+                        {labs.map((lab) => (
+                          <li key={lab.id}>
+                            <Badge
+                              variant={lab.assessmentMode === 'exam' ? 'default' : 'secondary'}
+                              className="mr-1 px-1 py-0 text-[10px]"
+                            >
+                              {ASSESSMENT_MODE_LABELS[lab.assessmentMode]}
+                            </Badge>
+                            {lab.taskGoal}
+                            {`｜镜像 ${lab.dockerImage}｜`}
+                            {lab.verifyRules.length === 0
+                              ? '没有验证规则：这样判不了分'
+                              : lab.verifyRules.map(describeVerifyRule).join('；')}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {/* An artifact whose `unitId` is not an item would otherwise vanish from
+              the one screen where the author is looking for it — and "a question
+              hung on a chapter" is exactly the defect this step refuses to write
+              and the audit reports. It stays visible here instead. */}
+          {(() => {
+            const itemIds = new Set(items.map((unit) => unit.id));
+            const adrift = [
+              ...(snapshot.questions ?? [])
+                .filter((question) => !itemIds.has(question.unitId))
+                .map((question) => `题目「${question.stem}」`),
+              ...(snapshot.labTasks ?? [])
+                .filter((lab) => !itemIds.has(lab.unitId))
+                .map((lab) => `实操「${lab.taskGoal}」`),
+            ];
+            if (adrift.length === 0) return null;
+            return (
+              <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                挂错位置的产物（不在任何目上，考核闭环里读不到）：{adrift.join('、')}
+              </p>
+            );
+          })()}
+        </CardContent>
+      </Card>
+
+      {/* ── The manual editors for the same two tables ──────────────────────── */}
       <Card>
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">

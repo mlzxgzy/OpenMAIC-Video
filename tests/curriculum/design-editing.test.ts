@@ -262,6 +262,27 @@ describe('design workbench authoring gates', () => {
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → assessment
     if (phase === 'assessment') return task.id;
 
+    // Step 7: an outcome the outline promised to *grade* needs something that
+    // grades it — a coverage row alone is a promise with nothing behind it — and
+    // the lab evidence declared in step 2 needs a lab task. Then the assessment
+    // itself is signed, which is what `assessment → review` reads.
+    await createCurriculumUnitCoverage(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: objective.id,
+      coverageKind: 'assess',
+    });
+    await createCurriculumLabTask(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: objective.id,
+      assessmentMode: 'exam',
+      taskGoal: '读取 /flag',
+      dockerImage: 'openmaic/ctf-web:latest',
+      hintPolicy: 'forbidden',
+      allowRetry: false,
+      timeLimitSec: 900,
+      verifyRules: [{ kind: 'flag', value: 'flag{ok}' }],
+    });
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'assessment', 'user');
     await advanceCurriculumTaskPhase(pool, OWNER, task.id); // → review
     return task.id;
   }

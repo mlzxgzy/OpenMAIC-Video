@@ -107,6 +107,22 @@ export function teachingAdvisoriesOfSnapshot(
     );
 }
 
+/**
+ * Everything that blocks signing the teaching design, in the words the card shows.
+ *
+ * The same two sources and the same reason as {@link file://./outline-state.ts}'s
+ * `outlineBlockers`, and shared for the same reason: the `confirm_course_teaching`
+ * tool refuses on exactly this list.
+ */
+export function teachingBlockers(snapshot: CurriculumDesignSnapshot): string[] {
+  return [
+    ...new Set([
+      ...teachingGapsOfSnapshot(snapshot).map((gap) => gap.text),
+      ...teachingAuditFindings(snapshot).map((finding) => finding.message),
+    ]),
+  ];
+}
+
 export async function teachingState(
   ctx: DesignContext,
   taskId: string,

@@ -98,7 +98,11 @@ before its foundation is a real defect that a cycle check cannot see.
    `assess`. Read the outcome list as you go — the point at which you cannot
    say "how is this examined" is the point where the course design is not done.
 5. Add `create_unit_dependency` edges for the item order.
-6. `advance_course_design_phase` when every outcome is taught somewhere.
+6. `confirm_course_outline` once the user plainly agrees to the outline, then
+   `advance_course_design_phase`. A complete outline is not an approved one: the
+   phase machine refuses to leave `outline` until the sign-off is recorded, and the
+   tool refuses while the step still has gaps (an item with no coverage, an outcome
+   nobody teaches, a chapter carrying content).
 
 ## A worked example of the decision
 

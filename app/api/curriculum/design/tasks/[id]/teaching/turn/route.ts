@@ -46,11 +46,7 @@ import {
   updateCurriculumUnit,
 } from '@/lib/server/curriculum/design-store';
 import { parseConversationTurnRequest } from '@/lib/server/curriculum/design-validation';
-import {
-  teachingAuditFindings,
-  teachingGapsOfSnapshot,
-  teachingState,
-} from '@/lib/server/curriculum/teaching-state';
+import { teachingBlockers, teachingState } from '@/lib/server/curriculum/teaching-state';
 import {
   TeachingAnswerError,
   draftCourseTeaching,
@@ -137,10 +133,9 @@ export async function POST(req: NextRequest, { params }: Params) {
     // The gaps the model is asked to close: the step's own, plus the audit's
     // teaching findings, which is where "a lecture item has no storyboard" shows
     // up from the other side.
-    const promptGaps = [
-      ...teachingGapsOfSnapshot(before),
-      ...teachingAuditFindings(before).map((finding) => ({ text: finding.message })),
-    ];
+    // One list, shared with the confirm route and the agent tool: the model is told
+    // to close exactly what the gate will check.
+    const promptGaps = teachingBlockers(before).map((text) => ({ text }));
 
     let turn;
     try {
@@ -192,10 +187,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       // transaction, so the confirmation can never cover a different document
       // than the one on disk.
       const after = await getCurriculumDesignSnapshot(tx, ctx.ownerId, task.id);
-      const blockers = [
-        ...teachingGapsOfSnapshot(after).map((gap) => gap.text),
-        ...teachingAuditFindings(after).map((finding) => finding.message),
-      ];
+      const blockers = teachingBlockers(after);
       const itemCount = after.units.filter((unit) => unit.unitType === 'item').length;
       // The verdict is re-decided against the document that was actually written,
       // in the same transaction — same rule as step 5. A confirmation recorded

@@ -1074,6 +1074,106 @@ async function withdrawTeachingSignOffIfChanged(
   await withdrawTeachingSignOff(queryable, ownerId, updated.task_id);
 }
 
+/**
+ * Withdraw the `assessment` sign-off because the questions or the lab tasks changed.
+ *
+ * Step 7's version of the rule every step above applies: the confirmation signs
+ * *that* set of questions and lab tasks, so an edit after the author read them
+ * back has to be read again. It is a separate function for the reason spelled out
+ * on {@link withdrawKnowledgeSignOff} — the seven signs cover seven different
+ * documents, and a shared helper with a `step` parameter fails by quietly
+ * unlocking a confirmed step.
+ *
+ * What it fixes: none of the six question/lab writers used to withdraw anything.
+ * An author could confirm the assessment — "the questions and labs are final" —
+ * and the model could then add ten questions and rewrite the grading rules behind
+ * the confirmation, with the phase machine still reporting `assessment` as signed.
+ * That is the same hole steps 2, 3, 4, 5 and 6 each had in turn.
+ */
+async function withdrawAssessmentSignOff(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+): Promise<void> {
+  await withdrawCurriculumDesignStep(queryable, ownerId, taskId, 'assessment');
+}
+
+/**
+ * Withdraw only when the write produced a different row.
+ *
+ * Same reasoning as {@link withdrawOutlineSignOffIfChanged}: a step-7 conversation
+ * re-sends the questions it did not change (the model rewrites a stem to fix one
+ * word and repeats the other nineteen), and a badge that clears on every message
+ * trains the author to ignore it. **Every field the step owns is compared** —
+ * `evidence_id` and `sort_order` included, because this step derives them and a
+ * change to either is a change to the document the author signed.
+ */
+async function withdrawAssessmentSignOffIfChangedQuestions(
+  queryable: Queryable,
+  ownerId: string,
+  updated: QuestionRow,
+  current: QuestionRow,
+): Promise<void> {
+  const fields: (keyof QuestionRow)[] = [
+    'unit_id',
+    'objective_id',
+    'evidence_id',
+    'question_type',
+    'stem',
+    'options',
+    'answer',
+    'explanation',
+    'distractors',
+    'difficulty',
+    'bloom_level',
+    'score',
+    'sort_order',
+  ];
+  const same = fields.every(
+    (field) => JSON.stringify(updated[field] ?? null) === JSON.stringify(current[field] ?? null),
+  );
+  if (same) return;
+  await withdrawAssessmentSignOff(queryable, ownerId, updated.task_id);
+}
+
+/** The lab-task twin of {@link withdrawAssessmentSignOffIfChangedQuestions}. */
+async function withdrawAssessmentSignOffIfChangedLabTasks(
+  queryable: Queryable,
+  ownerId: string,
+  updated: LabTaskRow,
+  current: LabTaskRow,
+): Promise<void> {
+  const fields: (keyof LabTaskRow)[] = [
+    'unit_id',
+    'objective_id',
+    'evidence_id',
+    'assessment_mode',
+    'task_goal',
+    'brief',
+    'expected_result',
+    'docker_image',
+    'container_config',
+    'init_state',
+    'reset_policy',
+    'reference_solution',
+    'verify_rules',
+    'key_behaviors',
+    'final_state_rule',
+    'score_rules',
+    'scoring_mode',
+    'time_limit_sec',
+    'hint_policy',
+    'allow_retry',
+    'hint_ladder',
+    'sort_order',
+  ];
+  const same = fields.every(
+    (field) => JSON.stringify(updated[field] ?? null) === JSON.stringify(current[field] ?? null),
+  );
+  if (same) return;
+  await withdrawAssessmentSignOff(queryable, ownerId, updated.task_id);
+}
+
 async function readObjectiveRow(
   queryable: Queryable,
   ownerId: string,
@@ -1580,6 +1680,40 @@ export async function phaseCompletionGaps(
     );
     if (!teachingConfirmation) {
       gaps.push('授课脚本与分镜还没有确认（确认后才会进入评价设计阶段）');
+    }
+  }
+
+  // Leaving the assessment phase means every promise the design made about being
+  // graded has something behind it. That is exactly the audit's `assess_covers`
+  // layer, so the gate reads those findings rather than re-deriving them: the
+  // questions/labs hanging where nothing promised them, the promises with nothing
+  // hanging there, the exam delivered as a drill, the lab that cannot be graded.
+  //
+  // Read from the audit rather than a local query for the reason step 6 gives:
+  // a gate that decides this itself can disagree with the card that displays it,
+  // and the disagreement is invisible — the strip says "可以推进" while the export
+  // gate refuses, or the other way round.
+  if (next === 'review') {
+    const snapshot = await getCurriculumDesignSnapshot(queryable, ownerId, taskId);
+    const findings = auditCurriculumDesign(snapshot);
+    const blocking = findings.filter(
+      (finding) =>
+        (finding.layer === 'assess_covers' && finding.severity === 'error') ||
+        // A question that no outcome claims is a `traceable` finding, not an
+        // assessment-layer one, and it still means this phase's document is not
+        // finished — an unclaimed question is graded against nothing.
+        finding.rule === 'drill_no_objective',
+    );
+    for (const finding of blocking) gaps.push(finding.message);
+
+    const assessmentConfirmation = await getCurriculumDesignStepConfirmation(
+      queryable,
+      ownerId,
+      taskId,
+      'assessment',
+    );
+    if (!assessmentConfirmation) {
+      gaps.push('题目与实操还没有确认（确认后才会进入审核阶段）');
     }
   }
 
@@ -2820,6 +2954,45 @@ export async function deleteCurriculumUnitDependency(
 
 // ── Question CRUD ───────────────────────────────────────────────────────────
 
+/**
+ * The one place that decides whether a question can be marked at all.
+ *
+ * Shared by the create and the update path, and that sharing is the point: the
+ * update path used to check nothing, so a PATCH that replaced the options of a
+ * question whose answer was `['C']` stored a question whose correct choice does
+ * not exist. Nothing failed — the row was written, the audit was happy (it has an
+ * answer, it has options), and the only symptom was that grading marked it wrong
+ * forever, which is indistinguishable from "the learner failed".
+ *
+ * The narrow-question rule is here for the same reason: a `single` question with
+ * two correct choices cannot be answered correctly, and a form that lets an author
+ * build one is a form that produces ungradable content.
+ */
+function assertQuestionAnswerable(
+  questionType: CurriculumQuestionType,
+  options: readonly { key: string }[],
+  answer: readonly string[],
+): void {
+  if (questionType !== 'true_false' && options.length < 2) {
+    throw new CurriculumDesignValidationError('选择题至少需要两个选项');
+  }
+  if (answer.length === 0) {
+    throw new CurriculumDesignValidationError('题目需要答案');
+  }
+  if (options.length > 0) {
+    const keys = new Set(options.map((option) => option.key));
+    const stray = answer.filter((key) => !keys.has(key));
+    if (stray.length > 0) {
+      throw new CurriculumDesignValidationError(`答案引用了不存在的选项：${stray.join('、')}`);
+    }
+  }
+  if (questionType !== 'multiple' && answer.length > 1) {
+    throw new CurriculumDesignValidationError(
+      `${questionType === 'single' ? '单选题' : '判断题'}只能有一个答案，这里给了 ${answer.length} 个`,
+    );
+  }
+}
+
 export async function createCurriculumQuestion(
   queryable: Queryable,
   ownerId: string,
@@ -2838,20 +3011,8 @@ export async function createCurriculumQuestion(
   // A question with nothing to select from is not a question; the answer must
   // also be a subset of the options, or it can never be marked.
   const options = input.options ?? [];
-  if (input.questionType !== 'true_false' && options.length < 2) {
-    throw new CurriculumDesignValidationError('选择题至少需要两个选项');
-  }
   const answer = input.answer ?? [];
-  if (answer.length === 0) {
-    throw new CurriculumDesignValidationError('题目需要答案');
-  }
-  if (options.length > 0) {
-    const keys = new Set(options.map((option) => option.key));
-    const stray = answer.filter((key) => !keys.has(key));
-    if (stray.length > 0) {
-      throw new CurriculumDesignValidationError(`答案引用了不存在的选项：${stray.join('、')}`);
-    }
-  }
+  assertQuestionAnswerable(input.questionType, options, answer);
 
   const result = await queryable.query<QuestionRow>(
     `INSERT INTO curriculum_question
@@ -2880,6 +3041,7 @@ export async function createCurriculumQuestion(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('题目创建失败');
+  await withdrawAssessmentSignOff(queryable, ownerId, taskId);
   return mapQuestion(row);
 }
 
@@ -2895,6 +3057,17 @@ export async function updateCurriculumQuestion(
   );
   const row = current.rows[0];
   if (!row) throw new CurriculumDesignNotFoundError('题目不存在');
+  /**
+   * Validated against the **resulting** row, not the patch. A one-field PATCH can
+   * break the pair — replacing the options while the answer stays `['C']` is the
+   * same defect as creating that question, and checking only the fields present in
+   * the patch would let it through to a row nobody can grade.
+   */
+  assertQuestionAnswerable(
+    patch.questionType ?? (row.question_type as CurriculumQuestionType),
+    patch.options ?? jsonValue<{ key: string }[]>(row.options, []),
+    patch.answer ?? stringList(row.answer),
+  );
   const result = await queryable.query<QuestionRow>(
     `UPDATE curriculum_question
         SET unit_id = $3, objective_id = $4, evidence_id = $5, question_type = $6, stem = $7,
@@ -2926,6 +3099,7 @@ export async function updateCurriculumQuestion(
   );
   const updated = result.rows[0];
   if (!updated) throw new CurriculumDesignNotFoundError('题目不存在');
+  await withdrawAssessmentSignOffIfChangedQuestions(queryable, ownerId, updated, row);
   return mapQuestion(updated);
 }
 
@@ -2934,11 +3108,13 @@ export async function deleteCurriculumQuestion(
   ownerId: string,
   questionId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_question WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_question WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, questionId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('题目不存在');
+  const removed = result.rows[0];
+  if (!removed) throw new CurriculumDesignNotFoundError('题目不存在');
+  await withdrawAssessmentSignOff(queryable, ownerId, removed.task_id);
 }
 
 // ── Lab task CRUD ───────────────────────────────────────────────────────────
@@ -3023,6 +3199,7 @@ export async function createCurriculumLabTask(
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumDesignValidationError('实操任务创建失败');
+  await withdrawAssessmentSignOff(queryable, ownerId, taskId);
   return mapLabTask(row);
 }
 
@@ -3118,6 +3295,7 @@ export async function updateCurriculumLabTask(
   );
   const updated = result.rows[0];
   if (!updated) throw new CurriculumDesignNotFoundError('实操任务不存在');
+  await withdrawAssessmentSignOffIfChangedLabTasks(queryable, ownerId, updated, row);
   return mapLabTask(updated);
 }
 
@@ -3126,11 +3304,13 @@ export async function deleteCurriculumLabTask(
   ownerId: string,
   labTaskId: string,
 ): Promise<void> {
-  const result = await queryable.query<{ id: string }>(
-    'DELETE FROM curriculum_lab_task WHERE owner_id = $1 AND id = $2 RETURNING id',
+  const result = await queryable.query<{ id: string; task_id: string }>(
+    'DELETE FROM curriculum_lab_task WHERE owner_id = $1 AND id = $2 RETURNING id, task_id',
     [ownerId, labTaskId],
   );
-  if (!result.rows[0]) throw new CurriculumDesignNotFoundError('实操任务不存在');
+  const removed = result.rows[0];
+  if (!removed) throw new CurriculumDesignNotFoundError('实操任务不存在');
+  await withdrawAssessmentSignOff(queryable, ownerId, removed.task_id);
 }
 
 // ── Audit findings ──────────────────────────────────────────────────────────

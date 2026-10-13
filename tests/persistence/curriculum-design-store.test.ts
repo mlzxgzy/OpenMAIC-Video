@@ -21,6 +21,8 @@ import {
   createCurriculumLearningNode,
   createCurriculumObjective,
   createCurriculumQuestion,
+  deleteCurriculumQuestion,
+  updateCurriculumQuestion,
   createCurriculumTask,
   createCurriculumUnit,
   createCurriculumUnitCoverage,
@@ -587,6 +589,99 @@ describe('reverse-design store (PGlite)', () => {
         answer: ['C'],
       }),
     ).rejects.toBeInstanceOf(CurriculumDesignValidationError);
+  });
+
+  it('refuses an update that would break the option/answer pair', async () => {
+    await advanceTo('assessment');
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    const unit = await createCurriculumUnit(pool, OWNER, task.id, {
+      unitType: 'item',
+      title: '1.2 SQL 注入练习',
+      unitRole: 'practice',
+    });
+    const question = await createCurriculumQuestion(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: snapshot.objectives[0].id,
+      questionType: 'single',
+      stem: '下列哪个参数最可能存在注入点？',
+      options: [
+        { key: 'A', text: 'id' },
+        { key: 'B', text: 'page' },
+      ],
+      answer: ['A'],
+    });
+
+    // The create path has always checked this pair; the update path checked
+    // nothing, so a PATCH could replace the options and leave the answer pointing
+    // at a choice that no longer exists. Nothing failed — the row was written, the
+    // audit was satisfied (it has options, it has an answer) — and the only symptom
+    // was that grading marked the question wrong forever, which is
+    // indistinguishable from "the learner failed".
+    await expect(
+      updateCurriculumQuestion(pool, OWNER, question.id, {
+        options: [
+          { key: 'C', text: 'ua' },
+          { key: 'D', text: 'referer' },
+        ],
+      }),
+    ).rejects.toBeInstanceOf(CurriculumDesignValidationError);
+
+    // A patch that keeps the pair consistent still goes through.
+    const updated = await updateCurriculumQuestion(pool, OWNER, question.id, {
+      stem: '哪一个参数会被拼进 SQL？',
+    });
+    expect(updated.stem).toBe('哪一个参数会被拼进 SQL？');
+    expect(updated.answer).toEqual(['A']);
+  });
+
+  it('withdraws the assessment sign-off when a question really changes, and not on a restatement', async () => {
+    await advanceTo('assessment');
+    const snapshot = await getCurriculumDesignSnapshot(pool, OWNER, task.id);
+    const unit = await createCurriculumUnit(pool, OWNER, task.id, {
+      unitType: 'item',
+      title: '1.2 SQL 注入练习',
+      unitRole: 'practice',
+    });
+    const question = await createCurriculumQuestion(pool, OWNER, task.id, {
+      unitId: unit.id,
+      objectiveId: snapshot.objectives[0].id,
+      questionType: 'single',
+      stem: '下列哪个参数最可能存在注入点？',
+      options: [
+        { key: 'A', text: 'id' },
+        { key: 'B', text: 'page' },
+      ],
+      answer: ['A'],
+    });
+
+    // Creating a question already opened the step again, which is the point: the
+    // confirmation signs *that* set of questions.
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'assessment', 'user');
+    await expect(
+      getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'assessment'),
+    ).resolves.not.toBeNull();
+
+    await updateCurriculumQuestion(pool, OWNER, question.id, {
+      stem: '哪一个参数会被拼进 SQL？',
+    });
+    await expect(
+      getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'assessment'),
+    ).resolves.toBeNull();
+
+    await confirmCurriculumDesignStep(pool, OWNER, task.id, 'assessment', 'user');
+    // Re-sending the same values changes nothing, so the sign-off has to survive:
+    // a badge that flickers on every message trains the author to ignore it.
+    await updateCurriculumQuestion(pool, OWNER, question.id, {
+      stem: '哪一个参数会被拼进 SQL？',
+    });
+    await expect(
+      getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'assessment'),
+    ).resolves.not.toBeNull();
+
+    await deleteCurriculumQuestion(pool, OWNER, question.id);
+    await expect(
+      getCurriculumDesignStepConfirmation(pool, OWNER, task.id, 'assessment'),
+    ).resolves.toBeNull();
   });
 
   it('refuses a lab with no verification rule, and keeps the reference solution out of grading', async () => {
