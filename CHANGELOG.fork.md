@@ -28,6 +28,55 @@
 
 ### Added
 
+- **第七步「题目与实操」：题目与实操是挂在条目上的，而"挂在哪一条"是一个声明**。
+  工作台「题目与实操」卡片里点「用 AI 出题与实操」即可对话；模型直接写
+  `curriculum_question` 与 `curriculum_lab_task`。这一步要解决的问题不是"能不能出一道题"，
+  而是**一道挂错条目的题在界面上完全正常**：有题干、有选项、有答案、有关系到的目标，
+  审核的每一条题目规则都满意——只有覆盖闭环里没有它，因为讲这个目标的条目从头到尾
+  没出现过它。
+
+  三条判定合成一次实现（`assessmentGaps`），提示词、卡片、阶段门禁、审核四处共用：
+
+  1. **产物必须挂在承诺了这件事的目上。** 挂在章/节上（章只归类，不讲课也不考试）、
+     挂在没承担该目标的条目上、实操挂在只讲课的条目上，一律拒收并说明；`itemRef` 可以
+     省略，只在**唯一**候选时推导，多个候选时要求指名——"考在哪一条"是作者的决定。
+  2. **"考核在这里"必须兑现。** 一个条目写了 `assess` 覆盖却没有任何题目或实操挂在它
+     身上，那句承诺是空的。**只查 `assess`**：`practice` 承诺由生成交付（大纲提示词写明
+     练习条目生成幻灯片、测验与互动流程），把它也算成"必须有实操"会把正常的练习条目
+     全报成缺口。
+  3. **考试得是考试。** 证据写着 `exam`、交付它的实操却是 `practice`（有提示、可重做、
+     不限时），学员拿到的是练习而成绩单上写着考试。实操的 `exam` 模式强制
+     `hintPolicy: forbidden` + `allowRetry: false`（这两项只有一个合法取值），
+     而**时限没有合理默认值，缺了就拒收**——替作者编一个"考试多长"不是这一步该做的决定。
+
+  三个字段由规则层推导，模型写不了：`evidenceId`（第二步签过的证据，这一步不新增也不
+  搬动；目标下恰好一条对口证据时自动绑定，多条时不猜只说）、`sortOrder`（题号是文档的
+  属性，按条目已有最大题号往后排）、以及每个产物的落点。验证规则只收 `{kind, target}`，
+  字段映射复用 S5 的 `labVerifyRuleFrom`——"存得下去、永远匹配不上"这个坑不再交给模型踩。
+
+  产物是**独立的行**（同第三步的依赖边，不是第五步的覆盖表）：`ref` 指名改哪一道、
+  只写它提到的字段（没提到 = 保持，`[]`/`null` = 清空），删除按 id 指名，没提到的
+  一律不动。store 会拒的每一条都在规则层先拒——store 抛错回滚**整轮**，一道答案引用了
+  不存在选项的题目不该带走同轮另外九道。
+
+  - 规则层 `lib/curriculum/design-assessment.ts`、AI 步骤 `assessment-step.ts`、
+    状态 `assessment-state.ts`、提示词 `course-assessment`、
+    路由 `assessment/turn`（对话）与 `assessment`（状态/确认/撤回）、
+    界面 `design-assessment-dialog.tsx` / `design-assessment-signoff.tsx` +
+    工作台一张卡片。
+  - 审核新增四条规则（`question_off_item` / `lab_off_item` /
+    `coverage_without_artifact` / `exam_evidence_practice_lab`），全部读同一份判定；
+    `assessment → review` 门禁读审核的 `assess_covers` 层加 `drill_no_objective`
+    加这一步的签收。
+  - **补上第四到第七步缺失的 agent 签收工具**：`confirm_course_outline` /
+    `confirm_course_teaching` / `confirm_course_assessment`。第四步（大纲）从 S9 起
+    就有门禁，第五、六步从 S10 起也有，但**只有第一到第三步有对应的工具**——于是
+    agent 侧的流程从 S9 落地那天起就再也离不开 `outline`：
+    `advance_course_design_phase` 被拒绝，理由是一个没有任何工具能记录的签收。
+    三个新工具与工作台按钮读**同一个** `*Blockers` 函数（顺带把它从两个路由里提到
+    状态模块，路由改成调用），所以按钮与模型不可能对"这一步做完了没有"各说各话。
+    发现它的过程见下方 Fixed。
+
 - **课程设计第一步「课程方向」改成 AI 对话 + 用户确认**：新建课程现在可以从
   「用 AI 新建课程」开始聊——模型把七个槽位（`title` / `audience` /
   `learnerLevel` / `applicationScene` / `problemStatement` / `durationHours` /
@@ -303,6 +352,28 @@
   - 未做浏览器端驱动验证（同前两步）。
 
 ### Fixed
+
+- **第四到第七步的签收门禁有，签收工具没有——agent 侧的课程设计流程从 S9 起就卡在
+  `outline`**：`advance_course_design_phase` 拒绝离开大纲阶段，理由是"大纲还没有确认"，
+  而 `CURRICULUM_DESIGN_ALLOWLIST` 里只有 `confirm_course_direction` /
+  `_outcomes` / `_knowledge` 三个签收工具。第一、二、三步各拿到门禁时都配了工具，
+  第四、五、六步只拿到了门禁。**发现方式是这一步的宽回归**：`tests/agent-runtime/
+  design-tools.test.ts` 的两个 lab 测试自 S9 起一直是红的（它们的 `drillItem` 助手
+  走不到 `teaching`），而此前几轮的"宽回归"实际只跑了 51 个文件的窄集，看不到它们——
+  这正是前两步各修过一次的同一类问题（验收命令覆盖不到的地方，红多久都没人知道）。
+  现在补上三个工具、允许清单、阶段映射与提示词指引，并给 `outline-designer` 技能补上
+  "完整的大纲不是已批准的大纲"。`design-tools.test.ts` 现在能从工具侧一路走到
+  `review`（含七个签收与六道门禁），注册表计数 24 → 27。
+
+- **`updateCurriculumQuestion` 什么都不校验**：创建路径一直检查"答案必须在选项里"，
+  更新路径一个都不查，所以一次 PATCH 可以换掉选项却让答案仍指向 `['C']`——行写进去了，
+  审核也满意（有选项、有答案），唯一症状是判分永远判它错，而这与"学员没做对"无法区分。
+  创建与更新现在共用同一个 `assertQuestionAnswerable`，并补上"单选/判断题只能有一个答案"。
+
+- **题目与实操的六个写入口此前一个都不撤回 `assessment` 签收**：确认"题目与实操定稿"
+  之后，模型还能在确认背后加十道题、改掉判分规则，而阶段机器仍然报告这一步是已签收的。
+  现在六个入口都撤回，并区分重述——`updateCurriculumQuestion` /
+  `updateCurriculumLabTask` 逐字段比较，重发同样内容不撤签收。
 
 - **大纲写入此前一个都不撤回签收**：`createCurriculumUnit` / `updateCurriculumUnit` /
   `deleteCurriculumUnit` / `createCurriculumUnitCoverage` / `setCurriculumUnitCoverage` /
