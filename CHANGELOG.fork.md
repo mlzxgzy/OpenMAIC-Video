@@ -28,6 +28,66 @@
 
 ### Added
 
+- **第八步「审核与导出」：审核是推导出来的，而"接受一处缺陷"必须是一份决定**。
+  导出闸门（`assert_course_design_exportable`）与生成入口早就在了，`open`/`resolved`/
+  `waived` 三种状态也早就在数据库里了——但**没有任何东西读 `waived`**，而且每次审核都会
+  把同一个缺陷当成新行重写一遍，于是决定既没有落点、也没有读者：
+
+  1. **决定没有地址。** 审核是纯函数，每次跑都重新推导 findings 并写新行
+     （`replaceCurriculumAuditFindings` 删掉全部 `open` 行再插入）。作者接受的那条行留在
+     原地，而同一个缺陷以新 id 重新变成 `open`：**同一个问题在库里有两行，一行已接受、
+     一行待处理**，接受的那行永远匹配不上任何东西。
+  2. **终态没有诚实的出口。** 门禁只重算快照，所以"我接受这个缺口"这个唯一的决定
+     对导出**完全无效**——一门课只要有作者明知且愿意接受的缺陷，就永远不能生成，
+     而界面上「接受」按钮是个只会改徽章的装饰。
+  3. **同一个事实被算了两遍。** `exportable = quality.exportable && verdict.complete`：
+     覆盖规则（`objective_untaught` / `-unpracticed` / `-uncovered`）已经把"哪个目标
+     没被教/练/考"报成 error，覆盖统计又独立算了一遍。第二道否决唯一能带来的东西，
+     就是**和第一道吵架**：某天闸门拒绝一门课，而解释那一行写着"13/13 个目标已经被教、
+     被练、被考"。它真正拦住的其实是"这门课还没有任何学习目标"——那不是缺陷，
+     是**前提**，没有东西可以接受。
+
+  这一步的改动：
+
+  - **finding 有了地址**（`fingerprint` = 规则 + 它涉及的行，排序去重；**不含 message**，
+    措辞会改，地址不能跟着变）。migration 14 加列、回填、按指纹去重（把决定留下）、
+    建 `(owner, task, fingerprint)` 唯一索引——"一个缺陷一行"从约定变成数据库保证。
+  - **审核变成对齐而不是替换**（`syncCurriculumAuditFindings`）：按指纹 upsert，
+    **不动 `status`**；推导不出来的缺陷连行一起退休（接受是针对那份设计里的那个缺陷，
+    缺陷真修好时这次接受就花掉了；再犯就是新的、待处理的）。
+  - **门禁读决定**：`evaluateCurriculumDesign` 把 findings 分成 `blocking`（待处理的
+    error）与 `accepted`（已接受，附决定行），`exportable = 前提为空 && blocking 为空`。
+    覆盖统计退回**摘要**，不再是第二道否决；"这门课还没有目标"改成前提
+    （`designPreconditions`，不可 waive）。导出的成功路径会**点名**它带着哪些已接受的缺陷，
+    不再沉默。
+  - **`resolved` 拒收**（路由 400 + 文案）：审核是推导的，"我修好了"不是一个可以处于的
+    状态——设计改好它就自己消失，没改好这句话就是假的。可以记录的唯一决定是 `waived`，
+    并且可以撤销（`open`）。
+  - **决定的作用范围是"能不能产出"，不是"这一步做完没有"**：阶段机与步骤签收
+    **故意不读决定**。它们问的是活干完了没有，而接受一处缺陷不能把活干完；
+    在那边也读决定，要么读了照样拒绝（决定有两半、互相矛盾），要么让一门课
+    踩着一个还开着的缺口往下建。这条边界写在 `syncCurriculumAuditFindings` 的注释里，
+    并有测试钉住（"waive 之后导出能过、阶段机仍然拒绝"）。
+  - **新增 agent 工具 `set_course_finding_status`**（注册表 27 → 28）。理由与前一步
+    补签收工具完全相同：门禁读决定，而没有工具能写下这个决定，就等于 agent 侧的课
+    只要有一处被接受的缺陷就永远无法生成。
+  - 界面：审核面板把「待处理（阻塞生成）」与「已接受（不阻塞，生成时会带着它们）」
+    分开计数，「已修复」按钮删除（它改不了任何东西），「撤销接受」补上；出课面板
+    在通过时列出已接受的缺陷。
+  - 顺手修掉两个"声明了但没人做"的东西：审核规则表里的 `objective_unmeasurable`
+    **没有任何规则会产出它**（新增一条真正扫描源码的测试，旧的注释写着"必须可达"
+    而断言只数了数量）；`activeObjectives` 的注释写着 draft 与 archived 都不算，
+    代码只排除 archived（代码是对的，注释错的——一门课是 draft-first 设计的，
+    排除 draft 会让每门新课都"没有目标"）。
+
+  文件：`lib/curriculum/design-review.ts`（新）、`lib/curriculum/audit.ts`、
+  `lib/persistence/curriculum.ts`（phase 14）、`lib/server/curriculum/design-store.ts`、
+  `outline-state.ts` / `teaching-state.ts` / `assessment-state.ts`、`design-validation.ts`、
+  `app/api/curriculum/design/tasks/[id]/findings/[findingId]/route.ts`、
+  `.../export-gate/route.ts`、`lib/server/agent-runtime/design-tools.ts`、
+  `components/curriculum/design-heatmap.tsx`、`course-assembler-panel.tsx`、
+  `skills/agent-runtime/course-auditor/SKILL.md`。
+
 - **第七步「题目与实操」：题目与实操是挂在条目上的，而"挂在哪一条"是一个声明**。
   工作台「题目与实操」卡片里点「用 AI 出题与实操」即可对话；模型直接写
   `curriculum_question` 与 `curriculum_lab_task`。这一步要解决的问题不是"能不能出一道题"，
