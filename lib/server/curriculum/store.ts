@@ -34,6 +34,7 @@ import type {
   CurriculumGenerationJobStatus,
   CurriculumGenerationOutlineReview,
   CurriculumGraduationIndicatorRecord,
+  CurriculumOutlineNodeType,
   CurriculumProgramCourseCategory,
   CurriculumProgramCourseRecord,
   CurriculumProgramRecord,
@@ -41,6 +42,7 @@ import type {
   CurriculumProgramVersionRecord,
   CurriculumRelationRecord,
   CurriculumRelationType,
+  CurriculumSeriesOutlineNodeRecord,
   CurriculumSeriesRecord,
   CurriculumSnapshot,
   KnowledgePointDifficulty,
@@ -53,11 +55,17 @@ import type {
 export interface CurriculumSeriesInput {
   name: string;
   description?: string | null;
+  /** 系列级默认培训对象，目在创建时继承。 */
+  audience?: string | null;
+  /** 系列级默认学时，目在创建时继承。 */
+  defaultHours?: number | null;
 }
 
 export interface CurriculumSeriesPatch {
   name?: string;
   description?: string | null;
+  audience?: string | null;
+  defaultHours?: number | null;
 }
 
 export interface CurriculumCourseInput {
@@ -184,6 +192,21 @@ interface SeriesRow extends Record<string, unknown> {
   id: string;
   name: string;
   description: string | null;
+  audience: string | null;
+  default_hours: number | string | null;
+  created_at: Date | string;
+  updated_at: Date | string;
+}
+
+interface OutlineNodeRow extends Record<string, unknown> {
+  id: string;
+  series_id: string;
+  parent_id: string | null;
+  node_type: string;
+  code: string | null;
+  title: string;
+  note: string | null;
+  order_index: number | string;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -323,6 +346,11 @@ interface ExportJobRow extends Record<string, unknown> {
   updated_at: Date | string;
 }
 
+const SERIES_COLUMNS = `id, name, description, audience, default_hours, created_at, updated_at`;
+
+const OUTLINE_NODE_COLUMNS = `id, series_id, parent_id, node_type, code, title, note,
+       order_index, created_at, updated_at`;
+
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
 
@@ -409,7 +437,24 @@ function mapSeries(row: SeriesRow, courseCount: number): CurriculumSeriesRecord 
     id: row.id,
     name: row.name,
     description: row.description,
+    audience: row.audience,
+    defaultHours: nullableNumeric(row.default_hours),
     courseCount,
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at),
+  };
+}
+
+function mapOutlineNode(row: OutlineNodeRow): CurriculumSeriesOutlineNodeRecord {
+  return {
+    id: row.id,
+    seriesId: row.series_id,
+    parentId: row.parent_id,
+    nodeType: row.node_type as CurriculumOutlineNodeType,
+    code: row.code,
+    title: row.title,
+    note: row.note,
+    orderIndex: numeric(row.order_index),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -630,12 +675,28 @@ async function readSeriesRow(
   seriesId: string,
 ): Promise<SeriesRow | null> {
   const result = await queryable.query<SeriesRow>(
-    `SELECT id, name, description, created_at, updated_at
+    `SELECT ${SERIES_COLUMNS}
        FROM curriculum_series
       WHERE owner_id = $1 AND id = $2`,
     [ownerId, seriesId],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * One owned series, including the defaults a 目 inherits on creation.
+ *
+ * The cockpit needs the defaults even when the series has no course rows yet —
+ * which is exactly the state a brand-new series is in — so it cannot come from
+ * the course-ledger snapshot, which is empty until there is a product to list.
+ */
+export async function getCurriculumSeries(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+): Promise<CurriculumSeriesRecord | null> {
+  const row = await readSeriesRow(queryable, ownerId, seriesId);
+  return row ? mapSeries(row, 0) : null;
 }
 
 async function assertSeriesOwned(
@@ -770,7 +831,7 @@ export async function listCurriculum(
     courseIndicatorSupportResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
-      `SELECT id, name, description, created_at, updated_at
+      `SELECT ${SERIES_COLUMNS}
          FROM curriculum_series
         WHERE owner_id = $1
         ORDER BY lower(name), created_at`,
@@ -955,7 +1016,7 @@ export async function getCurriculumCourseDetail(
     exportJobResult,
   ] = await Promise.all([
     queryable.query<SeriesRow>(
-      `SELECT id, name, description, created_at, updated_at
+      `SELECT ${SERIES_COLUMNS}
          FROM curriculum_series
         WHERE owner_id = $1
         ORDER BY lower(name), created_at`,
@@ -1048,20 +1109,29 @@ export async function createCurriculumSeries(
   if (!name) throw new CurriculumValidationError('name 不能为空');
   if (name.length > 120) throw new CurriculumValidationError('name 过长');
   const result = await queryable.query<SeriesRow>(
-    `INSERT INTO curriculum_series (id, owner_id, name, description)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO curriculum_series (id, owner_id, name, description, audience, default_hours)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (owner_id, name) DO UPDATE
        SET description = COALESCE(EXCLUDED.description, curriculum_series.description),
+           audience = COALESCE(EXCLUDED.audience, curriculum_series.audience),
+           default_hours = COALESCE(EXCLUDED.default_hours, curriculum_series.default_hours),
            updated_at = now()
-     RETURNING id, name, description, created_at, updated_at`,
-    [createId('series'), ownerId, name, optionalText(input.description)],
+     RETURNING ${SERIES_COLUMNS}`,
+    [
+      createId('series'),
+      ownerId,
+      name,
+      optionalText(input.description),
+      optionalText(input.audience),
+      input.defaultHours ?? null,
+    ],
   );
   const row = result.rows[0];
   if (!row) throw new CurriculumValidationError('课程系列创建失败');
   return mapSeries(row, 0);
 }
 
-/** Patch a series. Omitted fields stay as they are; explicit null clears the description. */
+/** Patch a series. Omitted fields stay as they are; explicit null clears the field. */
 export async function updateCurriculumSeries(
   queryable: Queryable,
   ownerId: string,
@@ -1074,20 +1144,29 @@ export async function updateCurriculumSeries(
   const nextName = patch.name !== undefined ? optionalText(patch.name) : existing.name;
   if (!nextName) throw new CurriculumValidationError('name 不能为空');
   if (nextName.length > 120) throw new CurriculumValidationError('name 过长');
+  const nextDefaultHours =
+    patch.defaultHours !== undefined ? patch.defaultHours : nullableNumeric(existing.default_hours);
+  if (nextDefaultHours !== null && nextDefaultHours < 0) {
+    throw new CurriculumValidationError('默认学时不能为负数');
+  }
 
   try {
     const result = await queryable.query<SeriesRow>(
       `UPDATE curriculum_series
           SET name = $3,
               description = $4,
+              audience = $5,
+              default_hours = $6,
               updated_at = now()
         WHERE owner_id = $1 AND id = $2
-        RETURNING id, name, description, created_at, updated_at`,
+        RETURNING ${SERIES_COLUMNS}`,
       [
         ownerId,
         seriesId,
         nextName,
         patch.description !== undefined ? optionalText(patch.description) : existing.description,
+        patch.audience !== undefined ? optionalText(patch.audience) : existing.audience,
+        nextDefaultHours,
       ],
     );
     const row = result.rows[0];
@@ -1112,6 +1191,242 @@ export async function deleteCurriculumSeries(
     [ownerId, seriesId],
   );
   if (!result.rows[0]) throw new CurriculumNotFoundError('课程系列不存在');
+}
+
+// ── 系列大纲（章 / 节） ──────────────────────────────────────────────────────
+
+export interface SeriesOutlineNodeInput {
+  nodeType: CurriculumOutlineNodeType;
+  /** 章必须为空；节必须是同一系列的一章。 */
+  parentId?: string | null;
+  title: string;
+  /** 留空则按父级与顺序自动编号（章 `3`、节 `3-2`）。 */
+  code?: string | null;
+  note?: string | null;
+  orderIndex?: number | null;
+}
+
+/**
+ * 章节可改的字段。
+ *
+ * 编号与父级**刻意不可改**：编号是目的前缀（`2-1` → `2-1-3`），改编号会让
+ * 已经建好的目编号对不上；换个章挂则会让节的编号前缀说谎。这两件事的正确做法
+ * 是删掉重建，而不是让一次 PATCH 留下半套不一致。
+ */
+export interface SeriesOutlineNodePatch {
+  title?: string;
+  note?: string | null;
+  orderIndex?: number | null;
+}
+
+const OUTLINE_NODE_TITLE_LIMIT = 160;
+const OUTLINE_NODE_NOTE_LIMIT = 2000;
+const OUTLINE_NODE_CODE_LIMIT = 40;
+
+function outlineNodeText(
+  value: string | null | undefined,
+  limit: number,
+  field: string,
+): string | null {
+  const text = optionalText(value);
+  if (text !== null && text.length > limit) {
+    throw new CurriculumValidationError(`${field}过长`);
+  }
+  return text;
+}
+
+async function readOutlineNodeRow(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  nodeId: string,
+): Promise<OutlineNodeRow | null> {
+  const result = await queryable.query<OutlineNodeRow>(
+    `SELECT ${OUTLINE_NODE_COLUMNS}
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2 AND id = $3`,
+    [ownerId, seriesId, nodeId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** 一个系列的全部章节，按层级与顺序读出来交给调用方组树。 */
+export async function listSeriesOutline(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+): Promise<CurriculumSeriesOutlineNodeRecord[]> {
+  await assertSeriesOwned(queryable, ownerId, seriesId);
+  const result = await queryable.query<OutlineNodeRow>(
+    `SELECT ${OUTLINE_NODE_COLUMNS}
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2
+      ORDER BY (parent_id IS NOT NULL), order_index, created_at`,
+    [ownerId, seriesId],
+  );
+  return result.rows.map(mapOutlineNode);
+}
+
+export async function createSeriesOutlineNode(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  input: SeriesOutlineNodeInput,
+): Promise<CurriculumSeriesOutlineNodeRecord> {
+  await assertSeriesOwned(queryable, ownerId, seriesId);
+  if (input.nodeType !== 'chapter' && input.nodeType !== 'section') {
+    throw new CurriculumValidationError('nodeType 只能是 chapter 或 section');
+  }
+  const title = outlineNodeText(input.title, OUTLINE_NODE_TITLE_LIMIT, '标题');
+  if (!title) throw new CurriculumValidationError('标题不能为空');
+  const note = outlineNodeText(input.note, OUTLINE_NODE_NOTE_LIMIT, '说明');
+  const explicitCode = outlineNodeText(input.code, OUTLINE_NODE_CODE_LIMIT, '编号');
+
+  let parentId: string | null = null;
+  if (input.nodeType === 'section') {
+    const parent = optionalText(input.parentId ?? null);
+    if (!parent) throw new CurriculumValidationError('节必须挂在某一章下面');
+    const parentRow = await readOutlineNodeRow(queryable, ownerId, seriesId, parent);
+    if (!parentRow) throw new CurriculumNotFoundError('所属章不存在');
+    if (parentRow.node_type !== 'chapter') {
+      throw new CurriculumValidationError('节只能挂在章下面，不能再套一节');
+    }
+    parentId = parent;
+  } else if (optionalText(input.parentId ?? null)) {
+    throw new CurriculumValidationError('章在顶层，不能再挂父级');
+  }
+
+  const nextOrder =
+    input.orderIndex ?? (await nextOutlineOrderIndex(queryable, ownerId, seriesId, parentId));
+  const code =
+    explicitCode ?? (await nextOutlineCode(queryable, ownerId, seriesId, parentId, input.nodeType));
+
+  try {
+    const result = await queryable.query<OutlineNodeRow>(
+      `INSERT INTO curriculum_series_outline_node
+         (id, owner_id, series_id, parent_id, node_type, code, title, note, order_index)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       RETURNING ${OUTLINE_NODE_COLUMNS}`,
+      [createId('node'), ownerId, seriesId, parentId, input.nodeType, code, title, note, nextOrder],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumValidationError('章节创建失败');
+    return mapOutlineNode(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumConflictError('这个系列里已经有同编号的章节');
+    }
+    throw error;
+  }
+}
+
+async function nextOutlineOrderIndex(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  parentId: string | null,
+): Promise<number> {
+  const result = await queryable.query<{ next: number | string }>(
+    `SELECT COALESCE(MAX(order_index) + 1, 1) AS next
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2
+        AND (($3::text IS NULL AND parent_id IS NULL) OR parent_id = $3)`,
+    [ownerId, seriesId, parentId],
+  );
+  return numeric(result.rows[0]?.next ?? 1);
+}
+
+/**
+ * 自动编号：章取同一系列里下一个序号（`7`），节取"父章编号-同层序号"（`2-3`）。
+ *
+ * 编号是给人核对的，不是主键，所以删除留下的空洞不回收：把 `2-4` 叫回 `2-2`
+ * 会让用户手里那份打印出来的大纲在一夜之间对不上。
+ */
+async function nextOutlineCode(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  parentId: string | null,
+  nodeType: CurriculumOutlineNodeType,
+): Promise<string> {
+  if (nodeType === 'chapter') {
+    const result = await queryable.query<{ next: number | string }>(
+      `SELECT COALESCE(MAX(order_index) + 1, 1) AS next
+         FROM curriculum_series_outline_node
+        WHERE owner_id = $1 AND series_id = $2 AND node_type = 'chapter'`,
+      [ownerId, seriesId],
+    );
+    return String(numeric(result.rows[0]?.next ?? 1));
+  }
+  const parent = parentId ? await readOutlineNodeRow(queryable, ownerId, seriesId, parentId) : null;
+  if (!parent) throw new CurriculumValidationError('所属章不存在');
+  const result = await queryable.query<{ count: number | string }>(
+    `SELECT count(*)::text AS count
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2 AND parent_id = $3`,
+    [ownerId, seriesId, parentId],
+  );
+  const sequence = numeric(result.rows[0]?.count ?? 0) + 1;
+  return parent.code ? `${parent.code}-${sequence}` : String(sequence);
+}
+
+export async function updateSeriesOutlineNode(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  nodeId: string,
+  patch: SeriesOutlineNodePatch,
+): Promise<CurriculumSeriesOutlineNodeRecord> {
+  const existing = await readOutlineNodeRow(queryable, ownerId, seriesId, nodeId);
+  if (!existing) throw new CurriculumNotFoundError('章节不存在');
+  const nextTitle =
+    patch.title !== undefined
+      ? outlineNodeText(patch.title, OUTLINE_NODE_TITLE_LIMIT, '标题')
+      : existing.title;
+  if (!nextTitle) throw new CurriculumValidationError('标题不能为空');
+  const result = await queryable.query<OutlineNodeRow>(
+    `UPDATE curriculum_series_outline_node
+        SET title = $4,
+            note = $5,
+            order_index = $6,
+            updated_at = now()
+      WHERE owner_id = $1 AND series_id = $2 AND id = $3
+      RETURNING ${OUTLINE_NODE_COLUMNS}`,
+    [
+      ownerId,
+      seriesId,
+      nodeId,
+      nextTitle,
+      patch.note !== undefined
+        ? outlineNodeText(patch.note, OUTLINE_NODE_NOTE_LIMIT, '说明')
+        : existing.note,
+      patch.orderIndex ?? numeric(existing.order_index),
+    ],
+  );
+  const row = result.rows[0];
+  if (!row) throw new CurriculumNotFoundError('章节不存在');
+  return mapOutlineNode(row);
+}
+
+/**
+ * 删除一章或一节。
+ *
+ * 删节不删目：`curriculum_task.section_id` 是 `ON DELETE SET NULL`，那些目退回
+ * "未归类"而不是跟着消失。分类可以改，教学单元不能因为改分类而被删掉。
+ */
+export async function deleteSeriesOutlineNode(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  nodeId: string,
+): Promise<void> {
+  const result = await queryable.query<{ id: string } & Record<string, unknown>>(
+    `DELETE FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2 AND id = $3
+      RETURNING id`,
+    [ownerId, seriesId, nodeId],
+  );
+  if (!result.rows[0]) throw new CurriculumNotFoundError('章节不存在');
 }
 
 /** Create a course. `seriesId` and `stageId` are validated against the owner. */

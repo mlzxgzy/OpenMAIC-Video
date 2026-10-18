@@ -24,6 +24,7 @@ import type {
   CurriculumDesignConfirmationRecord,
   CurriculumUnitRecord,
 } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignTeachingSignOffProps {
   taskId: string;
@@ -100,9 +101,13 @@ export function DesignTeachingSignOff({
     return error === null ? null : <p className="text-destructive text-[11px]">{error}</p>;
   }
 
+  // 去重：这一步的缺口与审核发现常常是同一句话（"还没有任何条目…"既是缺口也是
+  // error 级发现），不减的话确认按钮的悬浮说明里同一句会念两遍。
   const blockers = [
-    ...state.gaps.map((gap) => gap.text),
-    ...state.auditFindings.map((finding) => finding.message),
+    ...new Set([
+      ...state.gaps.map((gap) => gap.text),
+      ...state.auditFindings.map((finding) => finding.message),
+    ]),
   ];
   const complete = blockers.length === 0;
 
@@ -123,7 +128,7 @@ export function DesignTeachingSignOff({
             void run('teaching:confirm', async () => {
               await confirmTeaching(taskId);
               await reload();
-              return '授课脚本与分镜已确认。下一步是逐条的题目、实操与考试。';
+              return `${STEP_WORK_NAME.teaching}已确认。下一步是${stepRef('assessment')}。`;
             })
           }
           disabled={busy !== null || confirmation !== null || !complete}
@@ -132,11 +137,11 @@ export function DesignTeachingSignOff({
               ? '已经确认'
               : !complete
                 ? `还差：${blockers.join('；')}`
-                : '确认授课脚本与分镜，进入题目与实操阶段'
+                : `确认${STEP_WORK_NAME.teaching}，进入${stepRef('assessment')}`
           }
         >
           {busy === 'teaching:confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-          确认教学内容
+          确认{STEP_WORK_NAME.teaching}
         </Button>
         {confirmation ? (
           <Button

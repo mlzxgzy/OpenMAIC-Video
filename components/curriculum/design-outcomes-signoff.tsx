@@ -19,6 +19,7 @@ import { Button } from '@/components/ui/button';
 import { DesignOutcomesDialog } from '@/components/curriculum/design-outcomes-dialog';
 import { outcomeGapsOfRecords } from '@/lib/curriculum/design-outcomes';
 import { confirmOutcomes, withdrawOutcomes } from '@/lib/curriculum/outcomes-client';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import type {
   CurriculumDesignConfirmationRecord,
   CurriculumEvidenceRecord,
@@ -73,7 +74,7 @@ export function DesignOutcomesSignOff({
           onClick={() =>
             void run('outcomes:confirm', async () => {
               await confirmOutcomes(taskId);
-              return '学习目标与考核标准已确认。下一步是知识技能图。';
+              return `${STEP_WORK_NAME.outcomes}已确认。下一步是${stepRef('graph')}。`;
             })
           }
           disabled={busy !== null || confirmation !== null || !complete}
@@ -82,11 +83,11 @@ export function DesignOutcomesSignOff({
               ? '已经确认'
               : !complete
                 ? `还差：${gaps.map((gap) => gap.text).join('；')}`
-                : '确认学习目标，进入知识技能图阶段'
+                : `确认${STEP_WORK_NAME.outcomes}，进入${stepRef('graph')}`
           }
         >
           {busy === 'outcomes:confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-          确认学习目标
+          确认{STEP_WORK_NAME.outcomes}
         </Button>
         {confirmation ? (
           <Button

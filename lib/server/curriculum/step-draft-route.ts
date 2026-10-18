@@ -38,6 +38,7 @@ import {
   type DesignContext,
 } from '@/lib/server/curriculum/design-http';
 import { getCurriculumTask } from '@/lib/server/curriculum/design-store';
+import { stepLockMessage } from '@/lib/curriculum/ui-labels';
 import { parseConversationTurnRequest } from '@/lib/server/curriculum/design-validation';
 import {
   backgroundWorkspaceId,
@@ -190,8 +191,10 @@ export function stepDraftRoute<TBefore, TTurn>(
         return curriculumJsonError(
           409,
           'CURRICULUM_DESIGN_PHASE_LOCKED',
-          `课程任务当前处于「${task.designPhase}」阶段；` +
-            `先确认前面的步骤并推进到「${config.requiredPhase}」阶段，再来${config.subject}`,
+          // 这句话原来直接插了 `task.designPhase` 与 `config.requiredPhase` 两个字面量，
+          // 用户在界面上读到的是"当前处于「outcomes」阶段；推进到「graph」阶段"。
+          // 现在与门禁按钮、卡片角标共用 `stepLockMessage`，说的是"第几步、哪一步"。
+          stepLockMessage(task.designPhase, config.requiredPhase, config.subject),
           ctx.headers,
         );
       }

@@ -32,6 +32,7 @@
  */
 
 import type { CurriculumDesignPhase } from './design-types';
+import { stepLockReason } from './ui-labels';
 
 export const CURRICULUM_DESIGN_PHASE_ORDER: readonly CurriculumDesignPhase[] = [
   'task',
@@ -63,8 +64,17 @@ export type DesignAuthoring =
   | 'lab-tasks';
 
 interface AuthoringGate {
-  /** Human name, used in the refusal message. */
+  /** Human name of the thing being created, used in lists and tests. */
   label: string;
+  /**
+   * **用户想做的那件事**，整句进 `stepLockReason`。
+   *
+   * 不能统一拼成「新建${label}」：`教/练/考覆盖`、`条目顺序`、`知识点与目标的支撑
+   * 关系` 是**关系**，不是新行——「新建教/练/考覆盖」读起来像在库里插一条叫"覆盖"
+   * 的记录，而工作台上的实际动作是"勾上"和"排一条"。用户要照着这句话做事，
+   * 动词错了指引就是反的。
+   */
+  action: string;
   /** The phase whose `assertPhase` call governs this creation. */
   requiredPhase: CurriculumDesignPhase;
 }
@@ -79,16 +89,20 @@ interface AuthoringGate {
  * `COVERAGE_WRITE_NOTE` below for why the workbench does not use it.
  */
 export const DESIGN_AUTHORING_GATES: Readonly<Record<DesignAuthoring, AuthoringGate>> = {
-  outcomes: { label: '学习目标', requiredPhase: 'outcomes' },
-  evidence: { label: '评价证据', requiredPhase: 'outcomes' },
-  nodes: { label: '知识点', requiredPhase: 'graph' },
-  'node-objectives': { label: '知识点与目标的支撑关系', requiredPhase: 'graph' },
-  dependencies: { label: '学习顺序依赖', requiredPhase: 'graph' },
-  units: { label: '大纲条目', requiredPhase: 'outline' },
-  coverage: { label: '教/练/考覆盖', requiredPhase: 'outline' },
-  'unit-dependencies': { label: '条目顺序', requiredPhase: 'outline' },
-  questions: { label: '测验题', requiredPhase: 'assessment' },
-  'lab-tasks': { label: '实操任务', requiredPhase: 'assessment' },
+  outcomes: { label: '学习目标', action: '新建学习目标', requiredPhase: 'outcomes' },
+  evidence: { label: '评价证据', action: '新建评价证据', requiredPhase: 'outcomes' },
+  nodes: { label: '知识点', action: '新建知识点', requiredPhase: 'graph' },
+  'node-objectives': {
+    label: '知识点与目标的支撑关系',
+    action: '挂上知识点与目标的支撑关系',
+    requiredPhase: 'graph',
+  },
+  dependencies: { label: '学习顺序依赖', action: '加一条学习顺序依赖', requiredPhase: 'graph' },
+  units: { label: '大纲条目', action: '新建大纲条目', requiredPhase: 'outline' },
+  coverage: { label: '教/练/考覆盖', action: '勾上教/练/考覆盖', requiredPhase: 'outline' },
+  'unit-dependencies': { label: '条目顺序', action: '排一条条目顺序', requiredPhase: 'outline' },
+  questions: { label: '测验题', action: '新建测验题', requiredPhase: 'assessment' },
+  'lab-tasks': { label: '实操任务', action: '新建实操任务', requiredPhase: 'assessment' },
 };
 
 /**
@@ -118,26 +132,22 @@ export interface AuthoringAvailability {
   /**
    * Why creation is closed, in one sentence naming the phase to reach. `null`
    * when it is open. Never a bare phase name: "先做 X" is actionable, "X 未到"
-   * is not.
+   * is not. The sentence is built by `stepLockReason`, so it always carries the
+   * step number — "第 4 步「课程大纲」" — which is the number the step rail and
+   * the card badge are showing at the same time.
    */
   reason: string | null;
   /** The phase that must be reached first, for the disabled control's tooltip. */
   requiredPhase: CurriculumDesignPhase;
 }
 
-const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
-  task: '课程任务',
-  outcomes: '学习成果',
-  graph: '依赖图',
-  outline: '课程大纲',
-  teaching: '教学设计',
-  assessment: '评价设计',
-  review: '课程审核',
-};
-
-export function designPhaseLabel(phase: CurriculumDesignPhase): string {
-  return PHASE_LABELS[phase];
-}
+// 这里原来还有一张自己的阶段名表（`课程任务 / 学习成果 / 依赖图 / 教学设计 / 评价设计`）、
+// 以及 `designPhaseLabel`。删掉的理由不是"重复"，是**它和步骤条叫的不是同一个名字**：
+// 第 3 步在步骤条上叫「需要哪些前置知识」、在卡片标题上叫「知识技能与依赖」、在这里叫
+// 「依赖图」、在服务器报错里叫 `graph`。用户对不上号，门禁提示于是变成噪音。
+// 现在唯一的表是 `ui-labels.ts` 的 `STEP_WORK_NAME`，引用一律走 `stepRef`（带序号）。
+// `designPhaseLabel` 没有任何调用方，一并删除——留着一个"另一个取名字的地方"，
+// 下一个人就会继续用它取名。
 
 function phaseRank(phase: CurriculumDesignPhase): number {
   const index = CURRICULUM_DESIGN_PHASE_ORDER.indexOf(phase);
@@ -163,10 +173,7 @@ export function authoringAvailability(
     kind,
     allowed,
     requiredPhase,
-    reason: allowed
-      ? null
-      : `先完成${PHASE_LABELS[requiredPhase]}阶段，才能新建${gate.label}。` +
-        `当前在${PHASE_LABELS[phase]}阶段。`,
+    reason: allowed ? null : stepLockReason(gate.action, phase, requiredPhase),
   };
 }
 

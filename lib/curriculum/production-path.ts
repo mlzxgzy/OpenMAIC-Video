@@ -26,6 +26,7 @@
  */
 
 import type { CurriculumDesignPhase, CurriculumUnitRecord } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 /** What the panel is offering: two routes to a classroom, not two forms. */
 export type ProductionPath = 'design' | 'assembly';
@@ -89,8 +90,7 @@ export function chooseProductionPath(input: {
     return {
       path: 'design',
       designAvailable: false,
-      blockedReason:
-        '大纲里还没有条目（章不能单独生成）。回到大纲阶段加一个讲课、练习或考试条目，再从它生成。',
+      blockedReason: `${STEP_WORK_NAME.outline}里还没有条目（章不能单独生成）。回到${stepRef('outline')}加一个讲课、练习或考试条目，再从它生成。`,
     };
   }
 
@@ -114,6 +114,6 @@ export function chooseProductionPath(input: {
     blockedReason:
       input.objectiveCount === 0
         ? '课程还没有学习目标。逆向设计从"先定目标、再定证据"开始，组装器不会替你做这个决定。'
-        : '课程还在目标与依赖图阶段。把目标、证据、知识技能和依赖关系定下来，大纲才有依据。',
+        : `课程还在${stepRef('outcomes')}与${stepRef('graph')}。把目标、证据、知识技能和依赖关系定下来，${STEP_WORK_NAME.outline}才有依据。`,
   };
 }

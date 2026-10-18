@@ -34,16 +34,10 @@ import { DesignDirectionDialog } from '@/components/curriculum/design-direction-
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import type { CurriculumDesignPhase, CurriculumTaskRecord } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
-const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
-  task: '课程任务',
-  outcomes: '学习成果',
-  graph: '依赖图',
-  outline: '课程大纲',
-  teaching: '教学设计',
-  assessment: '评价设计',
-  review: '课程审核',
-};
+// 阶段名只有 `ui-labels.ts` 一份：列表里的 `3/7 知识技能与依赖` 与目里步骤条上的
+// 「第 3 步 / 共 7 步」必须是同一个词，否则用户在列表里记住的名字进了目里就找不到了。
 
 /** The phases in order, so "how far along" is legible at a glance. */
 const PHASE_ORDER: CurriculumDesignPhase[] = [
@@ -209,7 +203,8 @@ export function DesignTaskList() {
           <CardHeader>
             <CardTitle className="text-base">新课程设计</CardTitle>
             <CardDescription>
-              下面三项是进入学习成果阶段的硬性条件；此外还要在课程方向卡片上点一次「确认课程方向」——填好不等于确认过。
+              下面三项是进入{stepRef('outcomes')}
+              的硬性条件；此外还要在课程方向卡片上点一次「确认课程方向」——填好不等于确认过。
             </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
@@ -270,7 +265,8 @@ export function DesignTaskList() {
             </div>
           ) : tasks.length === 0 ? (
             <p className="text-muted-foreground border-border rounded-lg border border-dashed p-6 text-center text-xs">
-              还没有课程设计任务。创建一个任务并填写培训对象、要解决的问题和时长，才能进入学习成果阶段。
+              还没有课程设计任务。创建一个任务并填写培训对象、要解决的问题和时长，才能进入
+              {stepRef('outcomes')}。
             </p>
           ) : (
             <ul className="flex flex-col gap-2">
@@ -292,7 +288,7 @@ export function DesignTaskList() {
                         </span>
                       </div>
                       <Badge variant="secondary" className="shrink-0">
-                        {step}/{PHASE_ORDER.length} {PHASE_LABELS[task.designPhase]}
+                        {step}/{PHASE_ORDER.length} {STEP_WORK_NAME[task.designPhase]}
                       </Badge>
                     </Link>
                   </li>

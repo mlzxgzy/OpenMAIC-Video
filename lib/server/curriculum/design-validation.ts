@@ -45,6 +45,7 @@ import {
   CURRICULUM_RESET_POLICIES,
   CURRICULUM_SCORING_MODES,
   CURRICULUM_SUPPORT_LEVELS,
+  CURRICULUM_TASK_KINDS,
   CURRICULUM_TASK_STATUSES,
   CURRICULUM_UNIT_DEPENDENCY_EDGE_TYPES,
   CURRICULUM_UNIT_ROLES,
@@ -58,6 +59,7 @@ import {
   type LabScoreRule,
   type LabVerifyRule,
 } from '@/lib/curriculum/design-types';
+import { CURRICULUM_OUTLINE_NODE_TYPES } from '@/lib/curriculum/types';
 import type {
   CurriculumDependencyInput,
   CurriculumEvidenceInput,
@@ -71,6 +73,7 @@ import type {
   CurriculumUnitDependencyInput,
   CurriculumUnitInput,
 } from './design-store';
+import type { SeriesOutlineNodeInput, SeriesOutlineNodePatch } from './store';
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; message: string };
 
@@ -303,6 +306,10 @@ export function parseJsonObject(body: unknown): ParseResult<Record<string, unkno
 function readTask(r: Reader, partial: boolean): PatchOf<CurriculumTaskInput> {
   return {
     seriesId: r.nullableText('seriesId'),
+    sectionId: r.nullableText('sectionId'),
+    code: r.nullableText('code'),
+    kind: r.oneOf('kind', CURRICULUM_TASK_KINDS),
+    orderIndex: r.integer('orderIndex'),
     title: r.text('title', { required: !partial }),
     audience: r.nullableText('audience'),
     learnerLevel: r.nullableText('learnerLevel'),
@@ -330,6 +337,71 @@ export function parseTaskPatch(body: unknown): ParseResult<PatchOf<CurriculumTas
   if (!parsed.ok) return parsed;
   const r = new Reader(parsed.value);
   return r.result(readTask(r, true));
+}
+
+// ── 系列大纲（章 / 节） ──────────────────────────────────────────────────────
+
+/**
+ * 章节写入的 request body。
+ *
+ * `nodeType` 必填：章与节在库里是同一张表、同一组字段，只有 `parent_id` 与
+ * 这一位不同。允许省略它就得猜"有 parentId 就是节"，而顶层的节（还没挂进章）
+ * 恰好是这份大纲最需要能存的中间状态。
+ */
+export function parseOutlineNodeInput(body: unknown): ParseResult<SeriesOutlineNodeInput> {
+  const parsed = parseJsonObject(body);
+  if (!parsed.ok) return parsed;
+  const r = new Reader(parsed.value);
+  const nodeType = r.oneOf('nodeType', CURRICULUM_OUTLINE_NODE_TYPES, { required: true });
+  const title = r.text('title', { required: true });
+  const value: SeriesOutlineNodeInput = {
+    nodeType: nodeType ?? 'chapter',
+    parentId: r.nullableText('parentId'),
+    title: title ?? '',
+    code: r.nullableText('code'),
+    note: r.nullableText('note'),
+    orderIndex: r.integer('orderIndex'),
+  };
+  const result = r.result(value);
+  if (!result.ok) return result;
+  // `required: true` 已经保证这两项存在；这里只是把它们从 `undefined` 收窄掉。
+  if (!nodeType || !title) return { ok: false, message: 'nodeType、title 均为必填' };
+  return { ok: true, value: { ...result.value, nodeType, title } };
+}
+
+export function parseOutlineNodePatch(body: unknown): ParseResult<SeriesOutlineNodePatch> {
+  const parsed = parseJsonObject(body);
+  if (!parsed.ok) return parsed;
+  const r = new Reader(parsed.value);
+  const value: SeriesOutlineNodePatch = {
+    title: r.text('title'),
+    note: r.nullableText('note'),
+    orderIndex: r.integer('orderIndex'),
+  };
+  const result = r.result(value);
+  if (!result.ok) return result;
+  if (Object.keys(result.value).length === 0) {
+    return { ok: false, message: '至少需要一个字段' };
+  }
+  return result;
+}
+
+export interface OutlineImportRequest {
+  mode: 'preview' | 'commit';
+  /** 大纲文本，格式见 `lib/curriculum/outline-import.ts`。 */
+  text: string;
+}
+
+export function parseOutlineImportRequest(body: unknown): ParseResult<OutlineImportRequest> {
+  const parsed = parseJsonObject(body);
+  if (!parsed.ok) return parsed;
+  const r = new Reader(parsed.value);
+  const mode = r.oneOf('mode', ['preview', 'commit'] as const);
+  const text = r.text('text', { required: true });
+  const result = r.result({ mode, text });
+  if (!result.ok) return result;
+  if (!text) return { ok: false, message: 'text 为必填' };
+  return { ok: true, value: { mode: mode ?? 'preview', text } };
 }
 
 // ── Course-direction conversation ───────────────────────────────────────────

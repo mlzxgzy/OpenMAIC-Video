@@ -1,20 +1,21 @@
 /**
  * 系列驾驶舱 —— 用户进入一个系列后唯一要面对的页面。
  *
- * 上一版（`curriculum-workspace.tsx`）在这里同时摊开了课程台账、知识体系、培养方案、
- * 课程组装、批量生成、视频导出六块平级内容，`activeTab` 只切 `hidden` class，所以
- * 六个 Tab 的 DOM 全部渲染。结果是"铺天盖地"和"不知道下一步干什么"——因为没有
- * 任何一处声明"现在该做这一目"。
+ * 这一版回答的问题比上一版多一个：**大纲怎么先搭出来**。上一版的创建入口
+ * 只有一个「新建目」，它要求用户凭空写出一节课的标题、对象、时长和要解决的
+ * 问题——而这一目在系列里还没有位置、没有编号、没有大纲。用户的反馈是
+ * "我怎么写啊"，那不是一个文案问题，是**操作顺序被系统跳过了**。
  *
- * 这个页面遵守三条硬规则（设计稿 §2）：
+ * 现在页面的顺序就是工作的顺序：
  *
- * 1. **一次只有一个主角。** 只有一块"现在做这一目"卡片里有主 CTA，其余是次要信息。
- * 2. **状态必须有名字。** 用 `ui-labels.ts` 的用户语言，不出现 `graph`、`waived`。
- * 3. **禁用必须给理由。** 空状态里每个被禁用的按钮旁都有一句话说明为什么现在不能做。
+ * 1. 没有章 → 主角卡是"先把大纲搭出来"（建第一章 / 从大纲导入）。
+ * 2. 有章没有目 → 建成第一目；目挂在节下面，编号由节决定。
+ * 3. 有目 → "现在做这一目"（推荐规则见 `next-item.ts`，按大纲顺序）。
  *
- * 页面只回答一个问题：**"现在做哪一目，为什么是它，卡在哪一步"。**
+ * 三条硬规则沿用上一版（设计稿 §2）：一次只有一个主角；状态必须有名字；
+ * 禁用必须给理由。看板本身在 `series-board.tsx`，那里章、节、目是真实层级，
+ * 不再靠编号前缀猜。
  */
-
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,25 +25,40 @@ import {
   ArrowLeft,
   ArrowRight,
   ChevronDown,
+  FileUp,
   Loader2,
+  Plus,
   RefreshCw,
+  Settings,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { CreateItemDialog } from '@/components/curriculum/create-item-dialog';
+import { OutlineImportDialog } from '@/components/curriculum/outline-import-dialog';
 import {
-  ObjectiveMatrix,
-  type MatrixChapter,
-  type MatrixUnit,
-} from '@/components/curriculum/objective-matrix';
+  OutlineNodeDialog,
+  type OutlineNodeTarget,
+} from '@/components/curriculum/outline-node-dialog';
+import { SeriesBoardView } from '@/components/curriculum/series-board';
+import { SeriesSettingsDialog } from '@/components/curriculum/series-settings-dialog';
+import { StepBadge, StepRail } from '@/components/curriculum/step-rail';
 import { chooseNextItem, pendingItems, type NextItemRow } from '@/lib/curriculum/next-item';
-import { STEP_LABEL, UNIT_ROLE_LABEL } from '@/lib/curriculum/ui-labels';
+import { buildSeriesBoard, type BoardRow } from '@/lib/curriculum/series-board';
+import type {
+  CurriculumSeriesOutlineNodeRecord,
+  CurriculumSeriesRecord,
+} from '@/lib/curriculum/types';
+import { STEP_NAME, STEP_NUMBER } from '@/lib/curriculum/ui-labels';
 
 interface OverviewRow {
   taskId: string;
   code: string;
   title: string;
   phase: NextItemRow['phase'];
+  sectionId: string | null;
+  kind: NextItemRow['kind'];
+  orderIndex: number;
   unitCount: number;
   itemCount: number;
   producedCount: number;
@@ -51,6 +67,11 @@ interface OverviewRow {
   acceptedCount: number;
   exportable: boolean;
   updatedAt: string;
+}
+
+interface OutlinePayload {
+  series: CurriculumSeriesRecord;
+  nodes: CurriculumSeriesOutlineNodeRecord[];
 }
 
 async function requestJson<T>(url: string): Promise<T> {
@@ -62,55 +83,52 @@ async function requestJson<T>(url: string): Promise<T> {
   return payload as T;
 }
 
-/**
- * 章分组。
- *
- * 库里没有"目属于哪一章"这一个字段——章是 `curriculum_unit(unitType='chapter')`，
- * 目是同一棵树下的另一类 `unit`，而 task 本身是目之上的东西。所以驾驶舱读的
- * `/overview` 里没有章节信息，只能按目编号的前缀分组（`2-1-2` → 第二章）。
- *
- * 这是一个**明确降级**而非设计：编号本来就是用户对着大纲核数的依据，按前缀分组
- * 与课程大纲一致。若将来目可以不属于任何编号序列（自由创建的目），这里会退化成
- * 一组"未编号"，那时才需要真正的 parentId 关系。
- */
-function groupByChapterCode(rows: OverviewRow[]): MatrixChapter[] {
-  const groups = new Map<string, MatrixUnit[]>();
-  for (const row of rows) {
-    const chapter = row.code ? `第 ${row.code[0]} 章` : '未编号';
-    const list = groups.get(chapter) ?? [];
-    list.push({
-      unitId: row.taskId,
-      taskId: row.taskId,
-      code: row.code || null,
-      title: row.title,
-      phase: row.phase,
-      produced: row.producedCount > 0,
-      blockingCount: row.blockingCount,
-      started: row.phase !== 'task' || row.objectiveCount > 0 || row.unitCount > 0,
-    });
-    groups.set(chapter, list);
-  }
-  return [...groups.entries()]
-    .sort(([a], [b]) => a.localeCompare(b, 'zh-CN'))
-    .map(([chapter, units]) => ({ chapter, units }));
+function boardRowOf(row: OverviewRow): BoardRow {
+  return {
+    taskId: row.taskId,
+    code: row.code || null,
+    title: row.title,
+    phase: row.phase,
+    kind: row.kind ?? null,
+    produced: row.producedCount > 0,
+    blockingCount: row.blockingCount,
+    started: row.phase !== 'task' || row.objectiveCount > 0 || row.unitCount > 0,
+    sectionId: row.sectionId,
+    orderIndex: row.orderIndex,
+  };
 }
 
 export function SeriesCockpit({ seriesId }: { seriesId: string }) {
   const [rows, setRows] = useState<OverviewRow[]>([]);
-  const [seriesName, setSeriesName] = useState<string | null>(null);
+  const [outline, setOutline] = useState<OutlinePayload | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showAllTodos, setShowAllTodos] = useState(false);
 
+  const [nodeTarget, setNodeTarget] = useState<OutlineNodeTarget | null>(null);
+  const [nodeOpen, setNodeOpen] = useState(false);
+  const [itemSection, setItemSection] = useState<{
+    id: string;
+    code: string | null;
+    title: string;
+  } | null>(null);
+  const [itemOpen, setItemOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
-      const payload = await requestJson<{ rows: OverviewRow[] }>(
-        `/api/curriculum/design/overview?seriesId=${encodeURIComponent(seriesId)}`,
-      );
-      setRows(payload.rows ?? []);
+      const [overview, outlinePayload] = await Promise.all([
+        requestJson<{ rows: OverviewRow[] }>(
+          `/api/curriculum/design/overview?seriesId=${encodeURIComponent(seriesId)}`,
+        ),
+        requestJson<OutlinePayload>(`/api/curriculum/series/${seriesId}/outline`),
+      ]);
+      setRows(overview.rows ?? []);
+      setOutline(outlinePayload);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -123,45 +141,77 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
     void load();
   }, [load]);
 
-  // The name is a nicety, not a prerequisite: an owner whose series was deleted
-  // still gets a usable cockpit from the overview. A failed name lookup must not
-  // blank the page — that would turn a cosmetic problem into a dead end.
-  useEffect(() => {
-    let cancelled = false;
-    void requestJson<{ series: Array<{ id: string; name: string }> }>('/api/curriculum')
-      .then((payload) => {
-        const found = payload.series?.find((item) => item.id === seriesId);
-        if (!cancelled && found) setSeriesName(found.name);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [seriesId]);
-
-  const decision = useMemo(() => chooseNextItem(rows), [rows]);
-  const chapters = useMemo(() => groupByChapterCode(rows), [rows]);
-  const totalItems = rows.length;
+  const nodes = useMemo(() => outline?.nodes ?? [], [outline]);
+  const board = useMemo(() => buildSeriesBoard(nodes, rows.map(boardRowOf)), [nodes, rows]);
 
   /**
-   * 待办与推荐共用 `pendingItems` 的顺序（同一个比较函数）。
-   *
-   * 这一步不能各写一套排序：两块内容并排显示，一旦顺序不同，用户看到的就是
-   * "大卡片让我做 2-1-2，待办第一条却是 2-2-1"，且无从判断哪个是系统的想法。
-   * 共用之后二者第一条在构造上不可能不同——`next-item.test.ts` 有一条测试钉住。
+   * 每一目在大纲里的位置。推荐与看板共用同一个数：`chooseNextItem` 在"还没
+   * 开始"的那一档按它升序，所以"现在做这一目"与看板第一块未做的砖不会打架。
    */
-  const todos = useMemo(() => pendingItems(rows), [rows]);
+  const rankByTask = useMemo(() => {
+    const map = new Map<string, number | null>();
+    for (const chapter of board.chapters) {
+      for (const section of chapter.sections) {
+        for (const item of section.items) map.set(item.taskId, item.outlineRank);
+      }
+    }
+    for (const item of board.unassigned.items) map.set(item.taskId, null);
+    return map;
+  }, [board]);
 
+  const nextRows = useMemo<NextItemRow[]>(
+    () =>
+      rows.map((row) => ({
+        taskId: row.taskId,
+        code: row.code || null,
+        title: row.title,
+        phase: row.phase,
+        unitCount: row.unitCount,
+        producedCount: row.producedCount,
+        objectiveCount: row.objectiveCount,
+        blockingCount: row.blockingCount,
+        updatedAt: row.updatedAt,
+        outlineRank: rankByTask.get(row.taskId) ?? null,
+        sectionId: row.sectionId,
+        kind: row.kind ?? null,
+      })),
+    [rows, rankByTask],
+  );
+
+  const decision = useMemo(() => chooseNextItem(nextRows), [nextRows]);
+  const todos = useMemo(() => pendingItems(nextRows), [nextRows]);
   const visibleTodos = showAllTodos ? todos : todos.slice(0, 5);
+
+  const firstSection = useMemo(() => {
+    for (const chapter of board.chapters) {
+      if (chapter.sections.length > 0) return chapter.sections[0];
+    }
+    return null;
+  }, [board]);
+
+  const openAddChapter = () => {
+    setNodeTarget({ nodeType: 'chapter', parentId: null });
+    setNodeOpen(true);
+  };
+  const openAddSection = (chapter: { id: string; title: string }) => {
+    setNodeTarget({ nodeType: 'section', parentId: chapter.id, parentTitle: chapter.title });
+    setNodeOpen(true);
+  };
+  const openAddItem = (section: { id: string; code: string | null; title: string }) => {
+    setItemSection(section);
+    setItemOpen(true);
+  };
 
   if (!loaded) {
     return (
       <div className="text-muted-foreground flex min-h-[40vh] items-center justify-center gap-2 text-sm">
         <Loader2 className="animate-spin" />
-        正在读这个系列的目...
+        正在读这个系列的章、节、目...
       </div>
     );
   }
+
+  const hasOutline = board.totals.chapters > 0;
 
   return (
     <div className="mx-auto flex w-full max-w-[1500px] flex-col gap-6 p-6">
@@ -174,13 +224,34 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </Button>
           <div className="min-w-0">
             <p className="text-muted-foreground text-sm">课程序列 / 系列</p>
-            <h1 className="truncate text-2xl font-semibold">{seriesName ?? '系列'}</h1>
+            <h1 className="truncate text-2xl font-semibold">{outline?.series.name ?? '系列'}</h1>
           </div>
         </div>
-        <Button variant="outline" onClick={() => void load()} disabled={busy}>
-          {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-          刷新
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            刷新
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setSettingsOpen(true)}
+            disabled={!outline}
+          >
+            <Settings />
+            系列设置
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setImportOpen(true)}
+            disabled={hasOutline}
+            title={hasOutline ? '导入只用于从零建骨架；这个系列已经有大纲了。' : undefined}
+          >
+            <FileUp />
+            从大纲导入
+          </Button>
+        </div>
       </header>
 
       {error ? (
@@ -189,10 +260,34 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
         </div>
       ) : null}
 
-      {decision ? (
-        // `aria-label` 而不是包一层 heading：`CardTitle` 渲染成 div，而这一块的
-        // 身份（"页面上唯一的主角"）是页面结构的事实，不是文案的事实。用文案当
-        // locator 就等于把测试焊死在措辞上，改一次"现在做这一目"要连带改测试。
+      {!hasOutline ? (
+        <Card className="border-primary/30" aria-label="先把大纲搭出来">
+          <CardHeader>
+            <CardTitle className="text-muted-foreground text-xs font-normal">
+              先把大纲搭出来
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <h2 className="text-xl font-semibold">
+              这个系列还没有章。先出章，再出节，最后才是目。
+            </h2>
+            <p className="text-muted-foreground text-sm">
+              目是一节课，它必须挂在某一节下面——所以系统现在不会让你直接写目。你可以手建第一章，
+              也可以把已经写好的大纲整份贴进来，一次建出全部章、节、目。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={openAddChapter}>
+                <Plus />
+                建第一章
+              </Button>
+              <Button variant="outline" onClick={() => setImportOpen(true)}>
+                <FileUp />
+                从大纲导入
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : decision ? (
         <Card className="border-primary/30" aria-label="现在做这一目">
           <CardHeader>
             <CardTitle className="text-muted-foreground text-xs font-normal">
@@ -201,6 +296,7 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="flex flex-wrap items-baseline gap-2">
+              <StepBadge phase={decision.phase} className="self-center" />
               <h2 className="text-xl font-semibold" data-testid="decision-title">
                 {decision.code ? (
                   <span className="text-muted-foreground mr-2 tabular-nums">{decision.code}</span>
@@ -228,10 +324,35 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
                   <ArrowRight />
                 </Link>
               </Button>
-              <span className="text-muted-foreground text-xs">
-                这一步是第 {STEP_LABEL[decision.phase].slice(0, 1)} 步 ·{' '}
-                {STEP_LABEL[decision.phase].replace(/^[①-⑦]\s*/, '')}
-              </span>
+            </div>
+            <StepRail phase={decision.phase} className="bg-background" />
+          </CardContent>
+        </Card>
+      ) : board.totals.items === 0 ? (
+        <Card className="border-primary/30" aria-label="大纲搭好了">
+          <CardHeader>
+            <CardTitle className="text-muted-foreground text-xs font-normal">
+              大纲搭好了，接下来建第一目
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-3">
+            <h2 className="text-xl font-semibold">章和节已经有了，但它们下面还没有目</h2>
+            <p className="text-muted-foreground text-sm">
+              目才是真正要设计、要出片的内容。每一目的标题、编号、学时都在大纲里定好了，
+              建的时候只需要点一下。
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {firstSection ? (
+                <Button onClick={() => openAddItem(firstSection)}>
+                  <Plus />
+                  在「{firstSection.title}」里建第一目
+                </Button>
+              ) : (
+                <Button onClick={() => openAddSection(board.chapters[0])}>
+                  <Plus />
+                  先给「{board.chapters[0].title}」建一节
+                </Button>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -240,18 +361,8 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           <CardContent className="flex flex-col items-start gap-2 py-6">
             <h2 className="text-base font-semibold">这个系列没有待做的目了</h2>
             <p className="text-muted-foreground text-sm">
-              {totalItems > 0
-                ? `${totalItems} 目全部出了片。要改哪一目，在下面的看板里点对应的方块。`
-                : '这个系列还没有目。新建一个目，就是现在的下一步。'}
+              {board.totals.items} 目全部出了片。要改哪一目，在下面的看板里点对应的方块。
             </p>
-            <Button asChild>
-              {/* The query is the point: without it the design list and the AI
-                  dialog create the new task outside this series, and it never
-                  shows up in this cockpit's matrix. */}
-              <Link href={`/curriculum/design?seriesId=${encodeURIComponent(seriesId)}`}>
-                新建目
-              </Link>
-            </Button>
           </CardContent>
         </Card>
       )}
@@ -263,7 +374,11 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             {todos.length === 0 ? (
-              <p className="text-muted-foreground text-sm">没有待办，所有目都已出片。</p>
+              <p className="text-muted-foreground text-sm">
+                {board.totals.items === 0
+                  ? '还没有目。先把大纲搭出来，再从节里建目。'
+                  : '没有待办，所有目都已出片。'}
+              </p>
             ) : (
               <>
                 {visibleTodos.map((row) => (
@@ -272,7 +387,7 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
                     href={`/curriculum/design/${row.taskId}`}
                     className="border-border hover:border-primary/40 hover:bg-accent/40 flex items-start gap-2 rounded-md border px-2.5 py-2 text-sm transition-colors"
                   >
-                    <span className="mt-1.5 size-1.5 shrink-0 rounded-full bg-muted-foreground/60" />
+                    <span className="bg-muted-foreground/60 mt-1.5 size-1.5 shrink-0 rounded-full" />
                     <span className="min-w-0 flex-1">
                       <span className="block truncate">
                         {row.code ? (
@@ -283,9 +398,12 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
                         {row.title}
                       </span>
                       <span className="text-muted-foreground block text-xs">
-                        {row.blockingCount > 0
-                          ? `${row.blockingCount} 处审核未处理`
-                          : `第 ${STEP_LABEL[row.phase].slice(0, 1)} 步 · ${STEP_LABEL[row.phase].replace(/^[①-⑦]\s*/, '')}`}
+                        <span className="text-foreground/70 tabular-nums">
+                          第 {STEP_NUMBER[row.phase]} 步
+                        </span>
+                        {' · '}
+                        {STEP_NAME[row.phase]}
+                        {row.blockingCount > 0 ? ` · ${row.blockingCount} 处审核未处理` : ''}
                       </span>
                     </span>
                   </Link>
@@ -309,21 +427,58 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </CardContent>
         </Card>
 
-        <ObjectiveMatrix
-          chapters={chapters}
+        <SeriesBoardView
+          board={board}
           recommendedTaskId={decision?.taskId ?? null}
-          totalItems={totalItems}
+          onAddSection={(chapter) => openAddSection(chapter)}
+          onAddItem={(section) => openAddItem(section)}
         />
       </div>
 
       <p className="text-muted-foreground text-xs">
-        每一目的生成与导出在那一目的工作台里（打开任意一目的「生成与导出」Tab）。跨系列的课程台账、知识体系、培养方案与批量队列在
+        每一目的生成与导出在那一目的工作台里（打开任意一目的「生成与导出」Tab）。节的每个目
+        没有建时，看板上会留一块「新建目」的空位；删掉一节不会删目，那些目会回到「未归类」。
+        跨系列的课程台账、知识体系、培养方案与批量队列在
         <Link href="/curriculum/legacy" className="mx-1 underline">
           课程台账（存档）
         </Link>
-        ，不在这个页面的主路径上。条目角色：
-        {Object.values(UNIT_ROLE_LABEL).join(' / ')}。
+        ，不在这个页面的主路径上。
       </p>
+
+      {outline ? (
+        <>
+          <SeriesSettingsDialog
+            open={settingsOpen}
+            onOpenChange={setSettingsOpen}
+            series={outline.series}
+            onSaved={() => void load()}
+          />
+          <OutlineNodeDialog
+            open={nodeOpen}
+            onOpenChange={setNodeOpen}
+            seriesId={seriesId}
+            target={nodeTarget}
+            onCreated={() => void load()}
+          />
+          <CreateItemDialog
+            open={itemOpen}
+            onOpenChange={setItemOpen}
+            seriesId={seriesId}
+            section={itemSection}
+            defaults={{
+              audience: outline.series.audience,
+              defaultHours: outline.series.defaultHours,
+            }}
+            onCreated={() => void load()}
+          />
+          <OutlineImportDialog
+            open={importOpen}
+            onOpenChange={setImportOpen}
+            seriesId={seriesId}
+            onImported={() => void load()}
+          />
+        </>
+      ) : null}
     </div>
   );
 }

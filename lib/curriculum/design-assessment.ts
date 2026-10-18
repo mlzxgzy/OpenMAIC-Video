@@ -63,6 +63,7 @@ import {
   type LabScoreRule,
   type LabVerifyRule,
 } from '@/lib/curriculum/design-types';
+import { stepRef } from '@/lib/curriculum/ui-labels';
 
 // ── 面板事实 ────────────────────────────────────────────────────────────────
 
@@ -1332,7 +1333,7 @@ export function assessmentGaps(input: AssessmentGapInput): AssessmentGap[] {
     return [
       {
         kind: 'no_items',
-        text: '还没有任何条目：题目与实操是逐条挂上去的，先在大纲阶段排出条目',
+        text: `还没有任何条目：题目与实操是逐条挂上去的，先到${stepRef('outline')}排出条目`,
       },
     ];
   }
@@ -1493,7 +1494,8 @@ export function describeVerifyRule(rule: LabVerifyRule): string {
  * 一道一模一样的（于是同一道题在课程里出现两次）。
  */
 export function formatAssessmentPlan(board: AssessmentBoard): string {
-  if (board.items.length === 0) return '(还没有条目：题目与实操挂在条目上，先在大纲阶段排出条目)';
+  if (board.items.length === 0)
+    return `(还没有条目：题目与实操挂在条目上，先到${stepRef('outline')}排出条目)`;
   const blocks: string[] = [];
   for (const item of board.items) {
     const lines: string[] = [

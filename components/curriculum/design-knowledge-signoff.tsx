@@ -18,6 +18,7 @@ import { Button } from '@/components/ui/button';
 import { DesignKnowledgeDialog } from '@/components/curriculum/design-knowledge-dialog';
 import { knowledgeGapsOfRecords } from '@/lib/curriculum/design-knowledge';
 import { confirmKnowledge, withdrawKnowledge } from '@/lib/curriculum/knowledge-client';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import type {
   CurriculumDesignConfirmationRecord,
   CurriculumLearningNodeRecord,
@@ -83,7 +84,7 @@ export function DesignKnowledgeSignOff({
           onClick={() =>
             void run('knowledge:confirm', async () => {
               await confirmKnowledge(taskId);
-              return '知识技能图已确认。下一步是大纲。';
+              return `${STEP_WORK_NAME.graph}已确认。下一步是${stepRef('outline')}。`;
             })
           }
           disabled={busy !== null || confirmation !== null || !complete}
@@ -92,11 +93,11 @@ export function DesignKnowledgeSignOff({
               ? '已经确认'
               : !complete
                 ? `还差：${gaps.map((gap) => gap.text).join('；')}`
-                : '确认知识技能图，进入大纲阶段'
+                : `确认${STEP_WORK_NAME.graph}，进入${stepRef('outline')}`
           }
         >
           {busy === 'knowledge:confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-          确认知识技能图
+          确认{STEP_WORK_NAME.graph}
         </Button>
         {confirmation ? (
           <Button

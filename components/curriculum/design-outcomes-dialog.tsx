@@ -38,6 +38,7 @@ import {
   OUTCOME_TYPE_LABELS,
 } from '@/lib/curriculum/design-outcomes';
 import type { OutcomeGap } from '@/lib/curriculum/design-outcomes';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import {
   confirmOutcomes,
   readOutcomesState,
@@ -151,7 +152,7 @@ export function DesignOutcomesDialog({
     setNotice(null);
     try {
       setState(await confirmOutcomes(taskId));
-      setNotice('学习目标与考核标准已确认。下一步是知识技能图。');
+      setNotice(`${STEP_WORK_NAME.outcomes}已确认。下一步是${stepRef('graph')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -189,7 +190,8 @@ export function DesignOutcomesDialog({
           </DialogTitle>
           <DialogDescription>
             聊清楚学完之后学生能独立完成什么。AI
-            写的每一条目标和每一条考核方式都会直接存进课程设计；你改完点「确认学习目标」，才允许进入知识技能图阶段。
+            写的每一条目标和每一条考核方式都会直接存进课程设计；你改完点「确认
+            {STEP_WORK_NAME.outcomes}」，才允许进入{stepRef('graph')}。
           </DialogDescription>
         </DialogHeader>
 
@@ -309,11 +311,11 @@ export function DesignOutcomesDialog({
                   ? '已确认'
                   : state.gaps.length > 0
                     ? state.gaps.map((gap) => gap.text).join('；')
-                    : '确认学习目标，进入知识技能图阶段'
+                    : `确认${STEP_WORK_NAME.outcomes}，进入${stepRef('graph')}`
               }
             >
               {busy === 'confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-              确认学习目标
+              确认{STEP_WORK_NAME.outcomes}
             </Button>
             {state.confirmed ? (
               <Button

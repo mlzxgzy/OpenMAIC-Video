@@ -26,7 +26,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { DesignHeatmap } from '@/components/curriculum/design-heatmap';
 import { DesignProducePanel } from '@/components/curriculum/design-produce';
 import { DesignWorkbench } from '@/components/curriculum/design-workbench';
+import { StepRail } from '@/components/curriculum/step-rail';
 import type { CurriculumDesignPhase } from '@/lib/curriculum/design-types';
+import { stepRef } from '@/lib/curriculum/ui-labels';
 
 export interface DesignTaskShellProps {
   taskId: string;
@@ -34,15 +36,9 @@ export interface DesignTaskShellProps {
   initialPhase?: CurriculumDesignPhase | null;
 }
 
-const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
-  task: '课程任务',
-  outcomes: '学习成果',
-  graph: '依赖图',
-  outline: '课程大纲',
-  teaching: '教学设计',
-  assessment: '评价设计',
-  review: '课程审核',
-};
+// 阶段名不再在这里定义第二份（原来是 `课程任务 / 学习成果 / 依赖图 / 教学设计 / 评价设计`
+// 这一套，与步骤条、卡片标题、服务器报错三处都不一致）。名字只有 `ui-labels.ts` 一份，
+// 引用一律经过 `stepRef`，于是"进入第 5 步「授课脚本与分镜」"和步骤条上的圆圈是同一个数字。
 
 /** What `GET /phase` answers: where the design is, and what is still missing. */
 interface PhaseState {
@@ -168,12 +164,12 @@ export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) 
               disabled={advancing || !phaseState.readyToAdvance}
               title={
                 phaseState.readyToAdvance
-                  ? `进入${PHASE_LABELS[phaseState.nextPhase]}阶段`
+                  ? `进入${stepRef(phaseState.nextPhase)}`
                   : phaseState.gaps.join('；')
               }
             >
               {advancing ? <Loader2 className="animate-spin" /> : <ArrowRight />}
-              进入{PHASE_LABELS[phaseState.nextPhase]}
+              进入{stepRef(phaseState.nextPhase)}
             </Button>
             {!phaseState.readyToAdvance && phaseState.gaps.length > 0 ? (
               <span className="text-muted-foreground max-w-md text-right text-[11px]">
@@ -188,6 +184,13 @@ export function DesignTaskShell({ taskId, initialPhase }: DesignTaskShellProps) 
           {advanceError}
         </div>
       ) : null}
+      {/*
+        七步条放在 Tabs 之外、内容之上：它不是"编辑器那个 Tab 的一部分"，而是这一页的
+        脊椎——矩阵、编辑器、生成与导出是同一目三块材料，读的人在任何一块上都该看得见
+        "现在是第几步、还有几步"。放在编辑器里（上一版就是）会出现"切到矩阵就失去方
+        向"，而矩阵正是审核那一步发生的地方。
+      */}
+      {phase ? <StepRail phase={phase} className="mx-6 mt-4" /> : null}
       <TabsContent value="matrix">
         <DesignHeatmap
           taskId={taskId}

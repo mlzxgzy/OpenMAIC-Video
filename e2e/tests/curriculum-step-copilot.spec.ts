@@ -530,4 +530,46 @@ test.describe('通用草稿副驾穿过网络之后仍然成立', () => {
       `/api/curriculum/design/tasks/${taskId}/teaching/draft`,
     ]);
   });
+
+  /**
+   * 七步条是这一页的脊椎，不是编辑器那一半的装饰。
+   *
+   * 用户的抱怨"还是不够指引，把每一步都标出来，1-7 这种"针对的正是上一版：一排
+   * 小号徽章、没有序号、而且只长在编辑器的顶部。矩阵与生成导出两块同样需要知道
+   * "这是第几步、还剩几步"。所以这条用例逐 Tab 断言同一根步骤条还在，并断言
+   * 七格、唯一当前步、以及卡片上的序号角标——三件事各自都能被单独改坏。
+   */
+  test('七步条在三个 Tab 上都在，1-7 每一步都标出来', async ({ page }) => {
+    const { taskId } = await seedAtPhase(
+      page,
+      `七步 ${crypto.randomUUID().slice(0, 6)}`,
+      'outline',
+    );
+    await page.goto(`/curriculum/design/${taskId}`);
+
+    const rail = page.getByTestId('step-rail');
+    for (const tab of ['目标闭环矩阵', '设计编辑器', '生成与导出']) {
+      await page.getByRole('tab', { name: tab }).click();
+      await expect(rail).toBeVisible();
+      // 七步全显示：设计稿 §5.3 曾把 5/6/7 折成「…」，用户要的是"每一步都标出来"。
+      await expect(rail.locator('li')).toHaveCount(7);
+      await expect(rail.locator('li[data-step-state="current"]')).toHaveCount(1);
+    }
+
+    // 走到大纲：前三步带勾，第 4 步是当前步，后三步还是空心圆。
+    await expect(rail.locator('li[data-step-state="done"]')).toHaveCount(3);
+    await expect(rail.locator('li[data-step-state="current"]')).toHaveAttribute(
+      'data-step',
+      'outline',
+    );
+    await expect(page.getByText('共 7 步')).toBeVisible();
+
+    // 卡片角标与步骤条里的数字同源：编辑器里每一张承担某一步的卡片自己带序号，
+    // 滚动离开顶部之后仍然读得出"这张卡片是第几步"。
+    await page.getByRole('tab', { name: '设计编辑器' }).click();
+    await expect(page.getByTestId('step-badge').first()).toBeVisible();
+    await expect(
+      page.getByTestId('step-badge').filter({ hasText: '第 4 步' }).first(),
+    ).toBeVisible();
+  });
 });

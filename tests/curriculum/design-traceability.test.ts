@@ -118,6 +118,10 @@ function makeSnapshot(): CurriculumDesignSnapshot {
     task: {
       id: 'task-1',
       seriesId: null,
+      sectionId: null,
+      code: null,
+      kind: null,
+      orderIndex: 0,
       title: 'CTF',
       audience: 'students',
       learnerLevel: 'beginner',

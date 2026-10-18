@@ -52,6 +52,7 @@ import {
   type CurriculumUnitRecord,
   type CurriculumUnitRole,
 } from './design-types';
+import { stepRef } from '@/lib/curriculum/ui-labels';
 
 // ── 类型 ────────────────────────────────────────────────────────────────────
 
@@ -835,7 +836,7 @@ export function teachingGapsOfItems(items: readonly TeachingGapInput[]): Teachin
   if (items.length === 0) {
     gaps.push({
       kind: 'no_items',
-      text: '还没有任何条目：教学设计是逐条写的，先在大纲阶段排出条目',
+      text: `还没有任何条目：教学设计是逐条写的，先到${stepRef('outline')}排出条目`,
     });
     return gaps;
   }
@@ -1085,7 +1086,7 @@ export function shouldConfirmTeaching(input: {
  * 模型就会把名称写进桶里（然后被审核判成"没提到"）。
  */
 export function formatTeachingPlan(board: TeachingBoard): string {
-  if (board.items.length === 0) return '(还没有条目：先在大纲阶段排出章、节、目)';
+  if (board.items.length === 0) return `(还没有条目：先到${stepRef('outline')}排出章、节、目)`;
   const objectiveTitle = new Map(board.objectives.map((row) => [row.id, row.title]));
   return board.items
     .map((item) => {

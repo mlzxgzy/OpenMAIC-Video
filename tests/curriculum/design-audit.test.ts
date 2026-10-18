@@ -285,6 +285,10 @@ function makeSnapshot(overrides: SnapshotOverrides = {}): CurriculumDesignSnapsh
     task: {
       id: 'task-1',
       seriesId: null,
+      sectionId: null,
+      code: null,
+      kind: null,
+      orderIndex: 0,
       title: 'CTF',
       audience: 'security students',
       learnerLevel: 'beginner',

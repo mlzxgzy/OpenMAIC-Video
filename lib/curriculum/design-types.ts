@@ -25,6 +25,14 @@ export const CURRICULUM_TASK_STATUSES = ['draft', 'active', 'archived'] as const
 export type CurriculumTaskStatus = (typeof CURRICULUM_TASK_STATUSES)[number];
 
 /**
+ * 目（一节课）的类型。理论目出视频 + 理论题，实操目带 Docker 靶场，综合目是
+ * 复盘加综合测验。它是**目**这一层的属性；条目上的讲/练/考是另一回事，一个
+ * 理论目照样有练习条目和考核条目。
+ */
+export const CURRICULUM_TASK_KINDS = ['theory', 'practice', 'review'] as const;
+export type CurriculumTaskKind = (typeof CURRICULUM_TASK_KINDS)[number];
+
+/**
  * The design phases, in order. A task's `designPhase` is the authoritative
  * position: nothing downstream may be authored before the phase that owns it.
  * The order is the argument the whole model rests on — outcomes and their
@@ -57,6 +65,14 @@ export type CurriculumDifficulty = (typeof CURRICULUM_DIFFICULTIES)[number];
 export interface CurriculumTaskRecord {
   id: string;
   seriesId: string | null;
+  /** 这一目属于系列大纲的哪一节。`null` 表示还没归类（老数据或自由创建的任务）。 */
+  sectionId: string | null;
+  /** 目自己的编号（`2-1-2`）。以前是从内部条目上借的，所以创建时读不到。 */
+  code: string | null;
+  /** 理论 / 实操 / 综合。目这一层的属性，与条目的讲/练/考角色不是一回事。 */
+  kind: CurriculumTaskKind | null;
+  /** 同一节内的顺序。 */
+  orderIndex: number;
   title: string;
   audience: string | null;
   learnerLevel: string | null;

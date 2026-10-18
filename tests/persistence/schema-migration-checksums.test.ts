@@ -290,6 +290,17 @@ const SHIPPED: readonly (readonly [
     true,
     '7fc7c3253d865b84bab817547500105fa43e6b200eda833dac6a83ee13bf72e4',
   ],
+  [
+    // Migration 15 lifts chapters and sections out of each item's internal
+    // outline into their own table, so the outline can exist before any item
+    // does: the user's "先出章、再出节、最后才出目" was being skipped by the
+    // cockpit, not merely reworded.
+    'curriculum',
+    15,
+    'series_outline',
+    true,
+    '946930d452f69bcef6d3ca0ff2eb6b7093de7d91af72cdde38b0d8df529d8399',
+  ],
 ];
 
 /**

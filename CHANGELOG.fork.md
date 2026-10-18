@@ -28,6 +28,37 @@
 
 ### Added
 
+- **系列大纲（章 / 节）：先出章、再出节、最后才出目**。用户打开新系列被要求直接"新建目"，
+  原话是"现在直接让我写目，我怎么写啊？这一块需要修改一下"——不是文案问题，是**操作顺序被
+  系统跳过了**：章、节在库里只存在于**每个目内部**的大纲（`curriculum_unit`），驾驶舱的"章
+  分组"是拿目编号前缀猜的（`series-cockpit.tsx` 的旧注释自己写的"明确降级"）。现在：
+  `curriculum_series_outline_node`（migration 15）存章、节两级，**可以在任何目之前存在**；
+  `curriculum_task` 补 `section_id / code / kind / order_index`（目自己的编号不再从内部条目
+  上借），`curriculum_series` 补 `audience / default_hours`（系列级默认 brief，目创建时继承）。
+  驾驶舱主角卡按状态换：没有章 →「先把大纲搭出来」（建第一章 / 从大纲导入）；有章没目 →
+  「建第一目」；有目 →「现在做这一目」，推荐顺序改为**顺着大纲走**（`NextItemRow.outlineRank`，
+  章序×10000+节序×100+目序）而不是"最早建的先做"。看板由 `series-board.tsx` 取代按前缀猜章的
+  `objective-matrix.tsx`，空节保留占位、未归类的目单独成组（删节不删目，`ON DELETE SET NULL`）。
+  「从大纲导入」是纯文本解析（`lib/curriculum/outline-import.ts`：`#` 章、`##` 节、`-` 目，
+  竖线分隔，可从右往左省略字段），`POST .../outline/import` 先 `preview` 再 `commit`，
+  提交失败整批回滚、已存在大纲/目时 409 拒绝。`course-packages/ctf/outline-54.txt` 是
+  《CTF 综合实战》6 章 × 3 节 × 3 目的导入种子。核对口径由界面去重：目内条目角色改称
+  「讲授 / 练习 / 考核」，目的类型才叫「理论目 / 实操目 / 综合目」。数据库层由 CHECK +
+  触发器保证"章在顶层、节只能挂在同一系列的一章下面、编号在系列内唯一"，
+  `tests/persistence/curriculum-outline-schema.test.ts` 与
+  `tests/curriculum/series-outline-route.test.ts` 钉住。取舍见
+  `docs/curriculum-redesign/SERIES-UI-REDESIGN.md` §8.6。
+- **七步条（B5）：1-7 每一步都标出来**。用户实看 B1–B4 之后的原话是"还是不够指引，把每一步
+  都标出来，1-7 这种，更加明显一些"——上一版是一排没有序号的小徽章，只长在设计编辑器那一半
+  的顶部。现在 `components/curriculum/step-rail.tsx` 一根组件两处复用：目工作台挂在 Tabs
+  **之外**（矩阵、编辑器、生成与导出切到哪一块都看得见），系列驾驶舱放在"现在做这一目"卡里。
+  七格全显示（设计稿 §5.3 折叠 5/6/7 的规则**否决**，`STEP_BAR_PHASES` 常量删除）、大圆圈里是
+  1..7、已走完是对勾、当前步写「你在这」、空位是空心圆——状态不只靠颜色。编辑器每张卡片加
+  「第 N 步」角标，滚动离开顶部之后仍读得出这张卡片是第几步。`ui-labels.ts` 把步骤拆成
+  `STEP_NUMBER`（序号）+ `STEP_NAME`（名字），`STEP_LABEL` 由两者拼出，`tests/curriculum/
+  step-labels.test.ts` 把"序号与阶段机同序、每张表恰好七键、名字唯一"钉住。取舍见
+  `docs/curriculum-redesign/SERIES-UI-REDESIGN.md` §8.4。
+
 - **课程生产台 UI 大修 B3/B4 落地（系列驾驶舱之后的收尾）**。五步共用一套「AI 起草 →
   逐行签字」的通用骨架（`lib/curriculum/step-draft.ts` 起草引擎 + `step-draft-route.ts`
   骨架路由 + `step-copilot.tsx` 副驾面板），"草稿不落库"从自觉升级为类型不变量（骨架交出的
@@ -43,6 +74,42 @@
   `docs/curriculum-redesign/SERIES-UI-REDESIGN.md` §8.3。
 
 ### Fixed
+
+- **同一个第 3 步，一屏四个名字——其中一个是数据库里的 `outcomes`**。用户贴回的截图里，卡片
+  标题写「知识技能与依赖」、空态写「先完成**依赖图**阶段…当前在**学习成果**阶段」、右栏红字写
+  「当前处于『**outcomes**』阶段；推进到『**graph**』阶段」、确认按钮写「确认**知识技能图**」。
+  四个都不是打字错误，是四份各自维护的文案，所以加一根七步条解决不了它。现在立一条规则并写成
+  测试：**用户可见的每一次步骤引用都必须经过 `stepRef()`（序号 + 名字一起出现）**。
+  具体落到：`ui-labels.ts` 新增 `STEP_WORK_NAME` / `stepRef()` / `stepLockReason()` /
+  `stepLockMessage()`；五处 409（`step-draft-route`、三条 turn 路由、`store.assertPhase`
+  ——最后这句还会经路由回给客户端）改走 `stepLockMessage`；六条阶段缺口文案改由
+  `STEP_WORK_NAME` + `stepRef('next')` 拼；十一个 signoff/dialog 的按钮与提示语改用同一张表
+  （「确认知识技能图」→「确认知识技能与依赖」，与卡片标题同词）；
+  `tests/curriculum/step-labels.test.ts` 增加源码扫描用例，把三种形状（`进入X阶段`、旧名词 +
+  `阶段`、`「${…phase…}」`）在 `components/`、`app/`、`lib/` 里钉成 0（注释行不算），另有正向
+  用例点名八处拼步骤引用的文件必须真的调用 `stepRef`/`stepLockMessage`。设计与取舍见
+  `docs/curriculum-redesign/SERIES-UI-REDESIGN.md` §8.5。
+
+- **门禁的动词说错了用户要做的事**。`authoringAvailability` 统一拼「新建${label}」，于是界面上
+  出现「才能**新建教/练/考覆盖**」「才能**新建条目顺序**」——覆盖与顺序是**关系**，不是新行，
+  用户照着这句话去点会找不到"新建"按钮（实际动作是"勾上"和"排一条"）。现在每种门禁自带
+  `action`，禁用按钮的悬浮说明是「先推进到第 4 步『课程大纲』，才能排一条条目顺序。课程任务
+  现在停在第 2 步『学习目标与证据』。」。
+
+- **同一句缺口在确认按钮的悬浮说明里念了两遍**。这一步的缺口与 error 级审核发现常常是同一句
+  话（"还没有任何条目…"），`design-outline-signoff` 与 `design-teaching-signoff` 拼 `blockers`
+  时没有去重（`design-assessment-signoff` 早就用了 `new Set`）。四处现在一致。
+
+- **同屏三遍"第几步"，以及待办行读不出进度**。`chooseNextItem` 的理由原本是
+  `卡在第 3 步 · ③ 需要哪些前置知识。`：序号出现两遍（"3"与"③"），且与旁边的七步条、
+  标题角标说的是同一件事。现在理由只回答"为什么是这一目"（"这是最近动过、还没出片的一目"），
+  步骤交给七步条结构化显示；`next-item.test.ts` 改为钉住"理由里不出现步骤名"。驾驶舱待办行
+  以前在有阻塞时**整条换成**"N 处审核未处理"，于是一半的行读不出卡在哪一步——两件事并不互斥，
+  现在同时显示。
+
+- **窄屏下角标把卡片标题挤成一字一行**。标题那一行是 `flex items-center gap-2`，"第 3 步 / 共
+  7 步 · 还没轮到"占掉宽度之后，"知识技能与依赖"只能一个字一行（390px 实测）。十处标题行加
+  `flex-wrap`：放不下时角标与名字各占一行，不再压缩名字。
 
 - **模型没标 Bloom 层级 / 难度时，那条建议永远采纳不了，且同类问题共有四处。**
   `POST /questions` 与 `PATCH /questions/<id>`、`POST /nodes`、`PATCH /nodes/<id>` 用同一个

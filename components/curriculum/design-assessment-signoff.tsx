@@ -34,6 +34,7 @@ import type {
   CurriculumLabTaskRecord,
   CurriculumQuestionRecord,
 } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignAssessmentSignOffProps {
   taskId: string;
@@ -140,7 +141,7 @@ export function DesignAssessmentSignOff({
             void run('assessment:confirm', async () => {
               await confirmAssessment(taskId);
               await reload();
-              return '题目与实操已确认。下一步是审核与导出。';
+              return `${STEP_WORK_NAME.assessment}已确认。下一步是${stepRef('review')}。`;
             })
           }
           disabled={busy !== null || confirmation !== null || !complete}
@@ -149,7 +150,7 @@ export function DesignAssessmentSignOff({
               ? '已经确认'
               : !complete
                 ? `还差：${blockers.join('；')}`
-                : '确认题目与实操，进入审核与导出阶段'
+                : `确认${STEP_WORK_NAME.assessment}，进入${stepRef('review')}`
           }
         >
           {busy === 'assessment:confirm' ? <Loader2 className="animate-spin" /> : <Check />}

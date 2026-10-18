@@ -40,6 +40,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
+import { StepBadge } from '@/components/curriculum/step-rail';
 import type { CurriculumQualityEvaluation, CurriculumQualityLayer } from '@/lib/curriculum/audit';
 import { CURRICULUM_QUALITY_LAYER_LABELS as LAYER_LABELS } from '@/lib/curriculum/quality-labels';
 import type { CoverageVerdict, DesignCoverageReport } from '@/lib/curriculum/design-coverage';
@@ -49,6 +50,7 @@ import type {
   CurriculumDesignPhase,
   CurriculumObjectiveType,
 } from '@/lib/curriculum/design-types';
+import { STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface SnapshotPayload {
   task: { title: string; designPhase: CurriculumDesignPhase };
@@ -91,15 +93,8 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-const PHASE_LABELS: Record<CurriculumDesignPhase, string> = {
-  task: '课程任务',
-  outcomes: '学习成果',
-  graph: '依赖图',
-  outline: '课程大纲',
-  teaching: '教学设计',
-  assessment: '评价设计',
-  review: '课程审核',
-};
+// 矩阵顶上的那枚阶段名与步骤条、卡片角标共用一张表（`STEP_WORK_NAME`）：同一目在
+// 矩阵上叫「知识技能与依赖」、在步骤条上是第 3 步，用户才能把它们对上。
 
 const OBJECTIVE_TYPE_LABELS: Record<CurriculumObjectiveType, string> = {
   knowledge: '知识',
@@ -327,7 +322,7 @@ export function DesignHeatmap({
         <div className="flex flex-col gap-1">
           <div className="flex items-center gap-2">
             <h1 className="text-lg font-semibold">{title || '课程设计'}</h1>
-            {phase && <Badge variant="secondary">{PHASE_LABELS[phase]}</Badge>}
+            {phase && <Badge variant="secondary">{STEP_WORK_NAME[phase]}</Badge>}
           </div>
           <p className="text-muted-foreground text-xs">
             目标 × 目 热力矩阵 —— 每一行是一个学习目标，看它被教、被练、被考的情况
@@ -560,7 +555,10 @@ export function DesignHeatmap({
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">课程审核</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="review" currentPhase={phase} />
+                课程审核
+              </CardTitle>
               <CardDescription>
                 九层质量链按顺序检查；修好后面的层而前面还断着，覆盖率会指向错误的东西
               </CardDescription>

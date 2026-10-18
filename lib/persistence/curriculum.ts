@@ -1033,6 +1033,114 @@ CREATE UNIQUE INDEX IF NOT EXISTS curriculum_audit_finding_owner_fingerprint_idx
   ON curriculum_audit_finding (owner_id, task_id, fingerprint);
 `;
 
+/**
+ * 系列大纲：先有章，再有节，最后才有目。
+ *
+ * 章和节是分类，不是教学设计。它们必须能在一目都还没有的时候先存在——这正是
+ * "先出章、再出节、最后出目"这个操作顺序能成立的前提。所以它们不能挂在
+ * `curriculum_task` 下面（task 就是目），只能挂在系列下面自成一张表。
+ *
+ * 为什么是两级而不是树：再深一层就变成了"节内部的分组"，那件事由目内部的
+ * 大纲（`curriculum_unit`）负责，两处都长树会让同一个词指两个对象。
+ *
+ * `curriculum_task` 这次补了四个字段，每一个都在回答"这个目是谁、排在哪"：
+ * - `section_id`：这一目属于哪一节。删掉一节不会删目，目退回"未归类"——
+ *   分类可以改，教学单元不能跟着消失。
+ * - `code`：目自己的编号（`1-1-1`）。它以前是从条目上借的（`overview` 路由
+ *   取第一个条目的 `code`），于是编号要等走到第 4 步才出现，驾驶舱在创建时
+ *   根本不知道这一目叫什么。
+ * - `kind`：理论 / 实操 / 综合。它是目这一层的属性，不是条目的角色（讲/练/考）。
+ * - `order_index`：同一节内的顺序。
+ *
+ * 系列也补了两个默认 brief 字段：培训对象和默认学时属于整个系列。让用户对着
+ * 五十四目各填一遍，得到的不是五十四份答案，是四份互相矛盾的答案。
+ */
+const CURRICULUM_SERIES_OUTLINE_SCHEMA = `
+CREATE TABLE IF NOT EXISTS curriculum_series_outline_node (
+  id          TEXT PRIMARY KEY,
+  owner_id    TEXT NOT NULL,
+  series_id   TEXT NOT NULL REFERENCES curriculum_series(id) ON DELETE CASCADE,
+  parent_id   TEXT REFERENCES curriculum_series_outline_node(id) ON DELETE CASCADE,
+  node_type   TEXT NOT NULL,
+  code        TEXT,
+  title       TEXT NOT NULL,
+  note        TEXT,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT curriculum_series_outline_node_type_known
+    CHECK (node_type IN ('chapter','section')),
+  -- 章在顶层，节必须挂在章下面。父级形状由数据库保证，不靠调用方自觉：
+  -- 一节挂到另一节下面会让"第几章"失去唯一答案。
+  CONSTRAINT curriculum_series_outline_node_parent_shape CHECK (
+    (node_type = 'chapter' AND parent_id IS NULL)
+    OR (node_type = 'section' AND parent_id IS NOT NULL)
+  )
+);
+
+CREATE INDEX IF NOT EXISTS curriculum_series_outline_node_owner_series_idx
+  ON curriculum_series_outline_node (owner_id, series_id, parent_id, order_index);
+
+-- 编号在系列内唯一：它是用户对着大纲核数的依据，也是目编号（1-1-1）的前缀。
+-- 空编号允许存在，因为手工建的章、节可以后补。
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_series_outline_node_owner_code_idx
+  ON curriculum_series_outline_node (owner_id, series_id, code)
+  WHERE code IS NOT NULL;
+
+-- parent_id 的外键只保证"指向了一行"，不保证指向的是同一系列的一章。
+-- 一节套一节会让"第几章"失去唯一答案，所以这一条得由触发器守：
+-- 章在顶层（上面那条 CHECK），节的父级必须是同一 owner、同一系列、类型为章。
+CREATE OR REPLACE FUNCTION curriculum_outline_node_check_parent() RETURNS trigger AS $fn$
+DECLARE
+  parent_node curriculum_series_outline_node%ROWTYPE;
+BEGIN
+  IF NEW.node_type <> 'section' THEN
+    RETURN NEW;
+  END IF;
+  SELECT * INTO parent_node FROM curriculum_series_outline_node WHERE id = NEW.parent_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'outline section % has no parent', NEW.id;
+  END IF;
+  IF parent_node.node_type <> 'chapter' THEN
+    RAISE EXCEPTION 'outline node % parent is not a chapter', NEW.id;
+  END IF;
+  IF parent_node.owner_id <> NEW.owner_id OR parent_node.series_id <> NEW.series_id THEN
+    RAISE EXCEPTION 'outline node % parent belongs to another series', NEW.id;
+  END IF;
+  RETURN NEW;
+END;
+$fn$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS curriculum_outline_node_parent_guard ON curriculum_series_outline_node;
+
+CREATE TRIGGER curriculum_outline_node_parent_guard
+  BEFORE INSERT OR UPDATE OF parent_id, node_type, owner_id, series_id
+  ON curriculum_series_outline_node
+  FOR EACH ROW EXECUTE FUNCTION curriculum_outline_node_check_parent();
+
+ALTER TABLE curriculum_task
+  ADD COLUMN IF NOT EXISTS section_id TEXT
+    REFERENCES curriculum_series_outline_node(id) ON DELETE SET NULL;
+
+ALTER TABLE curriculum_task ADD COLUMN IF NOT EXISTS code TEXT;
+ALTER TABLE curriculum_task ADD COLUMN IF NOT EXISTS kind TEXT;
+ALTER TABLE curriculum_task ADD COLUMN IF NOT EXISTS order_index INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE curriculum_task
+  ADD CONSTRAINT curriculum_task_kind_known
+  CHECK (kind IS NULL OR kind IN ('theory','practice','review'));
+
+CREATE UNIQUE INDEX IF NOT EXISTS curriculum_task_owner_series_code_idx
+  ON curriculum_task (owner_id, series_id, code)
+  WHERE code IS NOT NULL AND series_id IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS curriculum_task_owner_section_idx
+  ON curriculum_task (owner_id, section_id, order_index);
+
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS audience TEXT;
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS default_hours DOUBLE PRECISION;
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -1121,6 +1229,16 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 14,
       name: 'design_finding_fingerprint',
       up: CURRICULUM_DESIGN_FINDING_FINGERPRINT_SCHEMA,
+      transaction: true,
+    },
+    // The authoring order the missing layer never expressed: chapters and
+    // sections must be able to exist before the first 目 does. A task is a 目,
+    // so this structure cannot live under a task — it hangs off the series and
+    // the task points at its section.
+    {
+      version: 15,
+      name: 'series_outline',
+      up: CURRICULUM_SERIES_OUTLINE_SCHEMA,
       transaction: true,
     },
   ],

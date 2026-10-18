@@ -34,6 +34,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { NODE_TYPE_LABELS, SUPPORT_LEVEL_LABELS } from '@/lib/curriculum/design-knowledge';
 import type { KnowledgeGap } from '@/lib/curriculum/design-knowledge';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import {
   confirmKnowledge,
   readKnowledgeState,
@@ -158,7 +159,7 @@ export function DesignKnowledgeDialog({
     setNotice(null);
     try {
       setState(await confirmKnowledge(taskId));
-      setNotice('知识技能图已确认。下一步是大纲。');
+      setNotice(`${STEP_WORK_NAME.graph}已确认。下一步是${stepRef('outline')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -209,7 +210,9 @@ export function DesignKnowledgeDialog({
           </DialogTitle>
           <DialogDescription>
             聊清楚为了做到那些学习目标，学生得先掌握什么、按什么顺序学。AI
-            写的每个知识技能点、每条支撑关系和先后关系都会直接存进课程设计；你改完点「确认知识技能图」，才允许进入大纲阶段。这一步不排章节——讲授顺序由先后关系推导，不是一个写死的序号。
+            写的每个知识技能点、每条支撑关系和先后关系都会直接存进课程设计；你改完点「确认
+            {STEP_WORK_NAME.graph}」，才允许进入{stepRef('outline')}
+            。这一步不排章节——讲授顺序由先后关系推导，不是一个写死的序号。
           </DialogDescription>
         </DialogHeader>
 
@@ -355,11 +358,11 @@ export function DesignKnowledgeDialog({
                   ? '已确认'
                   : state.gaps.length > 0
                     ? state.gaps.map((gap) => gap.text).join('；')
-                    : '确认知识技能图，进入大纲阶段'
+                    : `确认${STEP_WORK_NAME.graph}，进入${stepRef('outline')}`
               }
             >
               {busy === 'confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-              确认知识技能图
+              确认{STEP_WORK_NAME.graph}
             </Button>
             {state.confirmed ? (
               <Button

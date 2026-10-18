@@ -68,15 +68,43 @@ describe('chooseNextItem', () => {
     expect(decision?.taskId).toBe('earlier');
   });
 
+  it('同为未开始时，大纲里靠前的排在创建时间之前', () => {
+    // 用户按大纲顺序建完 1-1-1 再建 1-1-2，但如果先建的是后面那一目，按
+    // updatedAt 会推荐它——那是在建议跳着做。`outlineRank` 让推荐顺着大纲走。
+    const decision = chooseNextItem([
+      row({
+        taskId: 'later-in-outline',
+        outlineRank: 10102,
+        updatedAt: '2026-05-01T00:00:00.000Z',
+      }),
+      row({
+        taskId: 'first-in-outline',
+        outlineRank: 10101,
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      }),
+    ]);
+    expect(decision?.taskId).toBe('first-in-outline');
+  });
+
+  it('不在大纲里的目（outlineRank 为 null）排在已在大纲里的之后', () => {
+    const decision = chooseNextItem([
+      row({ taskId: 'orphan', outlineRank: null, updatedAt: '2026-01-01T00:00:00.000Z' }),
+      row({ taskId: 'outlined', outlineRank: 10101, updatedAt: '2026-05-01T00:00:00.000Z' }),
+    ]);
+    expect(decision?.taskId).toBe('outlined');
+  });
+
   it('全部已出片时返回 null，界面据此渲染空状态而不是编一个推荐', () => {
     expect(chooseNextItem([row({ producedCount: 1 })])).toBeNull();
     expect(chooseNextItem([])).toBeNull();
   });
 
-  it('理由说的是用户语言，且每一步都有自己的动作动词', () => {
+  it('理由回答"为什么是这一目"，不重复步骤名（步骤由七步条显示）', () => {
     const decision = chooseNextItem([row({ phase: 'graph', objectiveCount: 1, unitCount: 1 })]);
-    expect(decision?.reason).toContain('第 3 步');
-    expect(decision?.reason).toContain('需要哪些前置知识');
+    expect(decision?.reason).toContain('最近动过');
+    // 步骤名与序号归 `StepRail`：理由里再说一遍，一屏就出现三遍同一件事。
+    expect(decision?.reason).not.toContain('需要哪些前置知识');
+    expect(decision?.reason).not.toContain('第 3 步');
     expect(decision?.actionLabel).toBe('定它需要哪些前置知识');
   });
 

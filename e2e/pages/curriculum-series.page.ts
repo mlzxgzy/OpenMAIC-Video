@@ -33,7 +33,7 @@ export class SeriesCockpitPage {
     this.primaryAction = this.decision.getByRole('link').first();
     this.reason = this.decision.getByTestId('decision-reason');
     this.todos = page.getByLabel('待办');
-    this.matrix = page.getByLabel('出片看板');
+    this.matrix = page.getByLabel('系列大纲与出片');
     this.tile = this.matrix.getByRole('link');
   }
 

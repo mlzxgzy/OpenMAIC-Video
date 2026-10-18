@@ -4,8 +4,9 @@
  * 第五步「生成课程大纲」的 AI 对话面板。
  *
  * 与前几步同一副骨架：左边对话，右边状态，底部确认。状态那一侧的重点换了：第二步是
- * 一份清单，第三步是一张图，这一步是**一棵树加上它每个叶子上的承诺**——章、节、目，
- * 以及每个目讲授/练习/考核了哪些目标。
+ * 一份清单，第三步是一张图，这一步是**一棵树加上它每个叶子上的承诺**——条目
+ * （讲授 / 练习 / 考核）以及每条讲授/练习/考核了哪些目标。条目可以选择归进分组
+ * （库里是 `chapter`），但分组只做归类、不承担教学：一门一学时的目通常不需要它。
  *
  * 四个刻意的决定：
  *
@@ -47,6 +48,7 @@ import {
   type OutlineTurn,
 } from '@/lib/curriculum/outline-client';
 import type { CurriculumUnitRecord } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignOutlineDialogProps {
   open: boolean;
@@ -61,7 +63,7 @@ function initialTurn(): OutlineTurn {
   return {
     role: 'assistant',
     content:
-      '这一步把已经确认的学习目标和知识技能图排成课程大纲：章、节归类和分层，条目才是真正上课的内容。每个条目我会写清楚它是讲授、练习还是考试，以及它讲授/练习/考核哪些学习目标，并让顺序与你在上一步签的先后关系一致。页面、讲稿和题目是下一步的事。',
+      '这一目就是一节课：把它排成几段「条目」，每段写清楚是讲授、练习还是考试，以及它讲授/练习/考核哪些学习目标。条目可以再归进可选的分组（章、节），但分组只做归类、不承担教学；一门一学时的目通常不需要分组。顺序必须与上一步签的先后关系一致。页面、讲稿和题目是下一步的事。',
   };
 }
 
@@ -70,7 +72,7 @@ const EMPTY_STATE: OutlineStatePayload = {
   unitCoverage: [],
   objectives: [],
   unitDependencies: [],
-  gaps: [{ text: '还没有大纲：先把学习目标组织成章、节，再把教学内容落到条目上' }],
+  gaps: [{ text: '还没有条目：先把学习目标拆成讲课、练习、考核三段内容' }],
   findings: [],
   auditFindings: [],
   confirmation: null,
@@ -158,7 +160,7 @@ export function DesignOutlineDialog({
     setNotice(null);
     try {
       setState(await confirmOutline(taskId));
-      setNotice('课程大纲已确认。下一步是逐条的教学设计。');
+      setNotice(`${STEP_WORK_NAME.outline}已确认。下一步是${stepRef('teaching')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -252,9 +254,10 @@ export function DesignOutlineDialog({
             第五步：生成课程大纲
           </DialogTitle>
           <DialogDescription>
-            聊清楚这门课分几章、每章几节、每节有哪些条目。AI 写的每个章、节、目和它覆盖
-            的学习目标都会直接存进课程设计；你改完点「确认课程大纲」，才允许进入教学设计
-            阶段。顺序必须与上一步签的先后关系一致——图上的先修关系在这里第一次变成真的 交付顺序。
+            聊清楚这一目分几段、每段教什么。AI 写的每个条目（讲授 / 练习 / 考核）和它覆盖
+            的学习目标都会直接存进课程设计；你改完点「确认课程大纲」，才允许进入
+            {stepRef('teaching')}
+            。顺序必须与上一步签的先后关系一致——图上的先修关系在这里第一次变成真的 交付顺序。
           </DialogDescription>
         </DialogHeader>
 

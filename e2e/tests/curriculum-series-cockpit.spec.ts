@@ -71,8 +71,9 @@ test.describe('系列驾驶舱', () => {
     // 没有目时不能推荐——推荐的字段无处可指。这是有意的：空系列里"建第一个目"
     // 就是下一步，界面必须自己说出来，而不是让排序函数编一个理由。
     await expect(cockpit.decision).toHaveCount(0);
-    await expect(page.getByRole('link', { name: '新建目' })).toBeVisible();
-    await expect(cockpit.matrix).toContainText('这个系列还没有目');
+    // 空系列的第一步不是"写一个目"：目挂在节下面，所以主角卡是"先把大纲搭出来"。
+    await expect(page.getByRole('button', { name: '建第一章' })).toBeVisible();
+    await expect(cockpit.matrix).toContainText('这个系列还没有章');
   });
 
   test('多目时推荐唯一一个主角，主角与待办第一条是同一目', async ({ page }) => {
@@ -144,6 +145,36 @@ test.describe('系列驾驶舱', () => {
     await expect(cockpit.decision).toContainText('处审核未处理');
   });
 
+  /**
+   * 推荐卡要把"这一目在第几步"标出来，而不是一行 `text-xs` 的小字。
+   *
+   * 上一版在按钮旁写"这一步是第 ③ 步 · …"，用户看完说"还是不够指引"。这条用例把
+   * 新的契约钉住：七格全在、唯一的当前步、而且它就在推荐卡里（不是另开一处）。
+   */
+  test('推荐卡里七步全在，当前那一步只有一个', async ({ page }) => {
+    const seriesId = await seedSeries(page, `驾驶舱-七步 ${crypto.randomUUID().slice(0, 6)}`);
+    // `brief: true` 会把这一目推进到 `outcomes`：第 1 步已签、第 2 步正在进行。
+    await seedItems(page, seriesId, [{ title: '正在定目标的一目', brief: true }]);
+
+    const cockpit = new SeriesCockpitPage(page);
+    await cockpit.goto(seriesId);
+
+    const rail = cockpit.decision.getByTestId('step-rail');
+    await expect(rail).toBeVisible();
+    await expect(rail.locator('li')).toHaveCount(7);
+    await expect(rail.locator('li[data-step-state="done"]')).toHaveCount(1);
+    await expect(rail.locator('li[data-step-state="current"]')).toHaveCount(1);
+    await expect(rail.locator('li[data-step-state="current"]')).toHaveAttribute(
+      'data-step',
+      'outcomes',
+    );
+    await expect(cockpit.decision).toContainText('共 7 步');
+
+    // 待办每一行也要读得出步数——列表里有一半行只有"有阻塞"而读不出进度，是上一版
+    // 的另一个洞（两件事互斥地显示同一个位置）。
+    await expect(cockpit.todos.getByRole('link').first()).toContainText('第 2 步');
+  });
+
   test('待办第一条与推荐是同一目——两块内容不各说各话', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-一致 ${crypto.randomUUID().slice(0, 6)}`);
     await seedItems(page, seriesId, [
@@ -176,7 +207,8 @@ test.describe('系列驾驶舱', () => {
 
     // 这一条回答的是"我一共要干多少活、干完了多少"——整个系统里只有这里给出。
     // 序列页给的是 completedSteps/4，对"3 目做完 2 目"完全不敏感。
-    await expect(cockpit.matrix).toContainText('已出片 0 / 2 目');
+    await expect(cockpit.matrix).toContainText('2 目');
+    await expect(cockpit.matrix).toContainText('已出片 0');
     await expect(cockpit.tile).toHaveCount(2);
   });
 

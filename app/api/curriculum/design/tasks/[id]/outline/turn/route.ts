@@ -72,6 +72,7 @@ import {
   outlineState,
 } from '@/lib/server/curriculum/outline-state';
 import { shouldConfirmOutline } from '@/lib/curriculum/design-outline';
+import { stepLockMessage } from '@/lib/curriculum/ui-labels';
 import {
   backgroundWorkspaceId,
   SlotDisabledError,
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         409,
         'CURRICULUM_DESIGN_PHASE_LOCKED',
-        `课程任务当前处于「${task.designPhase}」阶段；先确认知识技能图并推进到「大纲」阶段，再来排大纲`,
+        stepLockMessage(task.designPhase, 'outline', '排大纲'),
         ctx.headers,
       );
     }

@@ -39,7 +39,37 @@ export interface CurriculumSeriesRecord {
   id: string;
   name: string;
   description: string | null;
+  /**
+   * 系列级默认 brief。培训对象与默认学时不是每一目的问题：五十四目各答一遍
+   * 得到的是四份互相矛盾的答案，所以它们属于系列，目在创建时继承、可覆盖。
+   */
+  audience: string | null;
+  defaultHours: number | null;
   courseCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 系列大纲里的两级分类。章在顶层，节挂在章下面；两者都不承载教学。 */
+export const CURRICULUM_OUTLINE_NODE_TYPES = ['chapter', 'section'] as const;
+export type CurriculumOutlineNodeType = (typeof CURRICULUM_OUTLINE_NODE_TYPES)[number];
+
+/**
+ * 系列大纲的一个节点：一章或一节。
+ *
+ * 它存在于任何目之前，也可以在任何目都没有的时候存在——这是"先出章、再出节、
+ * 最后出目"能按顺序做的原因。`code` 是用户对着大纲核数的编号（`2`、`2-1`），
+ * 目的编号（`2-1-2`）以它为前缀。
+ */
+export interface CurriculumSeriesOutlineNodeRecord {
+  id: string;
+  seriesId: string;
+  parentId: string | null;
+  nodeType: CurriculumOutlineNodeType;
+  code: string | null;
+  title: string;
+  note: string | null;
+  orderIndex: number;
   createdAt: string;
   updatedAt: string;
 }

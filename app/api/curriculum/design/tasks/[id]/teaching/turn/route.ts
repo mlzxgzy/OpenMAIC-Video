@@ -65,6 +65,7 @@ import {
   CURRICULUM_DESIGN_PHASES,
   type CurriculumDesignPhase,
 } from '@/lib/curriculum/design-types';
+import { stepLockMessage } from '@/lib/curriculum/ui-labels';
 
 export const runtime = 'nodejs';
 
@@ -109,7 +110,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         409,
         'CURRICULUM_DESIGN_PHASE_LOCKED',
-        `课程任务当前处于「${task.designPhase}」阶段；先确认大纲并推进到「教学设计」阶段，再来写授课脚本与分镜`,
+        stepLockMessage(task.designPhase, 'teaching', '写授课脚本与分镜'),
         ctx.headers,
       );
     }

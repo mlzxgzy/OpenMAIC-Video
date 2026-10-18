@@ -67,6 +67,8 @@ function isParseFailure(value: unknown): value is ParseResult<never> {
 export interface ParsedSeriesInput {
   name: string;
   description?: string | null;
+  audience?: string | null;
+  defaultHours?: number | null;
 }
 
 export function parseSeriesInput(body: unknown): ParseResult<ParsedSeriesInput> {
@@ -78,12 +80,26 @@ export function parseSeriesInput(body: unknown): ParseResult<ParsedSeriesInput> 
   }
   const description = readOptionalText(record, 'description');
   if (isParseFailure(description)) return description;
-  return { ok: true, value: { name: name.trim(), description: description ?? undefined } };
+  const audience = readOptionalText(record, 'audience');
+  if (isParseFailure(audience)) return audience;
+  const defaultHours = readOptionalNumber(record, 'defaultHours');
+  if (isParseFailure(defaultHours)) return defaultHours;
+  return {
+    ok: true,
+    value: {
+      name: name.trim(),
+      description: description ?? undefined,
+      audience: audience ?? undefined,
+      defaultHours: defaultHours ?? undefined,
+    },
+  };
 }
 
 export interface ParsedSeriesPatch {
   name?: string;
   description?: string | null;
+  audience?: string | null;
+  defaultHours?: number | null;
 }
 
 export function parseSeriesPatch(body: unknown): ParseResult<ParsedSeriesPatch> {
@@ -103,6 +119,18 @@ export function parseSeriesPatch(body: unknown): ParseResult<ParsedSeriesPatch> 
     const description = readOptionalText(record, 'description');
     if (isParseFailure(description)) return description;
     if (description !== undefined) value.description = description;
+  }
+
+  if ('audience' in record) {
+    const audience = readOptionalText(record, 'audience');
+    if (isParseFailure(audience)) return audience;
+    if (audience !== undefined) value.audience = audience;
+  }
+
+  if ('defaultHours' in record) {
+    const defaultHours = readOptionalNumber(record, 'defaultHours');
+    if (isParseFailure(defaultHours)) return defaultHours;
+    if (defaultHours !== undefined) value.defaultHours = defaultHours;
   }
 
   if (Object.keys(value).length === 0) {

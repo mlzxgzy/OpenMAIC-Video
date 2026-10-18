@@ -12,11 +12,8 @@
  * 两次查询就等于两次渲染之间可能各自给出不同的答案。
  */
 
-import {
-  CURRICULUM_DESIGN_PHASES,
-  type CurriculumDesignPhase,
-} from '@/lib/curriculum/design-types';
-import { PHASE_STATE_LABEL, STEP_LABEL } from '@/lib/curriculum/ui-labels';
+import type { CurriculumDesignPhase } from '@/lib/curriculum/design-types';
+import { PHASE_STATE_LABEL } from '@/lib/curriculum/ui-labels';
 
 /**
  * 一目的聚合行。
@@ -39,6 +36,19 @@ export interface NextItemRow {
   /** 未被接受的 `error` 级审核发现数 —— 这些目现在出不了片。 */
   blockingCount: number;
   updatedAt: string;
+  /**
+   * 这一目在系列大纲里的位置（章序 * 10000 + 节序 * 100 + 目序）。
+   *
+   * `null` 表示它还没归进任何一节（老数据或自由创建的任务）。"还没开始"的
+   * 目按这一位升序推荐，即**顺着大纲走**：用户先排出 1-1-1 → 1-1-2，系统就
+   * 先建议 1-1-1，而不是按创建时间挑一个"最早的"。没有大纲时退回创建时间，
+   * 驾驶舱的行为与之前一致。
+   */
+  outlineRank?: number | null;
+  /** 这一目属于系列大纲的哪一节；`null` 为未归类。 */
+  sectionId?: string | null;
+  /** 理论 / 实操 / 综合。 */
+  kind?: 'theory' | 'practice' | 'review' | null;
 }
 
 export interface NextItemDecision {
@@ -87,9 +97,10 @@ function isProduced(row: NextItemRow): boolean {
  *    它后面都是错的。
  * 2. **正在设计中**（`updatedAt` 最新的未出片目）。这是"继续上次"，用户刚放下
  *    的那一目。放在"还没开始"之前，因为重新打开一件事的成本远高于开始一件新的。
- * 3. **还没开始**。按 `updatedAt` 升序 —— 数据库里没有"第几目"的权威顺序
- *    （`orderIndex` 是目内部的，大纲之外的目没有），所以最早创建的最接近
- *    "接下来该做的"，而不是 `orderIndex`，那会让驾驶舱的推荐随数据形状漂移。
+ * 3. **还没开始**。按大纲位置（`outlineRank`）升序，即顺着章 → 节 → 目往下走；
+ *    没有大纲归属的目排在最后，按创建时间升序。**不按 `updatedAt` 排**：一个
+ *    按大纲顺序推进的系列，用户刚建完 3-1-1 再建 6-3-3，按更新时间会先推荐
+ *    6-3-3——那是在建议他跳到第六章。
  *
  * 排序键完整写死在这里而不是分散比较，是为了能写一条测试把优先级钉死：否则
  * "我为什么被推荐了这一目"永远无法回答。
@@ -99,8 +110,15 @@ function compareRows(a: NextItemRow, b: NextItemRow): number {
   const aStarted = a.phase !== 'task' || a.objectiveCount > 0 || a.unitCount > 0;
   const bStarted = b.phase !== 'task' || b.objectiveCount > 0 || b.unitCount > 0;
   if (aStarted !== bStarted) return aStarted ? -1 : 1;
-  // 同为进行中：最近动的在前。同为未开始：最早建的在前。
-  return aStarted ? b.updatedAt.localeCompare(a.updatedAt) : a.updatedAt.localeCompare(b.updatedAt);
+  if (aStarted) {
+    // 同为进行中：最近动的在前。
+    return b.updatedAt.localeCompare(a.updatedAt);
+  }
+  // 同为未开始：大纲里靠前的先做；不在大纲里的（`null`）垫底。
+  const aRank = a.outlineRank ?? Number.POSITIVE_INFINITY;
+  const bRank = b.outlineRank ?? Number.POSITIVE_INFINITY;
+  if (aRank !== bRank) return aRank - bRank;
+  return a.updatedAt.localeCompare(b.updatedAt);
 }
 
 /**
@@ -136,6 +154,11 @@ export function chooseNextItem(rows: readonly NextItemRow[]): NextItemDecision |
  * 理由的措辞分三种情况，因为它们要求用户做的事根本不同：有阻塞缺陷时要做的是
  * 修东西而不是往前推；已经在设计中是接着干；还没开始是开个头。把这三种混成
  * "继续完成 2-1-2"，就是设计稿里说的那种"看一眼没有想法"。
+ *
+ * **理由里不再复述"第几步"**。它曾经是 `卡在第 3 步 · ③ 需要哪些前置知识。`：
+ * 序号出现两遍（"3"和"③"），而这句话与旁边的七步条、标题上的「第 3 步」角标
+ * 说的是同一件事——同一屏幕三遍同样的信息，正是"不够指引"的一个来源。步骤由
+ * `StepRail` 结构化地显示，理由腾出来回答"为什么是这一目"。
  */
 function decisionFor(row: NextItemRow, all: readonly NextItemRow[]): NextItemDecision {
   const base = {
@@ -170,7 +193,11 @@ function decisionFor(row: NextItemRow, all: readonly NextItemRow[]): NextItemDec
   return {
     ...base,
     cause: started ? 'in-progress' : 'not-started',
-    reason: `卡在第 ${CURRICULUM_DESIGN_PHASES.indexOf(row.phase) + 1} 步 · ${STEP_LABEL[row.phase]}。`,
+    // 排序规则第 2 条（`compareRows`）保证被选中的"进行中"就是最近动过的那一目，
+    // 所以这句话在这里是可验证的事实，不是恭维。
+    reason: started
+      ? '这是最近动过、还没出片的一目，接着上次停下的地方往下做。'
+      : `还没开始设计。从"${PHASE_STATE_LABEL.task}"开始。`,
     blockers: [],
   };
 }

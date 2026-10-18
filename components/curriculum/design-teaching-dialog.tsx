@@ -47,6 +47,7 @@ import {
   type TeachingTurn,
 } from '@/lib/curriculum/teaching-client';
 import type { CurriculumUnitRecord } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignTeachingDialogProps {
   open: boolean;
@@ -71,7 +72,7 @@ const EMPTY_STATE: TeachingStatePayload = {
   nodes: [],
   nodeObjectives: [],
   objectives: [],
-  gaps: [{ kind: 'no_items', text: '还没有条目：先在大纲阶段排出章、节、目' }],
+  gaps: [{ kind: 'no_items', text: `还没有条目：先到${stepRef('outline')}排出这一目的条目` }],
   findings: [],
   auditFindings: [],
   confirmation: null,
@@ -152,7 +153,7 @@ export function DesignTeachingDialog({
     setNotice(null);
     try {
       setState(await confirmTeaching(taskId));
-      setNotice('授课脚本与分镜已确认。下一步是逐条的题目、实操与考试。');
+      setNotice(`${STEP_WORK_NAME.teaching}已确认。下一步是${stepRef('assessment')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -203,7 +204,7 @@ export function DesignTeachingDialog({
           <DialogDescription>
             把每个条目写成授课脚本（讲什么、讲到什么程度、什么顺序），再落成分镜——每页一句
             目标、一句核心信息、一种呈现方式。分镜直接进生成提示词，所以脚本与分镜必须互相对得上：
-            脚本说要讲透的知识点，分镜里得有某一页担着。确认之后才允许进入题目与实操阶段。
+            脚本说要讲透的知识点，分镜里得有某一页担着。确认之后才允许进入{stepRef('assessment')}。
           </DialogDescription>
         </DialogHeader>
 
@@ -258,7 +259,7 @@ export function DesignTeachingDialog({
             </div>
             {items.length === 0 ? (
               <p className="text-muted-foreground border-border rounded-lg border border-dashed p-3 text-xs">
-                还没有条目。章节只是归类，能上课的是条目——先在大纲阶段把它们排出来。
+                还没有条目。章节只是归类，能上课的是条目——先到{stepRef('outline')}把它们排出来。
               </p>
             ) : (
               <ul className="border-border flex max-h-80 flex-col gap-3 overflow-y-auto rounded-lg border p-3 text-xs">

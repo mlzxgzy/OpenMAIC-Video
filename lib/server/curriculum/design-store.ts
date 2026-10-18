@@ -51,6 +51,7 @@ import type {
   CurriculumQuestionRecord,
   CurriculumQuestionType,
   CurriculumSupportLevel,
+  CurriculumTaskKind,
   CurriculumTaskRecord,
   CurriculumTaskStatus,
   CurriculumTeachingDesign,
@@ -66,6 +67,7 @@ import type {
   LabScoreRule,
   LabVerifyRule,
 } from '@/lib/curriculum/design-types';
+import { stepLockMessage, stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import {
   auditCurriculumDesign,
   evaluateCurriculumQuality,
@@ -84,6 +86,7 @@ import {
 import { changedDirectionKeys, directionValuesOf } from '@/lib/curriculum/design-direction';
 import {
   CURRICULUM_DIRECTED_EDGE_TYPES,
+  CURRICULUM_TASK_KINDS,
   deriveVerifiability,
   nextCurriculumDesignPhase,
 } from '@/lib/curriculum/design-types';
@@ -132,6 +135,13 @@ export class CurriculumPhaseError extends Error {
 export interface CurriculumTaskInput {
   seriesId?: string | null;
   title: string;
+  /** 挂在系列大纲的哪一节下面。给了它就不必再给 `seriesId`（系列由节决定）。 */
+  sectionId?: string | null;
+  /** 目编号（`2-1-3`）。留空时按所属节与顺序自动生成。 */
+  code?: string | null;
+  /** 理论 / 实操 / 综合。 */
+  kind?: CurriculumTaskKind | null;
+  orderIndex?: number;
   audience?: string | null;
   learnerLevel?: string | null;
   trainingScenario?: string | null;
@@ -307,6 +317,10 @@ type Row = Record<string, unknown>;
 interface TaskRow extends Row {
   id: string;
   series_id: string | null;
+  section_id: string | null;
+  code: string | null;
+  kind: string | null;
+  order_index: number | string;
   title: string;
   audience: string | null;
   learner_level: string | null;
@@ -521,9 +535,9 @@ interface ConfirmationRow extends Row {
 
 // ── Column lists ────────────────────────────────────────────────────────────
 
-const TASK_COLUMNS = `id, series_id, title, audience, learner_level, training_scenario,
-       duration_hours, application_scene, problem_statement, status, design_phase,
-       created_at, updated_at`;
+const TASK_COLUMNS = `id, series_id, section_id, code, kind, order_index, title, audience,
+       learner_level, training_scenario, duration_hours, application_scene, problem_statement,
+       status, design_phase, created_at, updated_at`;
 
 const OBJECTIVE_COLUMNS = `id, task_id, parent_id, code, title, description, objective_type,
        bloom_level, level, expected_behavior, min_criteria, proficient_criteria,
@@ -656,6 +670,10 @@ function mapTask(row: TaskRow): CurriculumTaskRecord {
   return {
     id: row.id,
     seriesId: row.series_id,
+    sectionId: row.section_id,
+    code: row.code,
+    kind: row.kind as CurriculumTaskKind | null,
+    orderIndex: numeric(row.order_index),
     title: row.title,
     audience: row.audience,
     learnerLevel: row.learner_level,
@@ -941,7 +959,10 @@ async function assertPhase(
     throw new CurriculumPhaseError(
       current,
       required,
-      `课程任务当前处于「${current}」阶段；「${required}」的工作在它之后。` + '请先完成当前阶段。',
+      // 这句话会一路走到界面上（`CurriculumPhaseError.message` 被路由回给客户端），
+      // 所以它不能插阶段字面量：原文是"当前处于「outcomes」阶段；「graph」的工作在
+      // 它之后"，用户读到的是一句英文 id。改走 `stepLockMessage`，与门禁按钮同词。
+      stepLockMessage(current, required),
     );
   }
   return current;
@@ -1257,36 +1278,132 @@ async function assertEndpointOwned(
 
 // ── Task CRUD ───────────────────────────────────────────────────────────────
 
+interface TaskSectionRow extends Row {
+  id: string;
+  series_id: string;
+  code: string | null;
+  order_index: number | string;
+}
+
+async function readTaskSection(
+  queryable: Queryable,
+  ownerId: string,
+  sectionId: string,
+): Promise<TaskSectionRow | null> {
+  const result = await queryable.query<TaskSectionRow>(
+    `SELECT id, series_id, code, order_index
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND id = $2 AND node_type = 'section'`,
+    [ownerId, sectionId],
+  );
+  return result.rows[0] ?? null;
+}
+
+function optionalTaskKind(value: unknown): CurriculumTaskKind | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string' || !CURRICULUM_TASK_KINDS.includes(value as CurriculumTaskKind)) {
+    throw new CurriculumDesignValidationError('kind 只能是 theory、practice 或 review');
+  }
+  return value as CurriculumTaskKind;
+}
+
+/**
+ * 目挂在节上时的默认编号与顺序：`2-1-3` = 节编号 + 同节内序号。
+ *
+ * 序号不回收删除留下的空洞。编号是用户对着大纲核数的依据，把 `2-1-4` 叫回
+ * `2-1-3` 会让打印出来的大纲一夜之间对不上，而它本来就不是主键。
+ */
+async function nextTaskCode(
+  queryable: Queryable,
+  ownerId: string,
+  section: TaskSectionRow,
+): Promise<string | null> {
+  if (!section.code) return null;
+  const result = await queryable.query<{ count: number | string }>(
+    `SELECT count(*)::text AS count
+       FROM curriculum_task
+      WHERE owner_id = $1 AND section_id = $2`,
+    [ownerId, section.id],
+  );
+  return `${section.code}-${numeric(result.rows[0]?.count ?? 0) + 1}`;
+}
+
+async function nextTaskOrderIndex(
+  queryable: Queryable,
+  ownerId: string,
+  sectionId: string | null,
+): Promise<number> {
+  if (!sectionId) return 0;
+  const result = await queryable.query<{ next: number | string }>(
+    `SELECT COALESCE(MAX(order_index) + 1, 1) AS next
+       FROM curriculum_task
+      WHERE owner_id = $1 AND section_id = $2`,
+    [ownerId, sectionId],
+  );
+  return numeric(result.rows[0]?.next ?? 1);
+}
+
 export async function createCurriculumTask(
   queryable: Queryable,
   ownerId: string,
   input: CurriculumTaskInput,
 ): Promise<CurriculumTaskRecord> {
   const title = requiredText(input.title, 'title');
-  await assertSeriesOwned(queryable, ownerId, input.seriesId);
-  const result = await queryable.query<TaskRow>(
-    `INSERT INTO curriculum_task
-       (id, owner_id, series_id, title, audience, learner_level, training_scenario,
-        duration_hours, application_scene, problem_statement, status, design_phase)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'task')
-     RETURNING ${TASK_COLUMNS}`,
-    [
-      createId('task'),
-      ownerId,
-      input.seriesId ?? null,
-      title,
-      optionalText(input.audience),
-      optionalText(input.learnerLevel),
-      optionalText(input.trainingScenario),
-      input.durationHours ?? null,
-      optionalText(input.applicationScene),
-      optionalText(input.problemStatement),
-      input.status ?? 'draft',
-    ],
-  );
-  const row = result.rows[0];
-  if (!row) throw new CurriculumDesignValidationError('课程任务创建失败');
-  return mapTask(row);
+  const sectionId = optionalText(input.sectionId ?? null);
+  const section = sectionId ? await readTaskSection(queryable, ownerId, sectionId) : null;
+  if (sectionId && !section) throw new CurriculumDesignNotFoundError('所属节不存在');
+  // 节决定系列：给了一节又给另一个系列，是调用方把两个 id 拼错了，不是可以
+  // "以谁为准"的选择题。
+  if (section && input.seriesId && input.seriesId !== section.series_id) {
+    throw new CurriculumDesignValidationError('所属节不属于这个系列');
+  }
+  const seriesId = section ? section.series_id : (input.seriesId ?? null);
+  await assertSeriesOwned(queryable, ownerId, seriesId);
+  const kind = optionalTaskKind(input.kind);
+  const code =
+    input.code !== undefined
+      ? optionalText(input.code)
+      : section
+        ? await nextTaskCode(queryable, ownerId, section)
+        : null;
+  const orderIndex =
+    input.orderIndex ?? (await nextTaskOrderIndex(queryable, ownerId, section?.id ?? null));
+
+  try {
+    const result = await queryable.query<TaskRow>(
+      `INSERT INTO curriculum_task
+         (id, owner_id, series_id, section_id, code, kind, order_index, title, audience,
+          learner_level, training_scenario, duration_hours, application_scene,
+          problem_statement, status, design_phase)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'task')
+       RETURNING ${TASK_COLUMNS}`,
+      [
+        createId('task'),
+        ownerId,
+        seriesId,
+        section?.id ?? null,
+        code,
+        kind,
+        orderIndex,
+        title,
+        optionalText(input.audience),
+        optionalText(input.learnerLevel),
+        optionalText(input.trainingScenario),
+        input.durationHours ?? null,
+        optionalText(input.applicationScene),
+        optionalText(input.problemStatement),
+        input.status ?? 'draft',
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumDesignValidationError('课程任务创建失败');
+    return mapTask(row);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new CurriculumDesignValidationError('这个系列里已经有同编号的目');
+    }
+    throw error;
+  }
 }
 
 export async function updateCurriculumTask(
@@ -1301,20 +1418,43 @@ export async function updateCurriculumTask(
   );
   const current = existing.rows[0];
   if (!current) throw new CurriculumDesignNotFoundError('课程任务不存在');
-  if (patch.seriesId !== undefined) await assertSeriesOwned(queryable, ownerId, patch.seriesId);
+
+  const nextSectionId =
+    patch.sectionId !== undefined ? optionalText(patch.sectionId) : current.section_id;
+  const section = nextSectionId ? await readTaskSection(queryable, ownerId, nextSectionId) : null;
+  if (nextSectionId && !section) throw new CurriculumDesignNotFoundError('所属节不存在');
+
+  const nextSeriesId =
+    patch.seriesId !== undefined ? patch.seriesId : section ? section.series_id : current.series_id;
+  if (section && nextSeriesId !== section.series_id) {
+    throw new CurriculumDesignValidationError('所属节不属于这个系列');
+  }
+  await assertSeriesOwned(queryable, ownerId, nextSeriesId);
   const nextTitle = patch.title !== undefined ? requiredText(patch.title, 'title') : current.title;
+  const nextKind =
+    patch.kind !== undefined
+      ? optionalTaskKind(patch.kind)
+      : (current.kind as CurriculumTaskKind | null);
+  const nextCode = patch.code !== undefined ? optionalText(patch.code) : current.code;
+  const nextOrder =
+    patch.orderIndex !== undefined ? patch.orderIndex : numeric(current.order_index);
 
   const result = await queryable.query<TaskRow>(
     `UPDATE curriculum_task
-        SET series_id = $3, title = $4, audience = $5, learner_level = $6,
-            training_scenario = $7, duration_hours = $8, application_scene = $9,
-            problem_statement = $10, status = $11, updated_at = now()
+        SET series_id = $3, section_id = $4, code = $5, kind = $6, order_index = $7,
+            title = $8, audience = $9, learner_level = $10,
+            training_scenario = $11, duration_hours = $12, application_scene = $13,
+            problem_statement = $14, status = $15, updated_at = now()
       WHERE owner_id = $1 AND id = $2
       RETURNING ${TASK_COLUMNS}`,
     [
       ownerId,
       taskId,
-      patch.seriesId !== undefined ? patch.seriesId : current.series_id,
+      nextSeriesId,
+      section?.id ?? null,
+      nextCode,
+      nextKind,
+      nextOrder,
       nextTitle,
       patch.audience !== undefined ? optionalText(patch.audience) : current.audience,
       patch.learnerLevel !== undefined ? optionalText(patch.learnerLevel) : current.learner_level,
@@ -1527,7 +1667,7 @@ export async function phaseCompletionGaps(
       'task',
     );
     if (!confirmation) {
-      gaps.push('课程方向还没有确认（确认后才会进入学习成果阶段）');
+      gaps.push(`${STEP_WORK_NAME.task}还没有确认（确认后才会进入${stepRef('outcomes')}）`);
     }
   }
 
@@ -1564,7 +1704,7 @@ export async function phaseCompletionGaps(
       'outcomes',
     );
     if (!outcomeConfirmation) {
-      gaps.push('学习目标与考核标准还没有确认（确认后才会进入知识技能图阶段）');
+      gaps.push(`${STEP_WORK_NAME.outcomes}还没有确认（确认后才会进入${stepRef('graph')}）`);
     }
   }
 
@@ -1610,7 +1750,7 @@ export async function phaseCompletionGaps(
       'graph',
     );
     if (!graphConfirmation) {
-      gaps.push('知识技能图还没有确认（确认后才会进入大纲阶段）');
+      gaps.push(`${STEP_WORK_NAME.graph}还没有确认（确认后才会进入${stepRef('outline')}）`);
     }
   }
 
@@ -1639,7 +1779,7 @@ export async function phaseCompletionGaps(
       'outline',
     );
     if (!outlineConfirmation) {
-      gaps.push('课程大纲还没有确认（确认后才会进入教学设计阶段）');
+      gaps.push(`${STEP_WORK_NAME.outline}还没有确认（确认后才会进入${stepRef('teaching')}）`);
     }
   }
 
@@ -1693,7 +1833,7 @@ export async function phaseCompletionGaps(
       'teaching',
     );
     if (!teachingConfirmation) {
-      gaps.push('授课脚本与分镜还没有确认（确认后才会进入评价设计阶段）');
+      gaps.push(`${STEP_WORK_NAME.teaching}还没有确认（确认后才会进入${stepRef('assessment')}）`);
     }
   }
 
@@ -1726,7 +1866,7 @@ export async function phaseCompletionGaps(
       'assessment',
     );
     if (!assessmentConfirmation) {
-      gaps.push('题目与实操还没有确认（确认后才会进入审核阶段）');
+      gaps.push(`${STEP_WORK_NAME.assessment}还没有确认（确认后才会进入${stepRef('review')}）`);
     }
   }
 

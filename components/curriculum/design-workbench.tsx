@@ -44,7 +44,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
-  ArrowRight,
   Check,
   GitBranch,
   Link2,
@@ -89,6 +88,7 @@ const outcomesConflicts = (draft: StepDraft): Record<string, string> => {
 const emptyLive = { nodeObjectives: [], unitCoverage: [] } as const;
 
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
+import { StepBadge } from '@/components/curriculum/step-rail';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
 import { StepCopilot } from '@/components/curriculum/step-copilot';
@@ -112,11 +112,8 @@ import {
   type FormField,
   type FormValues,
 } from '@/components/curriculum/design-workbench-forms';
-import {
-  CURRICULUM_DESIGN_PHASE_ORDER,
-  authoringAvailability,
-  designPhaseLabel,
-} from '@/lib/curriculum/design-editing';
+import { authoringAvailability } from '@/lib/curriculum/design-editing';
+import { stepRef } from '@/lib/curriculum/ui-labels';
 import {
   EXAM_FORCED_VALUES,
   LAB_VERIFY_KINDS,
@@ -224,27 +221,6 @@ function intFrom(value: string | boolean | string[] | undefined): number {
 
 const roleLabel = (role: string | null | undefined) =>
   ROLE_OPTIONS.find((option) => option.value === role)?.label ?? role ?? '未指定';
-
-/** The phase rail: where the task is, and what each phase is called. */
-function PhaseRail({ phase }: { phase: CurriculumDesignPhase }) {
-  const currentRank = CURRICULUM_DESIGN_PHASE_ORDER.indexOf(phase);
-  return (
-    <div className="flex flex-wrap items-center gap-1">
-      {CURRICULUM_DESIGN_PHASE_ORDER.map((entry, index) => (
-        <span key={entry} className="flex items-center gap-1">
-          {index > 0 && <ArrowRight className="text-muted-foreground size-3" />}
-          <Badge
-            variant={entry === phase ? 'default' : 'outline'}
-            className={entry === phase ? undefined : 'text-muted-foreground'}
-          >
-            {designPhaseLabel(entry)}
-            {index < currentRank ? <Check className="ml-1 inline size-3" /> : null}
-          </Badge>
-        </span>
-      ))}
-    </div>
-  );
-}
 
 /** An empty state that says which phase opens this section. */
 function EmptySection({
@@ -512,7 +488,11 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             刷新
           </Button>
         </div>
-        <PhaseRail phase={phase} />
+        {/*
+          这里不再挂步骤条：七步条由 `DesignTaskShell` 渲染在 Tabs 之外，三个 Tab 上
+          都在。编辑器里再放一份会出现两个"当前步"——壳上的那个说第 7 步、编辑器里的
+          那个也上色，读者要花力气判断它们是不是同一件事。
+        */}
         <p className="text-muted-foreground text-xs">
           阶段决定能新增什么，不决定能改什么——写错了的东西，任何阶段都能改掉或删掉。
         </p>
@@ -551,7 +531,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">学习目标与证据</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="outcomes" currentPhase={phase} />
+                学习目标与证据
+              </CardTitle>
               <CardDescription>
                 目标要写得出可观察的行为和最低标准，否则系统会判定它不可验证
               </CardDescription>
@@ -726,7 +709,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">知识技能与依赖</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="graph" currentPhase={phase} />
+                知识技能与依赖
+              </CardTitle>
               <CardDescription>
                 两端都要连上：每个知识点支撑至少一个目标，每个目标也至少有一个知识点
               </CardDescription>
@@ -856,7 +842,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">课程大纲</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="outline" currentPhase={phase} />
+                课程大纲
+              </CardTitle>
               <CardDescription>
                 条目角色决定它生成什么：讲课出幻灯片，练习多出交互，考试不收提示
               </CardDescription>
@@ -974,7 +963,11 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">教 / 练 / 考 覆盖</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                {/* 覆盖是第 4 步的一部分：`setCurriculumUnitCoverage` 与创建条目同一个
+                    `outline` 门禁，勾选改变的是大纲里每一条教/练/考什么。 */}
+                <StepBadge phase="outline" currentPhase={phase} />教 / 练 / 考 覆盖
+              </CardTitle>
               <CardDescription>
                 勾选即改变热力矩阵。整份覆盖一次事务写入，避免闭环被看到写了一半的状态
               </CardDescription>
@@ -1078,7 +1071,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">授课脚本与分镜</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="teaching" currentPhase={phase} />
+                授课脚本与分镜
+              </CardTitle>
               <CardDescription>
                 每个条目讲什么、讲到什么程度，以及这件事落在哪几页上——分镜直接进生成提示词
               </CardDescription>
@@ -1104,7 +1100,7 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           <div className="flex flex-col gap-3">
             {items.length === 0 ? (
               <EmptySection phase={phase} kind="units">
-                还没有条目。分镜是逐条写的，先把大纲里的章、节、目排出来。
+                还没有条目。分镜是逐条写的，先把这一目的条目（讲授 / 练习 / 考核）排出来。
               </EmptySection>
             ) : (
               <ul className="flex flex-col gap-3">
@@ -1179,7 +1175,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">题目与实操</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="assessment" currentPhase={phase} />
+                题目与实操
+              </CardTitle>
               <CardDescription>
                 每个承诺要被考核的目标，都要有题目或实操接着，并且挂在承担它的目上——挂错条目的产物看起来完全正常，但在学员的考核闭环里读不到它
               </CardDescription>
@@ -1206,7 +1205,7 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           <div className="flex flex-col gap-3">
             {items.length === 0 ? (
               <EmptySection phase={phase} kind="units">
-                还没有条目。题目和实操是逐条挂上去的，先把大纲里的章、节、目排出来。
+                还没有条目。题目和实操是逐条挂上去的，先把这一目的条目（讲授 / 练习 / 考核）排出来。
               </EmptySection>
             ) : (
               <ul className="flex flex-col gap-3">
@@ -1309,7 +1308,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">测验题</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="assessment" currentPhase={phase} />
+                测验题
+              </CardTitle>
               <CardDescription>每道题挂在一个目标和一条覆盖它的条目上</CardDescription>
             </div>
             <CreateForm
@@ -1440,7 +1442,10 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         <CardHeader>
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <CardTitle className="text-base">实操任务</CardTitle>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                <StepBadge phase="assessment" currentPhase={phase} />
+                实操任务
+              </CardTitle>
               <CardDescription>
                 一道上机题：结果由「验证规则」判定，参考解法只用于提示与复盘
               </CardDescription>
@@ -1683,7 +1688,9 @@ function EvidenceBlock({
         />
       </div>
       {evidence.length === 0 ? (
-        <span className="text-muted-foreground text-[11px]">没有证据的目标进不了依赖图阶段。</span>
+        <span className="text-muted-foreground text-[11px]">
+          没有证据的目标进不了{stepRef('graph')}。
+        </span>
       ) : (
         evidence.map((row) => (
           <div

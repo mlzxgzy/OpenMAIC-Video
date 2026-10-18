@@ -24,7 +24,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowRight, History } from 'lucide-react';
 
 import { chooseNextItem, type NextItemDecision } from '@/lib/curriculum/next-item';
-import { STEP_LABEL } from '@/lib/curriculum/ui-labels';
+import { STEP_NAME, STEP_NUMBER } from '@/lib/curriculum/ui-labels';
 
 interface OverviewRow {
   taskId: string;
@@ -65,8 +65,6 @@ export function ContinueLastCard() {
 
   if (!decision) return null;
 
-  const step = STEP_LABEL[decision.phase];
-
   return (
     <div className="mt-4 w-full">
       <button
@@ -82,9 +80,12 @@ export function ContinueLastCard() {
         <span className="min-w-0 flex-1">
           <span className="text-muted-foreground flex items-center gap-1.5 text-xs">
             继续上次
-            <span className="text-foreground/70">
-              第 {step.slice(0, 1)} 步 · {step.replace(/^[①-⑦]\s*/, '')}
+            {/* 序号不再是从 `STEP_LABEL` 里切出来的圈字符（切法一改就空白），直接
+                用 `STEP_NUMBER`/`STEP_NAME` 两个字段，并在前台色上放大一点。 */}
+            <span className="text-foreground font-medium tabular-nums">
+              第 {STEP_NUMBER[decision.phase]} 步
             </span>
+            <span className="text-foreground/70">· {STEP_NAME[decision.phase]}</span>
           </span>
           <span className="mt-0.5 flex items-center gap-2 text-sm font-medium">
             {decision.code ? (

@@ -45,17 +45,23 @@ export async function GET(req: NextRequest) {
         // "还没有任何条目""还没有题目"这类"后面某一步还没做"的报告，直接计数
         // 会让刚建的一目显示"4 处审核问题挡住了导出"。见 `blocking-scope.ts`。
         const blockingCount = countBlockingFindings(evaluation.blocking, task.designPhase);
-        // The code is the 目's own (`2-1-2`), not the task's title: the matrix
-        // groups by chapter and labels by code, and a "code" that is a sentence
-        // makes both unreadable. Falls back to empty so the UI can hide it
-        // rather than print a title twice.
+        // 编号先读目自己的（`curriculum_task.code`），老数据才回落到内部条目的
+        // code。这个顺序是有意的：编号在创建时就该知道，而不是等走到第 4 步
+        // 填了第一个条目才出现——驾驶舱在"先出章、再出节"的阶段就要显示它。
         const code =
-          snapshot.units.find((unit) => unit.unitType === 'item' && unit.code)?.code ?? '';
+          task.code ??
+          snapshot.units.find((unit) => unit.unitType === 'item' && unit.code)?.code ??
+          '';
         return {
           taskId: task.id,
           code,
           title: task.title,
           phase: task.designPhase,
+          // 章/节的下标由驾驶舱用大纲树算，这里只给节 id 与同节内顺序：
+          // 路由不该替界面决定目录怎么叠。
+          sectionId: task.sectionId,
+          kind: task.kind,
+          orderIndex: task.orderIndex,
           unitCount: snapshot.units.length,
           itemCount: snapshot.units.filter((unit) => unit.unitType === 'item').length,
           producedCount: snapshot.units.filter((unit) => unit.stageId !== null).length,

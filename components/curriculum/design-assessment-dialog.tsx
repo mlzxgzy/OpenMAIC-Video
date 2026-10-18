@@ -50,6 +50,7 @@ import {
   type AssessmentGap,
 } from '@/lib/curriculum/design-assessment';
 import { ROLE_LABELS } from '@/lib/curriculum/design-teaching';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import {
   confirmAssessment,
   readAssessmentState,
@@ -89,7 +90,10 @@ const EMPTY_STATE: AssessmentStatePayload = {
   questions: [],
   labTasks: [],
   gaps: [
-    { kind: 'no_items', text: '还没有条目：题目与实操是逐条挂上去的，先在大纲阶段排出章节目' },
+    {
+      kind: 'no_items',
+      text: `还没有条目：题目与实操是逐条挂上去的，先到${stepRef('outline')}排出章节目`,
+    },
   ],
   findings: [],
   auditFindings: [],
@@ -173,7 +177,7 @@ export function DesignAssessmentDialog({
     setNotice(null);
     try {
       setState(await confirmAssessment(taskId));
-      setNotice('题目与实操已确认。下一步是审核与导出。');
+      setNotice(`${STEP_WORK_NAME.assessment}已确认。下一步是${stepRef('review')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -238,8 +242,8 @@ export function DesignAssessmentDialog({
           <DialogDescription>
             给每个条目写出可以判分的考核：题目要写清选项、答案和干扰项对应的误解；实操要写清 Docker
             镜像与验证规则——验证规则判结果（flag、文件、命令输出…），参考解答只用于提示
-            与复盘。每一道题、每一个实操都只能挂在承担它目标的那个目上。确认之后才允许进入审核与
-            导出阶段。
+            与复盘。每一道题、每一个实操都只能挂在承担它目标的那个目上。确认之后才允许进入
+            {stepRef('review')}。
           </DialogDescription>
         </DialogHeader>
 
@@ -298,7 +302,8 @@ export function DesignAssessmentDialog({
             <GapList gaps={state.gaps} />
             {items.length === 0 ? (
               <p className="text-muted-foreground border-border rounded-lg border border-dashed p-3 text-xs">
-                还没有条目。章和节只做归类，能挂题目和实操的是目——先在大纲阶段把它们排出来。
+                还没有条目。章和节只做归类，能挂题目和实操的是目——先到{stepRef('outline')}
+                把它们排出来。
               </p>
             ) : (
               <ul className="border-border flex max-h-80 flex-col gap-3 overflow-y-auto rounded-lg border p-3 text-xs">

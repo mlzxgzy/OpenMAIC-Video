@@ -48,6 +48,7 @@ import {
   type DirectionTurn,
 } from '@/lib/curriculum/direction-client';
 import type { CurriculumDesignConfirmationRecord } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignDirectionDialogProps {
   open: boolean;
@@ -197,7 +198,7 @@ export function DesignDirectionDialog({
       setValues(state.values);
       setGaps(state.gaps);
       setConfirmation(state.confirmation);
-      setNotice('课程方向已确认。下一步是学习目标。');
+      setNotice(`${STEP_WORK_NAME.task}已确认。下一步是${stepRef('outcomes')}。`);
       await onChanged?.();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : '确认失败');
@@ -237,7 +238,8 @@ export function DesignDirectionDialog({
           </DialogTitle>
           <DialogDescription>
             聊清楚受众、范围、基础和时长。AI
-            写的每一格都会直接存进课程任务；你改完点「确认课程方向」，才允许进入学习目标阶段。
+            写的每一格都会直接存进课程任务；你改完点「确认课程方向」，才允许进入
+            {stepRef('outcomes')}。
           </DialogDescription>
         </DialogHeader>
 

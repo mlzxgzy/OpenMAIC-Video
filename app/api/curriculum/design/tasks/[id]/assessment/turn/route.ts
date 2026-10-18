@@ -40,10 +40,7 @@ import {
   type CurriculumDesignPhase,
 } from '@/lib/curriculum/design-types';
 import { ownerJson } from '@/lib/server/agent-runtime/route-response';
-import {
-  assessmentBlockers,
-  assessmentState,
-} from '@/lib/server/curriculum/assessment-state';
+import { assessmentBlockers, assessmentState } from '@/lib/server/curriculum/assessment-state';
 import {
   AssessmentAnswerError,
   draftCourseAssessment,
@@ -69,6 +66,7 @@ import {
 } from '@/lib/server/curriculum/design-store';
 import { parseConversationTurnRequest } from '@/lib/server/curriculum/design-validation';
 import { shouldConfirmAssessment } from '@/lib/curriculum/design-assessment';
+import { stepLockMessage } from '@/lib/curriculum/ui-labels';
 import {
   backgroundWorkspaceId,
   SlotDisabledError,
@@ -119,7 +117,7 @@ export async function POST(req: NextRequest, { params }: Params) {
       return curriculumJsonError(
         409,
         'CURRICULUM_DESIGN_PHASE_LOCKED',
-        `课程任务当前处于「${task.designPhase}」阶段；先确认授课脚本与分镜并推进到「评价设计」阶段，再来写题目与实操`,
+        stepLockMessage(task.designPhase, 'assessment', '写题目与实操'),
         ctx.headers,
       );
     }

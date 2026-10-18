@@ -29,6 +29,7 @@ import type {
   CurriculumUnitCoverageRecord,
   CurriculumUnitRecord,
 } from '@/lib/curriculum/design-types';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignOutlineSignOffProps {
   taskId: string;
@@ -112,9 +113,13 @@ export function DesignOutlineSignOff({
     return error === null ? null : <p className="text-destructive text-[11px]">{error}</p>;
   }
 
+  // 去重：这一步的缺口与审核发现常常是同一句话（"还没有任何条目…"既是缺口也是
+  // error 级发现），不减的话确认按钮的悬浮说明里同一句会念两遍。
   const blockers = [
-    ...state.gaps.map((gap) => gap.text),
-    ...state.auditFindings.map((finding) => finding.message),
+    ...new Set([
+      ...state.gaps.map((gap) => gap.text),
+      ...state.auditFindings.map((finding) => finding.message),
+    ]),
   ];
   const complete = blockers.length === 0;
 
@@ -135,7 +140,7 @@ export function DesignOutlineSignOff({
             void run('outline:confirm', async () => {
               await confirmOutline(taskId);
               await reload();
-              return '课程大纲已确认。下一步是逐条的教学设计。';
+              return `${STEP_WORK_NAME.outline}已确认。下一步是${stepRef('teaching')}。`;
             })
           }
           disabled={busy !== null || confirmation !== null || !complete}
@@ -144,7 +149,7 @@ export function DesignOutlineSignOff({
               ? '已经确认'
               : !complete
                 ? `还差：${blockers.join('；')}`
-                : '确认课程大纲，进入教学设计阶段'
+                : `确认${STEP_WORK_NAME.outline}，进入${stepRef('teaching')}`
           }
         >
           {busy === 'outline:confirm' ? <Loader2 className="animate-spin" /> : <Check />}

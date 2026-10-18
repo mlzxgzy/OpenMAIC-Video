@@ -41,6 +41,8 @@ import type {
   CurriculumDesignConfirmationRecord,
   CurriculumTaskRecord,
 } from '@/lib/curriculum/design-types';
+import { StepBadge } from '@/components/curriculum/step-rail';
+import { stepRef, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 
 interface DesignDirectionCardProps {
   task: CurriculumTaskRecord;
@@ -89,8 +91,11 @@ export function DesignDirectionCard({
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex flex-col gap-1">
-            <CardTitle className="flex items-center gap-2 text-base">
-              课程方向（第一步）
+            <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+              {/* 序号角标与七步条里的圆圈是同一个数字（`STEP_NUMBER`），文案里不再
+                  写"（第一步）"——那是同一件事的第二种说法，改一处就会漏一处。 */}
+              <StepBadge phase="task" currentPhase={task.designPhase} />
+              课程方向
               {confirmation ? (
                 <Badge className="gap-1">
                   <Check className="size-3" />
@@ -163,12 +168,12 @@ export function DesignDirectionCard({
                 ? '已经确认'
                 : !complete
                   ? `还差：${gaps.join('；')}`
-                  : '确认课程方向，进入学习目标阶段'
+                  : `确认${STEP_WORK_NAME.task}，进入${stepRef('outcomes')}`
             }
             onClick={() =>
               void run('direction:confirm', async () => {
                 await confirmDirection(task.id);
-                return '课程方向已确认。下一步是学习目标。';
+                return `${STEP_WORK_NAME.task}已确认。下一步是${stepRef('outcomes')}。`;
               })
             }
           >

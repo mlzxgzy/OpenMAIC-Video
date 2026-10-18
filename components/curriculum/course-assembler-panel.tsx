@@ -45,6 +45,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { outlineItems } from '@/lib/curriculum/outline-items';
 import { chooseProductionPath, type ProductionPath } from '@/lib/curriculum/production-path';
+import { stepRef } from '@/lib/curriculum/ui-labels';
 import type { CourseAssemblyPlan } from '@/lib/curriculum/assembly';
 import {
   COURSE_KNOWLEDGE_COVERAGE_LEVELS,
@@ -578,7 +579,7 @@ export function CourseAssemblerPanel({
               <Link href={`/curriculum/design/${designTaskId}`} className="font-medium underline">
                 {designTitle}
               </Link>
-              ），但它还没到大纲阶段。下面这条路按知识点生成课程，
+              ），但它还没到{stepRef('outline')}。下面这条路按知识点生成课程，
               <b>不检查学习目标是否被教、被练、被考</b>
               ，产出的课不会进入设计矩阵，也不会被出课闸门审核。
             </span>

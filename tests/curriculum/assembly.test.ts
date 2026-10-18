@@ -58,6 +58,8 @@ function snapshot(
         id: 'series-1',
         name: 'CTF综合实战',
         description: null,
+        audience: null,
+        defaultHours: null,
         courseCount: 0,
         createdAt: NOW,
         updatedAt: NOW,
