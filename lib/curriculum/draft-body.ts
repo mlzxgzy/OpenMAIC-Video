@@ -33,6 +33,7 @@
  * 是那条建议静默地采纳不了。
  */
 export const ENUM_KEYS_REJECTING_NULL: readonly string[] = [
+  'action',
   'assessmentMode',
   'bloomLevel',
   'coverageKind',

@@ -24,22 +24,12 @@
  * 解析器不写库、不看 owner，是一棵可以单测的纯函数；导入路由负责把结果落库。
  */
 import { CURRICULUM_TASK_KINDS, type CurriculumTaskKind } from '@/lib/curriculum/design-types';
+import { parseOutlineKind } from '@/lib/curriculum/outline-kind';
 
 export const OUTLINE_IMPORT_KIND_LABELS: Record<CurriculumTaskKind, string> = {
   theory: '理论目',
   practice: '实操目',
   review: '综合目',
-};
-
-/** 大纲里允许的类型写法。中文是给作者用的，英文是给脚本用的。 */
-const KIND_ALIASES: Record<string, CurriculumTaskKind> = {
-  理论: 'theory',
-  theory: 'theory',
-  实操: 'practice',
-  practice: 'practice',
-  综合: 'review',
-  review: 'review',
-  复盘: 'review',
 };
 
 export interface OutlineImportItem {
@@ -177,7 +167,7 @@ export function parseOutlineText(text: string): OutlineImportResult {
 
       let kind: CurriculumTaskKind | null = null;
       if (kindField) {
-        const mapped = KIND_ALIASES[kindField.toLowerCase()] ?? KIND_ALIASES[kindField];
+        const mapped = parseOutlineKind(kindField);
         if (!mapped) {
           issues.push({
             line: lineNumber,

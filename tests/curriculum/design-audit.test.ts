@@ -282,6 +282,7 @@ function makeSnapshot(overrides: SnapshotOverrides = {}): CurriculumDesignSnapsh
   return {
     // This layer only reads the task; confirmations belong to the phase machine.
     confirmations: [],
+    seriesDirection: null,
     task: {
       id: 'task-1',
       seriesId: null,

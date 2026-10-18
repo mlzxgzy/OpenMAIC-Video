@@ -1141,6 +1141,61 @@ ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS audience TEXT;
 ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS default_hours DOUBLE PRECISION;
 `;
 
+/**
+ * 系列级设计：课程方向、课程目标、知识体系。
+ *
+ * 七步模型是按「一门课」设计的，而在一个系列里「一门课」是目。于是同一个七步
+ * 在六十三个目上各走一遍，得到的是六十三份互相矛盾的受众、六十三套互不相连的
+ * 知识图。这一层把真正属于系列的三步上移：方向（谁学、什么基础、什么场景）、
+ * 课程目标与证据、知识体系——一次定完，目继承与承接。
+ *
+ * 不建表而是两列 JSONB：这三样东西的形状由作者决定（目标几条、节点怎么分组），
+ * 它们之间没有需要数据库守的外键；唯一要守的是「目标引用存在的知识点」「先修
+ * 不成环」，那两条在写入时由 `lib/curriculum/series-design.ts` 校验，报错比库
+ * 约束可读。
+ *
+ * `course_objectives` 必须始终是数组、`knowledge_system` 必须是对象：读接口对
+ * 坏数据是宽容的，但写接口的 CHECK 让「类型都错了」在库里就落不下去。
+ */
+const CURRICULUM_SERIES_DESIGN_SCHEMA = `
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS learner_level TEXT;
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS training_scenario TEXT;
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS application_scene TEXT;
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS problem_statement TEXT;
+ALTER TABLE curriculum_series
+  ADD COLUMN IF NOT EXISTS course_objectives JSONB NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE curriculum_series
+  ADD COLUMN IF NOT EXISTS knowledge_system JSONB NOT NULL DEFAULT '{"nodes":[]}'::jsonb;
+
+ALTER TABLE curriculum_series
+  ADD CONSTRAINT curriculum_series_course_objectives_array
+  CHECK (jsonb_typeof(course_objectives) = 'array');
+
+ALTER TABLE curriculum_series
+  ADD CONSTRAINT curriculum_series_knowledge_system_object
+  CHECK (jsonb_typeof(knowledge_system) = 'object');
+`;
+
+/**
+ * 承接的来源：目里的目标 / 知识节点记住它来自系列哪一条。
+ *
+ * 承接是**复制**（目要有自己的行，覆盖、题目、讲稿都挂在它们上面），但复制之后
+ * 必须留一条回去的线，否则「系列目标 X 在哪些目里被讲到了」这个问题在库里没有
+ * 答案，界面也说不出"这条来自系列"。存 id 而不是标题：改标题不会脱钩。
+ *
+ * 列可为空：本目自己写的目标和节点没有来源。不做外键——系列设计是 JSONB，没有
+ * 可以指向的行；目标被删时由读接口忽略悬空 id，而不是让写入失败。
+ */
+const CURRICULUM_SERIES_INHERIT_SCHEMA = `
+ALTER TABLE curriculum_objective ADD COLUMN IF NOT EXISTS series_objective_id TEXT;
+ALTER TABLE curriculum_learning_node ADD COLUMN IF NOT EXISTS series_node_id TEXT;
+
+CREATE INDEX IF NOT EXISTS curriculum_objective_series_origin_idx
+  ON curriculum_objective (owner_id, task_id, series_objective_id);
+CREATE INDEX IF NOT EXISTS curriculum_learning_node_series_origin_idx
+  ON curriculum_learning_node (owner_id, task_id, series_node_id);
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -1239,6 +1294,22 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 15,
       name: 'series_outline',
       up: CURRICULUM_SERIES_OUTLINE_SCHEMA,
+      transaction: true,
+    },
+    // 第 1–3 步的目标是系列，不是目：方向、课程目标、知识体系一次定完，目继承
+    // 方向、承接目标、在知识体系里挑点，而不是每目重造一套。
+    {
+      version: 16,
+      name: 'series_design',
+      up: CURRICULUM_SERIES_DESIGN_SCHEMA,
+      transaction: true,
+    },
+    // 承接的凭据：目里的目标/节点记住它来自系列哪一条。没有它，「承接」只是
+    // 一次复制，界面说不出"这条来自系列"，也做不出幂等（点两次会多一份）。
+    {
+      version: 17,
+      name: 'series_inherit_origin',
+      up: CURRICULUM_SERIES_INHERIT_SCHEMA,
       transaction: true,
     },
   ],

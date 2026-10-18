@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * 第五步「生成课程大纲」的 AI 对话面板。
+ * 第 4 步「本目大纲」的 AI 对话面板。
  *
  * 与前几步同一副骨架：左边对话，右边状态，底部确认。状态那一侧的重点换了：第二步是
  * 一份清单，第三步是一张图，这一步是**一棵树加上它每个叶子上的承诺**——条目
@@ -251,11 +251,11 @@ export function DesignOutlineDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Sparkles className="size-4" />
-            第五步：生成课程大纲
+            {stepRef('outline')}：本目分几段
           </DialogTitle>
           <DialogDescription>
             聊清楚这一目分几段、每段教什么。AI 写的每个条目（讲授 / 练习 / 考核）和它覆盖
-            的学习目标都会直接存进课程设计；你改完点「确认课程大纲」，才允许进入
+            的学习目标都会直接存进课程设计；你改完点「确认{STEP_WORK_NAME.outline}」，才允许进入
             {stepRef('teaching')}
             。顺序必须与上一步签的先后关系一致——图上的先修关系在这里第一次变成真的 交付顺序。
           </DialogDescription>

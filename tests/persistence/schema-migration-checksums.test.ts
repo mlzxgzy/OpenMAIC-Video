@@ -301,6 +301,26 @@ const SHIPPED: readonly (readonly [
     true,
     '946930d452f69bcef6d3ca0ff2eb6b7093de7d91af72cdde38b0d8df529d8399',
   ],
+  [
+    // Migration 16 moves steps 1–3 (direction, course objectives, knowledge
+    // system) up to the series. A "course" in this model is a 目, so running
+    // the same seven steps per 目 produced 63 contradictory audiences and 63
+    // disconnected knowledge graphs; those three documents belong to the
+    // series and the 目 inherits or selects from them.
+    'curriculum',
+    16,
+    'series_design',
+    true,
+    'c72ad95294c97e45eaf521bafd9b242e7e8448f9d4054f17a7233c2152be4683',
+  ],
+  // 承接的凭据（目标 / 知识节点的系列来源）。
+  [
+    'curriculum',
+    17,
+    'series_inherit_origin',
+    true,
+    '159f86a5350418edeaac96b310acfa1cbec183f7cfc5964b16a2cb55e7da321b',
+  ],
 ];
 
 /**

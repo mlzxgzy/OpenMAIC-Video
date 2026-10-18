@@ -24,6 +24,8 @@
  *    必填项没齐不可能确认。
  */
 
+import type { CurriculumSeriesDirectionRecord } from './design-types';
+
 /** 课程方向的七个槽位，顺序即卡片顺序。 */
 export type CurriculumDirectionKey =
   | 'title'
@@ -170,6 +172,33 @@ export function directionValuesOf(source: {
     durationHours: source.durationHours ?? null,
     applicationScene: source.applicationScene ?? null,
     problemStatement: source.problemStatement ?? null,
+  };
+}
+
+/**
+ * 目第 1 步的**有效值**：目自己写了的优先，留空的用系列方向回退。
+ *
+ * 界面与门禁必须用同一个函数算"还缺什么"，否则会出现"卡片说缺授课对象、点确认
+ * 却能推进"的分裂。
+ *
+ * 除 `title` 之外**全部继承**，包括 `problemStatement`（课程范围）。这一条改过
+ * 一次：原来说"课程范围是这一目要解决的问题，属于目"，结果是六十多个目各填一遍
+ * 同一个范围——用户的原话是「咋又是课程方向」。目与目之间的差别在标题、编号与
+ * 大纲位置，不在受众与范围；真有不同的目仍然可以覆盖（见卡片上的"覆盖"开关）。
+ */
+export function effectiveDirectionValues(
+  values: CurriculumDirectionValues,
+  seriesDirection: CurriculumSeriesDirectionRecord | null | undefined,
+): CurriculumDirectionValues {
+  if (!seriesDirection) return values;
+  return {
+    ...values,
+    audience: values.audience ?? seriesDirection.audience,
+    learnerLevel: values.learnerLevel ?? seriesDirection.learnerLevel,
+    trainingScenario: values.trainingScenario ?? seriesDirection.trainingScenario,
+    applicationScene: values.applicationScene ?? seriesDirection.applicationScene,
+    durationHours: values.durationHours ?? seriesDirection.durationHours,
+    problemStatement: values.problemStatement ?? seriesDirection.problemStatement,
   };
 }
 

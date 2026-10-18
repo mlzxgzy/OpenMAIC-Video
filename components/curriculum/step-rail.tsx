@@ -9,7 +9,16 @@
  * 的任务，合起来没有方向。用户的原话是"还是不够指引，把每一步都标出来，1-7 这种，
  * 更加明显一些"。
  *
- * 三条规则：
+ * 现在多了一件事：**这七步不是同一个人的活**。第 1–3 步（课程方向、学习目标、知识
+ * 体系）属于整个系列，定一次、所有目共用；第 4–7 步（本目大纲、讲稿分镜、题目实操、
+ * 审核）才是每一目的工作。上一版把七步摊成一条线，用户在目里看到"第 1 步 课程方向"
+ * 就以为要在这里再填一遍受众——这是"每个目都要七步？"和"咋又是课程方向"的直接来源。
+ *
+ * 所以条被分成两段，各自带一个标题：「系列层（定一次）」3 格、「本目（每一目都做）」
+ * 4 格。序号仍是 1..7 连续的：分组说明归属，不改变流程顺序。归属表在
+ * `lib/curriculum/step-ownership.ts`，这里只渲染，不判断。
+ *
+ * 三条规则不变：
  *
  * 1. **七步全显示。** 设计稿 §5.3 曾打算把第 5/6/7 步折成「…」（理由是后三步属于
  *    "产出模式"，应该走独立的生成入口）。那是设计者的推断；用户要的是"每一步都标出
@@ -20,14 +29,15 @@
  * 3. **状态不能只靠颜色。** 已走完是对勾、当前是实心加「你在这」、没开始是空心圆——
  *    色盲用户、灰度打印、截图里都能读。
  *
- * 这个组件不认识数据，也不认识路由：序号/名字/完成语全在 `ui-labels.ts`，判断只在
- * `CURRICULUM_DESIGN_PHASE_ORDER` 的下标上。谁都可以在任意页面挂它，不需要接口。
+ * 外层容器带 `data-testid="step-rail"`、里面仍是 7 个 `li[data-step-state]`：分组是
+ * 展示，不是新的结构，现有的断言（七格、唯一当前步）不改。
  */
 
 import { Check } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { CURRICULUM_DESIGN_PHASE_ORDER } from '@/lib/curriculum/design-editing';
+import { ITEM_OWNED_PHASES, SERIES_OWNED_PHASES } from '@/lib/curriculum/step-ownership';
 import type { CurriculumDesignPhase } from '@/lib/curriculum/design-types';
 import {
   PHASE_DOT_STATE,
@@ -64,13 +74,89 @@ export interface StepRailProps {
   className?: string;
 }
 
+/** 一段（系列层 / 本目）：一段说明 + 它自己的那几格。 */
+function StepBand({
+  title,
+  hint,
+  phases,
+  phase,
+  className,
+}: {
+  title: string;
+  hint: string;
+  phases: readonly CurriculumDesignPhase[];
+  phase: CurriculumDesignPhase;
+  className?: string;
+}) {
+  const currentRank = CURRICULUM_DESIGN_PHASE_ORDER.indexOf(phase);
+  return (
+    <div className={cn('flex min-w-0 flex-col gap-2', className)}>
+      <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="text-xs font-semibold">{title}</span>
+        <span className="text-muted-foreground text-[11px]">{hint}</span>
+      </div>
+      <ol
+        className="grid gap-x-1 gap-y-2"
+        style={{ gridTemplateColumns: `repeat(${phases.length}, minmax(0, 1fr))` }}
+      >
+        {phases.map((entry) => {
+          const index = CURRICULUM_DESIGN_PHASE_ORDER.indexOf(entry);
+          const state: DotState =
+            index < currentRank ? 'done' : entry === phase ? 'current' : 'todo';
+          const title =
+            state === 'done'
+              ? `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_DOT_STATE.done}）：${STEP_DONE_LABEL[entry]}`
+              : state === 'current'
+                ? `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_DOT_STATE.current}）`
+                : `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_STATE_LABEL[entry]}）`;
+          return (
+            <li
+              key={entry}
+              data-step={entry}
+              data-step-state={state}
+              title={title}
+              className="flex min-w-0 flex-col gap-1.5"
+            >
+              <span className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className={cn(
+                    'flex size-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold tabular-nums',
+                    DOT_CLASS[state],
+                  )}
+                >
+                  {state === 'done' ? <Check className="size-4" /> : STEP_NUMBER[entry]}
+                </span>
+                {entry !== phases[phases.length - 1] ? (
+                  <span aria-hidden className={cn('h-px flex-1', BAR_CLASS[state])} />
+                ) : null}
+              </span>
+              <span className={cn('truncate text-xs leading-tight', NAME_CLASS[state])}>
+                {STEP_NAME[entry]}
+              </span>
+              <span
+                className={cn(
+                  'text-[11px] leading-none',
+                  state === 'current' ? 'text-primary font-medium' : 'invisible',
+                )}
+              >
+                你在这
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 export function StepRail({ phase, className }: StepRailProps) {
   const total = CURRICULUM_DESIGN_PHASE_ORDER.length;
-  const currentRank = CURRICULUM_DESIGN_PHASE_ORDER.indexOf(phase);
 
   return (
     <section
       aria-label={`第 ${STEP_NUMBER[phase]} 步，共 ${total} 步：${STEP_NAME[phase]}`}
+      data-testid="step-rail"
       className={cn(
         'border-border bg-muted/30 flex flex-col gap-3 rounded-xl border p-3',
         className,
@@ -83,69 +169,31 @@ export function StepRail({ phase, className }: StepRailProps) {
       </div>
 
       {/*
-        窄屏横向滚动而不是换行或压缩：七步是一条线，换行会让"第 4 步"跑到第二行、
-        连线断开；压到 40px 一列则名字只能一字一行（390px 下实测）。
-        最小宽度 560px 是"名字最多两行"的宽度，桌面上 `overflow-x-auto` 不出现。
+        两段并排（宽屏）或上下（窄屏）。窄屏不横向滚动：两段各自 3/4 格，滚动会让
+        "第 4 步"跑出视野，而分组本来就是让人一眼看到分界的。
       */}
-      <div className="-mx-1 overflow-x-auto px-1">
-        <ol className="grid min-w-[560px] grid-cols-7 gap-x-1" data-testid="step-rail">
-          {CURRICULUM_DESIGN_PHASE_ORDER.map((entry, index) => {
-            const state: DotState =
-              index < currentRank ? 'done' : entry === phase ? 'current' : 'todo';
-            const title =
-              state === 'done'
-                ? `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_DOT_STATE.done}）：${STEP_DONE_LABEL[entry]}`
-                : state === 'current'
-                  ? `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_DOT_STATE.current}）`
-                  : `第 ${STEP_NUMBER[entry]} 步 · ${STEP_NAME[entry]}（${PHASE_STATE_LABEL[entry]}）`;
-            return (
-              <li
-                key={entry}
-                data-step={entry}
-                data-step-state={state}
-                title={title}
-                className="flex min-w-0 flex-col gap-1.5"
-              >
-                <span className="flex items-center gap-1.5">
-                  <span
-                    aria-hidden
-                    className={cn(
-                      'flex size-8 shrink-0 items-center justify-center rounded-full border text-sm font-semibold tabular-nums',
-                      DOT_CLASS[state],
-                    )}
-                  >
-                    {state === 'done' ? <Check className="size-4" /> : STEP_NUMBER[entry]}
-                  </span>
-                  {index < total - 1 ? (
-                    <span aria-hidden className={cn('h-px flex-1', BAR_CLASS[state])} />
-                  ) : null}
-                </span>
-                <span className={cn('text-xs leading-tight', NAME_CLASS[state])}>
-                  {STEP_NAME[entry]}
-                </span>
-                <span
-                  className={cn(
-                    'text-[11px] leading-none',
-                    state === 'current' ? 'text-primary font-medium' : 'invisible',
-                  )}
-                >
-                  你在这
-                </span>
-              </li>
-            );
-          })}
-        </ol>
+      <div className="flex flex-col gap-3 md:flex-row md:gap-4">
+        <StepBand
+          title="系列层"
+          hint="定一次，所有目共用"
+          phases={SERIES_OWNED_PHASES}
+          phase={phase}
+          className="md:flex-[3]"
+        />
+        <div aria-hidden className="bg-border hidden w-px shrink-0 md:block" />
+        <StepBand
+          title="本目"
+          hint="每一目都要做"
+          phases={ITEM_OWNED_PHASES}
+          phase={phase}
+          className="md:flex-[4]"
+        />
       </div>
     </section>
   );
 }
 
-/**
- * 角标与当前步的关系。`null` 表示调用方没给当前步（此时角标只说"我是第几步"）。
- *
- * 这三种状态与步骤条上的三种点位**必须**是同一套判断（都由 `CURRICULUM_DESIGN_PHASE_ORDER`
- * 的下标推出），否则同一屏上角标与圆圈会给出相反的答案。
- */
+/** 角标与当前步的关系。`null` 表示调用方没给当前步（此时角标只说"我是第几步"）。 */
 const BADGE_RELATION_LABEL = {
   current: '你在这',
   done: '已走过',

@@ -87,7 +87,10 @@ const outcomesConflicts = (draft: StepDraft): Record<string, string> => {
  */
 const emptyLive = { nodeObjectives: [], unitCoverage: [] } as const;
 
+import Link from 'next/link';
+
 import { DesignDirectionCard } from '@/components/curriculum/design-direction-card';
+import { SeriesInheritPanel } from '@/components/curriculum/series-inherit-panel';
 import { StepBadge } from '@/components/curriculum/step-rail';
 import { DesignOutcomesSignOff } from '@/components/curriculum/design-outcomes-signoff';
 import { DesignKnowledgeSignOff } from '@/components/curriculum/design-knowledge-signoff';
@@ -100,6 +103,7 @@ import { DesignOutlineSignOff } from '@/components/curriculum/design-outline-sig
 import { DesignTeachingSignOff } from '@/components/curriculum/design-teaching-signoff';
 import { DesignAssessmentSignOff } from '@/components/curriculum/design-assessment-signoff';
 import { ASSIGNED_NODE_BUCKETS, TEACHING_DEPTH_LABELS } from '@/lib/curriculum/design-teaching';
+import { ITEM_OWNED_PHASES, SERIES_OWNED_PHASES } from '@/lib/curriculum/step-ownership';
 import {
   ASSESSMENT_MODE_LABELS,
   DIFFICULTY_LABELS,
@@ -113,7 +117,7 @@ import {
   type FormValues,
 } from '@/components/curriculum/design-workbench-forms';
 import { authoringAvailability } from '@/lib/curriculum/design-editing';
-import { stepRef } from '@/lib/curriculum/ui-labels';
+import { stepRef, STEP_NUMBER, STEP_WORK_NAME } from '@/lib/curriculum/ui-labels';
 import {
   EXAM_FORCED_VALUES,
   LAB_VERIFY_KINDS,
@@ -375,6 +379,50 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
     return grouped;
   }, [snapshot]);
 
+  /**
+   * 系列层给的两份清单，以及这一目已经承接了哪些。
+   *
+   * 承接面板要显示"系列里共几条、已承接几条"，而"已承接"必须按来源 id 判断而不
+   * 是按标题：改过标题的承接行如果按标题比对，会被当成没承接，于是再承接一遍，
+   * 库里出现两条内容一样的行。
+   */
+  const seriesObjectiveItems = useMemo(
+    () =>
+      (snapshot?.seriesDesign?.objectives ?? []).map((objective) => ({
+        id: objective.id,
+        title: objective.title,
+        detail: objective.expectedBehavior,
+      })),
+    [snapshot?.seriesDesign],
+  );
+  const seriesNodeItems = useMemo(
+    () =>
+      (snapshot?.seriesDesign?.nodes ?? []).map((node) => ({
+        id: node.id,
+        title: node.name,
+        detail: node.summary,
+      })),
+    [snapshot?.seriesDesign],
+  );
+  const inheritedObjectiveIds = useMemo(
+    () =>
+      new Set(
+        objectives
+          .map((objective) => objective.seriesObjectiveId)
+          .filter((id): id is string => typeof id === 'string' && id !== ''),
+      ),
+    [objectives],
+  );
+  const inheritedNodeIds = useMemo(
+    () =>
+      new Set(
+        nodes
+          .map((node) => node.seriesNodeId)
+          .filter((id): id is string => typeof id === 'string' && id !== ''),
+      ),
+    [nodes],
+  );
+
   /** Select options for an outcome, labelled by its title so ids are never shown. */
   const objectiveOptions = useMemo(
     () =>
@@ -498,6 +546,56 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
         </p>
       </header>
 
+      {/*
+        「哪几步是系列的、哪几步是本目的」。
+
+        用户进到某一目的设计编辑器，看到的是一排卡片：课程方向、学习目标、知识技能、
+        课程大纲……他的原话是「咋又是课程方向和目标和大纲」。卡片本身没错——七步是
+        标准流程——错的是**没说清归属**：前三步属于系列，这里只继承/承接。归属表在
+        `step-ownership.ts`，这里把结论直接写在页面上，而不是让用户自己拼。
+      */}
+      <section
+        aria-label="七步归属"
+        className="border-border bg-muted/20 flex flex-col gap-2 rounded-lg border p-3 text-xs"
+      >
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1.5">
+            <p className="font-medium">
+              这 {SERIES_OWNED_PHASES.length + ITEM_OWNED_PHASES.length} 步分两层：前{' '}
+              {SERIES_OWNED_PHASES.length} 步在系列层定一次，后 {ITEM_OWNED_PHASES.length}{' '}
+              步才是这一目自己的活。
+            </p>
+            <p className="text-muted-foreground">
+              <span className="text-foreground font-medium">系列层</span>（本目继承 / 承接）：
+              {SERIES_OWNED_PHASES.map(
+                (entry) => `第 ${STEP_NUMBER[entry]} 步 ${STEP_WORK_NAME[entry]}`,
+              ).join(' · ')}
+            </p>
+            <p className="text-muted-foreground">
+              <span className="text-foreground font-medium">本目</span>：
+              {ITEM_OWNED_PHASES.map(
+                (entry) => `第 ${STEP_NUMBER[entry]} 步 ${STEP_WORK_NAME[entry]}`,
+              ).join(' · ')}
+            </p>
+          </div>
+          {snapshot.task.seriesId ? (
+            <Link
+              href={`/curriculum/series/${snapshot.task.seriesId}/design`}
+              className="text-foreground shrink-0 text-xs underline underline-offset-2"
+            >
+              去系列设计页（前 {SERIES_OWNED_PHASES.length} 步）
+            </Link>
+          ) : (
+            <span className="text-muted-foreground shrink-0 text-[11px]">
+              这一目不属于任何系列，所以前三步也在这里填。
+            </span>
+          )}
+        </div>
+        <p className="text-muted-foreground text-[11px]">
+          系列层改一次，所有目跟着变；本目的改动不会反向影响系列。
+        </p>
+      </section>
+
       {error && (
         <div className="border-destructive/40 bg-destructive/5 text-destructive flex items-start gap-2 rounded-lg border p-3 text-xs">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
@@ -517,6 +615,7 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
           opens the outcomes section. */}
       <DesignDirectionCard
         task={snapshot.task}
+        seriesDirection={snapshot.seriesDirection}
         confirmation={snapshot.confirmations.find((entry) => entry.step === 'task') ?? null}
         run={run}
         busy={busy}
@@ -538,6 +637,17 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
               <CardDescription>
                 目标要写得出可观察的行为和最低标准，否则系统会判定它不可验证
               </CardDescription>
+              <p className="text-muted-foreground mt-1 text-xs">
+                整门课的课程目标在系列层定义一次，这一目只承接其中相关的几条。
+                {snapshot.task.seriesId ? (
+                  <Link
+                    className="text-foreground ml-1 underline underline-offset-2"
+                    href={`/curriculum/series/${snapshot.task.seriesId}/design`}
+                  >
+                    去系列设计
+                  </Link>
+                ) : null}
+              </p>
             </div>
             <CreateForm
               kind="outcomes"
@@ -606,6 +716,22 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             对话。见 SERIES-UI-REDESIGN §5.2。 */}
         <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
           <div className="flex flex-col gap-3">
+            {/*
+              第 2 步在目里真正要做的事：从系列的课程目标里挑。没有系列时面板不出现，
+              卡片下半部分就是原来那个"新建目标"表单。
+            */}
+            {snapshot.task.seriesId ? (
+              <SeriesInheritPanel
+                kind="objectives"
+                taskId={snapshot.task.id}
+                seriesId={snapshot.task.seriesId}
+                items={seriesObjectiveItems}
+                inheritedIds={inheritedObjectiveIds}
+                phase={phase}
+                busy={busy}
+                run={run}
+              />
+            ) : null}
             {objectives.length === 0 ? (
               <EmptySection phase={phase} kind="outcomes">
                 还没有学习目标。逆向设计从「学生最终要能做什么」开始，不是从「讲什么」开始。
@@ -716,6 +842,17 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
               <CardDescription>
                 两端都要连上：每个知识点支撑至少一个目标，每个目标也至少有一个知识点
               </CardDescription>
+              <p className="text-muted-foreground mt-1 text-xs">
+                知识体系属于整个系列；这一目只挑本目要讲的点，不另造一套图。
+                {snapshot.task.seriesId ? (
+                  <Link
+                    className="text-foreground ml-1 underline underline-offset-2"
+                    href={`/curriculum/series/${snapshot.task.seriesId}/design`}
+                  >
+                    去系列设计
+                  </Link>
+                ) : null}
+              </p>
             </div>
             <CreateForm
               kind="nodes"
@@ -781,6 +918,19 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             所以它必须是**看得见的另一栏**而不是一个弹窗后面的一条对话。见 B2 设计稿 §5.2。 */}
         <CardContent className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
           <div className="flex flex-col gap-3">
+            {/* 第 3 步在目里真正要做的事：在系列知识体系里挑本目要讲的点。 */}
+            {snapshot.task.seriesId ? (
+              <SeriesInheritPanel
+                kind="nodes"
+                taskId={snapshot.task.id}
+                seriesId={snapshot.task.seriesId}
+                items={seriesNodeItems}
+                inheritedIds={inheritedNodeIds}
+                phase={phase}
+                busy={busy}
+                run={run}
+              />
+            ) : null}
             {nodes.length === 0 ? (
               <EmptySection phase={phase} kind="nodes">
                 还没有知识点。它们由学习目标反推，不是由章节标题得到。
@@ -844,10 +994,12 @@ export function DesignWorkbench({ taskId, phase, version, onChanged }: DesignWor
             <div>
               <CardTitle className="flex flex-wrap items-center gap-2 text-base">
                 <StepBadge phase="outline" currentPhase={phase} />
-                课程大纲
+                本目大纲
               </CardTitle>
               <CardDescription>
-                条目角色决定它生成什么：讲课出幻灯片，练习多出交互，考试不收提示
+                这一目分几段，每段教 / 练 / 考什么。条目角色决定它生成什么：讲课出幻灯片，
+                练习多出交互，考试不收提示。系列大纲（章 → 节 → 目）在驾驶舱维护，它决定
+                有哪些目，不决定这一目内部怎么分段。
               </CardDescription>
             </div>
             <CreateForm

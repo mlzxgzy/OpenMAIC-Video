@@ -133,7 +133,7 @@ export interface AuthoringAvailability {
    * Why creation is closed, in one sentence naming the phase to reach. `null`
    * when it is open. Never a bare phase name: "先做 X" is actionable, "X 未到"
    * is not. The sentence is built by `stepLockReason`, so it always carries the
-   * step number — "第 4 步「课程大纲」" — which is the number the step rail and
+   * step number — "第 4 步「本目大纲」" — which is the number the step rail and
    * the card badge are showing at the same time.
    */
   reason: string | null;

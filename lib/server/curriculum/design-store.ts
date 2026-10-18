@@ -57,6 +57,7 @@ import type {
   CurriculumTeachingDesign,
   CurriculumUnitCoverageRecord,
   CurriculumUnitDependencyEdgeType,
+  CurriculumSeriesDirectionRecord,
   CurriculumUnitDependencyRecord,
   CurriculumUnitRecord,
   CurriculumUnitRole,
@@ -95,6 +96,7 @@ import { curriculumQualityLayerLabel } from '@/lib/curriculum/quality-labels';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import { withSchemaBootstrapLock } from '@/lib/persistence/schema-bootstrap-lock';
 import { getServerPersistenceProvider } from '@/lib/persistence/server-provider';
+import { getSeriesDesign, readSeriesDirectionForInheritance } from './series-design';
 
 export class CurriculumDesignNotFoundError extends Error {
   constructor(message: string) {
@@ -353,6 +355,8 @@ interface ObjectiveRow extends Row {
   unverifiable_reason: string | null;
   status: string;
   sort_order: number | string;
+  /** 承接自系列课程目标的 id；本目自己写的目标为 null。 */
+  series_objective_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -389,6 +393,8 @@ interface NodeRow extends Row {
   summary: string | null;
   difficulty: string | null;
   sort_order: number | string;
+  /** 承接自系列知识/技能点的 id；本目自己加的节点为 null。 */
+  series_node_id: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -542,7 +548,7 @@ const TASK_COLUMNS = `id, series_id, section_id, code, kind, order_index, title,
 const OBJECTIVE_COLUMNS = `id, task_id, parent_id, code, title, description, objective_type,
        bloom_level, level, expected_behavior, min_criteria, proficient_criteria,
        excellent_criteria, difficulty, verifiable, unverifiable_reason, status, sort_order,
-       created_at, updated_at`;
+       series_objective_id, created_at, updated_at`;
 
 const EVIDENCE_COLUMNS = `id, task_id, objective_id, evidence_type, verification_method,
        success_condition, condition_expression, auxiliary_condition, assessment_mode,
@@ -550,7 +556,7 @@ const EVIDENCE_COLUMNS = `id, task_id, objective_id, evidence_type, verification
        hint_policy, independent, process_record, sort_order, created_at, updated_at`;
 
 const NODE_COLUMNS = `id, task_id, parent_id, code, name, node_type, summary, difficulty,
-       sort_order, created_at, updated_at`;
+       sort_order, series_node_id, created_at, updated_at`;
 
 const NODE_OBJECTIVE_COLUMNS = `id, task_id, node_id, objective_id, support_level, note,
        created_at, updated_at`;
@@ -705,6 +711,7 @@ function mapObjective(row: ObjectiveRow): CurriculumObjectiveRecord {
     excellentCriteria: stringList(row.excellent_criteria),
     difficulty: row.difficulty as CurriculumDifficulty,
     verifiable: row.verifiable,
+    seriesObjectiveId: row.series_objective_id,
     unverifiableReason: row.unverifiable_reason,
     status: row.status as CurriculumObjectiveStatus,
     sortOrder: numeric(row.sort_order),
@@ -748,6 +755,7 @@ function mapNode(row: NodeRow): CurriculumLearningNodeRecord {
     summary: row.summary,
     difficulty: row.difficulty as CurriculumDifficulty | null,
     sortOrder: numeric(row.sort_order),
+    seriesNodeId: row.series_node_id,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -1359,6 +1367,11 @@ export async function createCurriculumTask(
   }
   const seriesId = section ? section.series_id : (input.seriesId ?? null);
   await assertSeriesOwned(queryable, ownerId, seriesId);
+  // 系列方向属于整个系列：培训对象、学员基础、训练场景、应用场景在创建目时继承，
+  // 之后仍可在第 1 步覆盖。让六十三个目各填一遍，得到的是四份互相矛盾的答案。
+  const inherited = seriesId
+    ? await readSeriesDirectionForInheritance(queryable, ownerId, seriesId)
+    : null;
   const kind = optionalTaskKind(input.kind);
   const code =
     input.code !== undefined
@@ -1386,11 +1399,11 @@ export async function createCurriculumTask(
         kind,
         orderIndex,
         title,
-        optionalText(input.audience),
-        optionalText(input.learnerLevel),
-        optionalText(input.trainingScenario),
-        input.durationHours ?? null,
-        optionalText(input.applicationScene),
+        optionalText(input.audience) ?? inherited?.audience ?? null,
+        optionalText(input.learnerLevel) ?? inherited?.learnerLevel ?? null,
+        optionalText(input.trainingScenario) ?? inherited?.trainingScenario ?? null,
+        input.durationHours ?? inherited?.defaultHours ?? null,
+        optionalText(input.applicationScene) ?? inherited?.applicationScene ?? null,
         optionalText(input.problemStatement),
         input.status ?? 'draft',
       ],
@@ -1639,21 +1652,37 @@ export async function phaseCompletionGaps(
   const gaps: string[] = [];
 
   if (next === 'outcomes') {
+    // 目没有写授课对象 / 时长时**继承系列方向**：这两件事属于整个系列，让每一目
+    // 再填一遍只会得到互相矛盾的答案。查询里做回退而不是在创建时复制，是因为
+    // 系列方向随时可改，复制过的值不会跟着改。
     const task = await queryable.query<{
       audience: string | null;
       learner_level: string | null;
       duration_hours: number | string | null;
       problem_statement: string | null;
+      series_audience: string | null;
+      series_default_hours: number | string | null;
+      series_problem_statement: string | null;
     }>(
-      `SELECT audience, learner_level, duration_hours, problem_statement
-         FROM curriculum_task WHERE owner_id = $1 AND id = $2`,
+      `SELECT t.audience, t.learner_level, t.duration_hours, t.problem_statement,
+              s.audience AS series_audience, s.default_hours AS series_default_hours,
+              s.problem_statement AS series_problem_statement
+         FROM curriculum_task t
+         LEFT JOIN curriculum_series s
+           ON s.owner_id = t.owner_id AND s.id = t.series_id
+        WHERE t.owner_id = $1 AND t.id = $2`,
       [ownerId, taskId],
     );
     const row = task.rows[0];
     if (!row) throw new CurriculumDesignNotFoundError('课程任务不存在');
-    if (!row.audience) gaps.push('课程简介缺少授课对象');
-    if (!row.problem_statement) gaps.push('课程简介缺少要解决的问题');
-    if (row.duration_hours === null) gaps.push('课程简介缺少培训时长');
+    const audience = row.audience ?? row.series_audience;
+    const hours = row.duration_hours ?? row.series_default_hours;
+    // 课程范围与受众/学时同一条规则：目没写就用系列方向。这条原来只回退前两样，
+    // 于是「系列方向填完了、目还是要再填一遍课程范围」——用户看到的"咋又是课程方向"。
+    const problem = row.problem_statement ?? row.series_problem_statement;
+    if (!audience) gaps.push('课程简介缺少授课对象（系列方向里也没有）');
+    if (!problem) gaps.push('课程简介缺少要解决的问题（系列方向里也没有）');
+    if (hours === null) gaps.push('课程简介缺少培训时长');
     // The brief being filled in is not the same fact as the user having agreed
     // to it, and the AI-assisted flow is exactly where the two come apart: the
     // model writes the card in one turn, and until the author reads it back the
@@ -3605,6 +3634,283 @@ export async function setCurriculumAuditFindingStatus(
   return mapAuditFinding(row);
 }
 
+// ── 从系列承接 ──────────────────────────────────────────────────────────────
+
+/**
+ * 承接：把系列层的课程目标 / 知识节点**复制**进这一目。
+ *
+ * 为什么是复制而不是引用：目里的目标要挂证据、知识节点要挂条目、题目和审核都
+ * 以这些行作地址。系列设计是 JSONB，没有行可以当外键——引用要么另建一张表，
+ * 要么让每一处使用都去解析 JSON。复制一行、再用 `series_objective_id` /
+ * `series_node_id` 记住来源，是"能地址"与"知道来自哪"之间最省事的一种。
+ *
+ * 三条规则：
+ *
+ * 1. **幂等**：已经承接过的（来源 id 相同）跳过，点两次不会多一份。
+ * 2. **不认识 id 就报告，不猜**：返回 `unknownSeriesIds`，界面说"这几条系列里
+ *    没有"，而不是静默少写几条。
+ * 3. **证据一起建**：离开第 2 步要求每个目标都有证据。承接时用系列目标的
+ *    `evidence` 与第一条最低标准生成一条本目证据，否则用户"承接完了"却依然被
+ *    门禁拦在"目标没有证据"上——一个承接按钮反而制造更多工作。
+ */
+export interface InheritSeriesOutcome {
+  /** 系列里已经有、这一目也已经承接过的 id。 */
+  skippedSeriesIds: string[];
+  /** 系列设计里找不到的 id。 */
+  unknownSeriesIds: string[];
+}
+
+export interface InheritSeriesObjectivesResult extends InheritSeriesOutcome {
+  /** 新建的目标；每条都配了一条本目证据。 */
+  created: CurriculumObjectiveRecord[];
+}
+
+export interface InheritSeriesNodesResult extends InheritSeriesOutcome {
+  /** 新建的节点。 */
+  created: CurriculumLearningNodeRecord[];
+  /** 新建的 node→objective 连线数。 */
+  links: number;
+}
+
+export async function inheritSeriesObjectives(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  seriesObjectiveIds: readonly string[],
+): Promise<InheritSeriesObjectivesResult> {
+  await assertPhase(queryable, ownerId, taskId, 'outcomes');
+  const task = await getCurriculumTask(queryable, ownerId, taskId);
+  if (!task) throw new CurriculumDesignNotFoundError('课程任务不存在');
+  if (!task.seriesId) {
+    throw new CurriculumDesignValidationError(
+      '这一目不属于任何系列，没有可以承接的课程目标；直接把目标写在这一目里。',
+    );
+  }
+  const series = await getSeriesDesign(queryable, ownerId, task.seriesId);
+  if (!series) {
+    throw new CurriculumDesignValidationError('所属系列不存在，没有可以承接的课程目标。');
+  }
+  const byId = new Map(series.design.objectives.map((objective) => [objective.id, objective]));
+
+  const alreadyResult = await queryable.query<{ series_objective_id: string }>(
+    `SELECT series_objective_id FROM curriculum_objective
+      WHERE owner_id = $1 AND task_id = $2 AND series_objective_id IS NOT NULL`,
+    [ownerId, taskId],
+  );
+  const already = new Set(alreadyResult.rows.map((row) => row.series_objective_id));
+
+  const countResult = await queryable.query<{ count: number | string }>(
+    'SELECT count(*)::int AS count FROM curriculum_objective WHERE owner_id = $1 AND task_id = $2',
+    [ownerId, taskId],
+  );
+  let order = Number(countResult.rows[0]?.count ?? 0);
+
+  const created: CurriculumObjectiveRecord[] = [];
+  const skippedSeriesIds: string[] = [];
+  const unknownSeriesIds: string[] = [];
+
+  for (const seriesObjectiveId of seriesObjectiveIds) {
+    const objective = byId.get(seriesObjectiveId);
+    if (!objective) {
+      unknownSeriesIds.push(seriesObjectiveId);
+      continue;
+    }
+    if (already.has(seriesObjectiveId)) {
+      skippedSeriesIds.push(seriesObjectiveId);
+      continue;
+    }
+    const expectedBehavior = objective.expectedBehavior.trim() || objective.title;
+    const minCriteria = objective.minCriteria.filter((entry) => entry.trim() !== '');
+    const result = await queryable.query<ObjectiveRow>(
+      `INSERT INTO curriculum_objective
+         (id, owner_id, task_id, parent_id, code, title, description, objective_type, bloom_level,
+          level, expected_behavior, min_criteria, proficient_criteria, excellent_criteria,
+          difficulty, verifiable, unverifiable_reason, status, sort_order, series_objective_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14::jsonb,$15,$16,$17,$18,$19,$20)
+       RETURNING ${OBJECTIVE_COLUMNS}`,
+      [
+        createId('obj'),
+        ownerId,
+        taskId,
+        null,
+        null,
+        objective.title,
+        null,
+        'skill',
+        null,
+        'component',
+        expectedBehavior,
+        jsonParam(minCriteria),
+        jsonParam([]),
+        jsonParam([]),
+        'basic',
+        deriveVerifiability(expectedBehavior, minCriteria, undefined),
+        null,
+        'draft',
+        order,
+        seriesObjectiveId,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumDesignValidationError('承接课程目标失败');
+    order += 1;
+    const mapped = mapObjective(row);
+    created.push(mapped);
+
+    // 证据：系列目标声明了"怎么证明"，目这一级需要的是一条可判定的成功条件。
+    // 不给它建证据，用户在"承接完了"之后会被第 2 步的门禁拦下（每个目标都要有
+    // 证据），承接反而变成更多工作。
+    const successCondition = minCriteria[0] ?? objective.evidence.trim() ?? '';
+    await queryable.query(
+      `INSERT INTO curriculum_evidence
+         (id, owner_id, task_id, objective_id, evidence_type, verification_method,
+          success_condition, condition_expression, auxiliary_condition, assessment_mode,
+          threshold_pass, threshold_proficient, threshold_excellent, time_limit_sec,
+          hint_policy, independent, process_record, sort_order)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+      [
+        createId('ev'),
+        ownerId,
+        taskId,
+        mapped.id,
+        // `performance`：按系列目标声明的方式演示一遍。承接时不知道该目最终是做题、
+        // 实操还是作品，`performance` 是唯一不预设形态的那个。
+        'performance',
+        objective.evidence.trim() || '按系列课程目标声明的方式验收',
+        successCondition || expectedBehavior,
+        null,
+        null,
+        'practice',
+        0.6,
+        0.8,
+        0.95,
+        null,
+        'unlimited',
+        true,
+        true,
+        0,
+      ],
+    );
+  }
+
+  if (created.length > 0) await withdrawOutcomesSignOff(queryable, ownerId, taskId);
+  return { created, skippedSeriesIds, unknownSeriesIds };
+}
+
+export async function inheritSeriesNodes(
+  queryable: Queryable,
+  ownerId: string,
+  taskId: string,
+  seriesNodeIds: readonly string[],
+): Promise<InheritSeriesNodesResult> {
+  await assertPhase(queryable, ownerId, taskId, 'graph');
+  const task = await getCurriculumTask(queryable, ownerId, taskId);
+  if (!task) throw new CurriculumDesignNotFoundError('课程任务不存在');
+  if (!task.seriesId) {
+    throw new CurriculumDesignValidationError(
+      '这一目不属于任何系列，没有可以承接的知识体系；直接把知识点写在这一目里。',
+    );
+  }
+  const series = await getSeriesDesign(queryable, ownerId, task.seriesId);
+  if (!series) {
+    throw new CurriculumDesignValidationError('所属系列不存在，没有可以承接的知识体系。');
+  }
+  const nodeById = new Map(series.design.nodes.map((node) => [node.id, node]));
+  const objectiveById = new Map(
+    series.design.objectives.map((objective) => [objective.id, objective]),
+  );
+
+  const alreadyResult = await queryable.query<{ series_node_id: string }>(
+    `SELECT series_node_id FROM curriculum_learning_node
+      WHERE owner_id = $1 AND task_id = $2 AND series_node_id IS NOT NULL`,
+    [ownerId, taskId],
+  );
+  const already = new Set(alreadyResult.rows.map((row) => row.series_node_id));
+
+  const countResult = await queryable.query<{ count: number | string }>(
+    'SELECT count(*)::int AS count FROM curriculum_learning_node WHERE owner_id = $1 AND task_id = $2',
+    [ownerId, taskId],
+  );
+  let order = Number(countResult.rows[0]?.count ?? 0);
+
+  const created: CurriculumLearningNodeRecord[] = [];
+  const createdSeriesIds: string[] = [];
+  const skippedSeriesIds: string[] = [];
+  const unknownSeriesIds: string[] = [];
+
+  for (const seriesNodeId of seriesNodeIds) {
+    const node = nodeById.get(seriesNodeId);
+    if (!node) {
+      unknownSeriesIds.push(seriesNodeId);
+      continue;
+    }
+    if (already.has(seriesNodeId)) {
+      skippedSeriesIds.push(seriesNodeId);
+      continue;
+    }
+    const result = await queryable.query<NodeRow>(
+      `INSERT INTO curriculum_learning_node
+         (id, owner_id, task_id, parent_id, code, name, node_type, summary, difficulty,
+          sort_order, series_node_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING ${NODE_COLUMNS}`,
+      [
+        createId('node'),
+        ownerId,
+        taskId,
+        null,
+        null,
+        node.name,
+        node.type,
+        node.summary.trim() || null,
+        node.difficulty,
+        order,
+        seriesNodeId,
+      ],
+    );
+    const row = result.rows[0];
+    if (!row) throw new CurriculumDesignValidationError('承接知识点失败');
+    order += 1;
+    created.push(mapNode(row));
+    createdSeriesIds.push(seriesNodeId);
+  }
+
+  // 连线：系列目标声明了它由哪些节点支撑；这一目已经承接了其中某些目标时，
+  // 新承接的节点要立刻连上它们，否则第 3 步的门禁会报"节点不支撑任何目标"。
+  let links = 0;
+  if (createdSeriesIds.length > 0) {
+    const inherited = await queryable.query<{ id: string; series_objective_id: string }>(
+      `SELECT id, series_objective_id FROM curriculum_objective
+        WHERE owner_id = $1 AND task_id = $2 AND series_objective_id IS NOT NULL`,
+      [ownerId, taskId],
+    );
+    const taskObjectiveBySeries = new Map(
+      inherited.rows.map((row) => [row.series_objective_id, row.id]),
+    );
+    const nodeBySeries = new Map(created.map((node) => [node.seriesNodeId, node]));
+    for (const seriesNodeId of createdSeriesIds) {
+      const taskNode = nodeBySeries.get(seriesNodeId);
+      if (!taskNode) continue;
+      for (const [seriesObjectiveId, taskObjectiveId] of taskObjectiveBySeries) {
+        const seriesObjective = objectiveById.get(seriesObjectiveId);
+        if (!seriesObjective || !seriesObjective.nodeIds.includes(seriesNodeId)) continue;
+        const inserted = await queryable.query<{ id: string }>(
+          `INSERT INTO curriculum_node_objective
+             (id, owner_id, task_id, node_id, objective_id, support_level, note)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT DO NOTHING
+           RETURNING id`,
+          [createId('nobj'), ownerId, taskId, taskNode.id, taskObjectiveId, 'primary', null],
+        );
+        if (inserted.rows[0]) links += 1;
+      }
+    }
+  }
+
+  if (created.length > 0 || links > 0) await withdrawKnowledgeSignOff(queryable, ownerId, taskId);
+  return { created, links, skippedSeriesIds, unknownSeriesIds };
+}
+
 // ── Snapshot ────────────────────────────────────────────────────────────────
 
 /**
@@ -3612,6 +3918,31 @@ export async function setCurriculumAuditFindingStatus(
  * once and then answers both directions locally: outcome -> evidence ->
  * nodes -> items, and item -> outcomes -> prerequisites.
  */
+/**
+ * 这一目所属系列的方向（第 1 步的继承来源）。不属于系列时返回 null。
+ *
+ * 单独一个函数，因为三个入口都要它：快照（卡片显示）、方向确认路由（POST 的
+ * 完整性检查）、方向对话路由（模型看到的卡片）。三处各写一遍 SQL 就会在某一处
+ * 忘记回退，而那处的表现是"卡片说缺授课对象、门禁却能推进"。
+ */
+export async function getSeriesDirectionOfTask(
+  queryable: Queryable,
+  ownerId: string,
+  task: { seriesId: string | null },
+): Promise<CurriculumSeriesDirectionRecord | null> {
+  if (!task.seriesId) return null;
+  const direction = await readSeriesDirectionForInheritance(queryable, ownerId, task.seriesId);
+  if (!direction) return null;
+  return {
+    audience: direction.audience,
+    learnerLevel: direction.learnerLevel,
+    trainingScenario: direction.trainingScenario,
+    applicationScene: direction.applicationScene,
+    problemStatement: direction.problemStatement,
+    durationHours: direction.defaultHours,
+  };
+}
+
 export async function getCurriculumDesignSnapshot(
   queryable: Queryable,
   ownerId: string,
@@ -3651,8 +3982,25 @@ export async function getCurriculumDesignSnapshot(
       scoped('curriculum_audit_finding', AUDIT_FINDING_COLUMNS, 'created_at'),
     ]);
 
+  // 系列方向：第 1 步留空的受众 / 基础 / 场景 / 学时由它回退。放进快照而不是
+  // 让界面再发一次系列请求，是为了让「卡片显示的值」与「门禁读的值」同源。
+  const seriesDirection = await getSeriesDirectionOfTask(queryable, ownerId, task);
+  // 第 2/3 步的「承接」面板要列的目标与节点也一并在快照里：界面拿旧列表去承接
+  // 会写出与用户看到的不同的东西（承接是按 id 写的）。
+  const seriesDesignSnapshot = task.seriesId
+    ? await getSeriesDesign(queryable, ownerId, task.seriesId)
+    : null;
+  const seriesDesign = seriesDesignSnapshot
+    ? {
+        objectives: seriesDesignSnapshot.design.objectives,
+        nodes: seriesDesignSnapshot.design.nodes,
+      }
+    : null;
+
   return {
     task,
+    seriesDesign,
+    seriesDirection,
     confirmations: await listCurriculumDesignConfirmations(queryable, ownerId, taskId),
     objectives: objectiveResult.rows.map((row) => mapObjective(row as ObjectiveRow)),
     evidence: evidenceResult.rows.map((row) => mapEvidence(row as EvidenceRow)),

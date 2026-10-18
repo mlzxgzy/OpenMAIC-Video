@@ -153,7 +153,7 @@ export function DesignOutlineSignOff({
           }
         >
           {busy === 'outline:confirm' ? <Loader2 className="animate-spin" /> : <Check />}
-          确认课程大纲
+          确认{STEP_WORK_NAME.outline}
         </Button>
         {confirmation ? (
           <Button

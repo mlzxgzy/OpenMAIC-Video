@@ -19,6 +19,7 @@ import type { NextRequest } from 'next/server';
 import {
   directionGaps,
   directionValuesOf,
+  effectiveDirectionValues,
   type CurriculumDirectionValues,
 } from '@/lib/curriculum/design-direction';
 import { nextCurriculumDesignPhase } from '@/lib/curriculum/design-types';
@@ -32,6 +33,7 @@ import {
   confirmCurriculumDesignStep,
   getCurriculumDesignStepConfirmation,
   getCurriculumTask,
+  getSeriesDirectionOfTask,
   phaseCompletionGaps,
   withdrawCurriculumDesignStep,
 } from '@/lib/server/curriculum/design-store';
@@ -53,7 +55,16 @@ export async function GET(req: NextRequest, { params }: Params) {
         ctx.headers,
       );
     }
-    return ownerJson(await directionState(ctx, task.id, directionValuesOf(task)), 200, ctx.headers);
+    const seriesDirection = await getSeriesDirectionOfTask(ctx.queryable, ctx.ownerId, task);
+    return ownerJson(
+      await directionState(
+        ctx,
+        task.id,
+        effectiveDirectionValues(directionValuesOf(task), seriesDirection),
+      ),
+      200,
+      ctx.headers,
+    );
   });
 }
 
@@ -67,7 +78,10 @@ export async function POST(req: NextRequest, { params }: Params) {
         ctx.headers,
       );
     }
-    const values = directionValuesOf(task);
+    // 与门禁同一个有效值：目留空的受众 / 学时由系列方向回退。否则会出现
+    // "系列填了受众、卡片不报缺、确认按钮却被这里拒掉"的分裂。
+    const seriesDirection = await getSeriesDirectionOfTask(ctx.queryable, ctx.ownerId, task);
+    const values = effectiveDirectionValues(directionValuesOf(task), seriesDirection);
     const gaps = directionGaps(values);
     if (gaps.length > 0) {
       return designInvalid(`课程方向还不完整，先补齐：${gaps.join('；')}`, ctx.headers);

@@ -340,8 +340,9 @@ describe('design workbench authoring gates', () => {
     const closed = authoringAvailability('task', 'units');
     expect(closed.allowed).toBe(false);
     expect(closed.requiredPhase).toBe('outline');
-    // "X 未到" is not actionable; "先完成 Y 阶段" is.
-    expect(closed.reason).toContain('课程大纲');
+    // "X 未到" is not actionable; "先完成 Y 阶段" is. 第 4 步叫「本目大纲」——
+    // 系列层也有一个「大纲」（章→节→目），两个同名物放在一起正是用户说的"越来越乱"。
+    expect(closed.reason).toContain('本目大纲');
     expect(closed.reason).toContain('大纲条目');
   });
 

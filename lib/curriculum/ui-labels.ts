@@ -86,7 +86,10 @@ export const STEP_WORK_NAME: Record<CurriculumDesignPhase, string> = {
   task: '课程方向',
   outcomes: '学习目标与证据',
   graph: '知识技能与依赖',
-  outline: '课程大纲',
+  // 不叫「课程大纲」：系列层也有一个「大纲」（章 → 节 → 目，在驾驶舱维护），
+  // 两个同名物放在一起正是用户说的「越来越乱」。第 4 步决定的是**这一目内部**
+  // 讲几段，所以叫「本目大纲」。名字只有这一份，卡片标题与门禁文案都从这里取。
+  outline: '本目大纲',
   teaching: '授课脚本与分镜',
   assessment: '题目与实操',
   review: '课程审核',

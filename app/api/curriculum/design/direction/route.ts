@@ -31,6 +31,7 @@ import { isSameOriginJsonRequest } from '@/lib/persistence/owner-claim-http';
 import {
   directionGaps,
   directionValuesOf,
+  effectiveDirectionValues,
   type CurriculumDirectionValues,
 } from '@/lib/curriculum/design-direction';
 import {
@@ -49,6 +50,7 @@ import {
   createCurriculumTask,
   getCurriculumDesignStepConfirmation,
   getCurriculumTask,
+  getSeriesDirectionOfTask,
   listCurriculumDesignConfirmations,
   phaseCompletionGaps,
   updateCurriculumTask,
@@ -118,7 +120,14 @@ export async function POST(req: NextRequest) {
         ctx.headers,
       );
     }
-    const before = existing ? directionValuesOf(existing) : EMPTY_DIRECTION;
+    // 模型看到的是**有效值**：目留空的受众 / 学时由系列方向回退。这样它不会把
+    // "系列已经定好的受众"当成空白再问一遍，也不会在用户说"确认"时判定卡片不全。
+    const seriesDirection = existing
+      ? await getSeriesDirectionOfTask(ctx.queryable, ctx.ownerId, existing)
+      : null;
+    const before = existing
+      ? effectiveDirectionValues(directionValuesOf(existing), seriesDirection)
+      : EMPTY_DIRECTION;
     const beforeConfirmation = existing
       ? await getCurriculumDesignStepConfirmation(ctx.queryable, ctx.ownerId, existing.id, 'task')
       : null;
@@ -189,7 +198,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const values = written ? directionValuesOf(written) : { ...before, ...turn.fields };
+    const values = written
+      ? effectiveDirectionValues(directionValuesOf(written), seriesDirection)
+      : { ...before, ...turn.fields };
     return ownerJson(
       await directionPayload(
         ctx,

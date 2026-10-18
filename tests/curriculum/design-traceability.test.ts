@@ -115,6 +115,7 @@ function makeSnapshot(): CurriculumDesignSnapshot {
 
   return {
     confirmations: [],
+    seriesDirection: null,
     task: {
       id: 'task-1',
       seriesId: null,

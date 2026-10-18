@@ -19,6 +19,8 @@
  *    where grading rules belong, and that mistake would silently grade by path.
  */
 
+import type { SeriesCourseObjective, SeriesKnowledgeNode } from '@/lib/curriculum/series-design';
+
 // ── Course task ─────────────────────────────────────────────────────────────
 
 export const CURRICULUM_TASK_STATUSES = ['draft', 'active', 'archived'] as const;
@@ -183,6 +185,17 @@ export interface CurriculumObjectiveRecord {
   unverifiableReason: string | null;
   status: CurriculumObjectiveStatus;
   sortOrder: number;
+  /**
+   * 承接自系列课程目标的 id；本目自己写的目标为 `null`。
+   *
+   * 存 id 而不是只存标题，是为了三件事：承接按钮可以幂等（点两次不会多一份）、
+   * 界面能说清「这条来自系列哪个目标」、以及以后能做系列级覆盖检查（哪些课程
+   * 目标一个目都没承接）。只靠标题匹配会在改标题时静默脱钩。
+   *
+   * 可选：迁移 17 之前建的行、以及测试/派生里手工拼的字面量没有这一格。缺省
+   * 视为「本目自己写的」——这正是它唯一的另一个取值。
+   */
+  seriesObjectiveId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -279,6 +292,8 @@ export interface CurriculumLearningNodeRecord {
   summary: string | null;
   difficulty: CurriculumDifficulty | null;
   sortOrder: number;
+  /** 承接自系列知识/技能点的 id；本目自己加的节点为 `null`。理由同 `seriesObjectiveId`。 */
+  seriesNodeId?: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -638,8 +653,52 @@ export interface CurriculumAuditFindingRecord {
  * workspace offers — "from outcome to course" and "from course to outcome" —
  * are both answered from this one payload.
  */
+/**
+ * 系列方向的只读快照，附在目快照上给第 1 步做继承显示。
+ *
+ * 为什么不是把值复制进 `curriculum_task`：系列方向随时可改，复制过的值不会跟着
+ * 改，界面就会一直显示旧受众。快照每次重读系列行，目列留空时用这里的值回退。
+ * `title` 与 `problemStatement` 不在其中：标题是目的名字，范围是这一目要解决的
+ * 问题，两者都属于目自己。
+ */
+export interface CurriculumSeriesDirectionRecord {
+  audience: string | null;
+  learnerLevel: string | null;
+  trainingScenario: string | null;
+  applicationScene: string | null;
+  /**
+   * 系列要解决的问题／包含与不包含什么。目的第 1 步**也继承它**：这条原来说
+   * 「属于目」，于是六十多个目各填一遍同一个范围。目之间的区别在标题与大纲
+   * 位置，不在受众和范围；真不同的目可以覆盖。
+   */
+  problemStatement: string | null;
+  durationHours: number | null;
+}
+
+/**
+ * 快照里带上的系列设计摘要。只放第 2/3 步要列的两样；方向单独在
+ * `seriesDirection`（门禁读它），大纲在驾驶舱。
+ */
+export interface CurriculumSeriesDesignDigest {
+  objectives: SeriesCourseObjective[];
+  nodes: SeriesKnowledgeNode[];
+}
+
 export interface CurriculumDesignSnapshot {
   task: CurriculumTaskRecord;
+  /**
+   * 系列层的设计文档（课程目标 + 知识体系）。第 2/3 步的「承接」面板列的就是它。
+   *
+   * 放进快照而不是让界面另发一个请求，是为了让**卡片显示的目标**与**承接时真
+   * 写进库的那一份**同源：两次读之间系列被改过，界面就会拿旧列表去承接，而
+   * 承接是按 id 写的，写出来的东西和用户看到的不是一回事。
+   */
+  seriesDesign?: CurriculumSeriesDesignDigest | null;
+  /**
+   * 这一目所属系列的方向；`null` 表示它不属于任何系列（或系列已删）。目在第
+   * 1 步留空的受众 / 基础 / 场景 / 学时由它回退，门禁也按同一个有效值判断。
+   */
+  seriesDirection: CurriculumSeriesDirectionRecord | null;
   /**
    * Which design steps the user has signed off. Read beside `task.designPhase`:
    * the phase says how far the design has got, these say which steps the user
