@@ -12,11 +12,11 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | 上游 `ccdc88a5`（自 `v1.2.0-rc.1` / `636fab0d` 又同步了 3 个提交；`1.2.0-video.3` 与 `1.2.0-video.4` 均未再同步上游） |
-| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`、`1.2.0-video.4`，tag `v1.2.0-video.4`） |
+| 当前基线 | 上游 `d725f191`（`v1.2.0-rc.2`，`2026-10-13` 经 `cc41a9b3` 同步；更早一次同步是 `ccdc88a5`，见 `[1.2.0-video.2]`） |
+| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`、`1.2.0-video.4`、`1.2.0-video.5`，tag `v1.2.0-video.5`） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**（视频导出 / 渲染服务 / 视频生成能力）+ **课程产品层**（系列 → 课程 → 成果导向设计 → 讲/练/考闭环 → 生成 → 导出） |
-| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 2.8 万行 / 60 个 API 路由 / 27 张表，见 **§9**） |
+| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 5.3 万行（含界面组件、不含测试）/ 82 个 API 路由文件 / 29 张 `curriculum_*` 表，见 **§9**） |
 | 变更记录 | 二开自己的改动写 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)；上游变更仍看 `CHANGELOG.md` |
 
 ### 1.1 与上游的关系（重要）
@@ -26,8 +26,8 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 64 个提交并发布了 `v1.2.0-video.1`、
-    `v1.2.0-video.2`、`v1.2.0-video.3`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+  - **用 merge，不要用 rebase**：二开已有 75 个提交并发布了 `v1.2.0-video.1`、
+    `v1.2.0-video.2`、`v1.2.0-video.3`、`v1.2.0-video.4`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
   - **已有例外**：首页「场景类型」筛选是课程生成功能（非视频链路），落在 L4
@@ -36,11 +36,11 @@
     所以这是有意为之的偏离。同步上游时的冲突热点与后续动作记在
     [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#与上游的差异)。
   - **已有例外里最大的一处：课程产品层与成果导向课程设计**（`1.2.0-video.3`
-    起，约 2.8 万行）。它是**课程生成**方向，不是视频链路，具体分层见 **§9**：
-    `lib/curriculum/`、`lib/server/curriculum/`、`lib/persistence/curriculum.ts`（v1–v12
-    migration）、`app/api/curriculum/`（60 个路由）、`app/curriculum/`、
+    起，约 5.3 万行（含界面组件、不含测试））。它是**课程生成**方向，不是视频链路，具体分层见 **§9**：
+    `lib/curriculum/`、`lib/server/curriculum/`、`lib/persistence/curriculum.ts`（v1–v15
+    migration）、`app/api/curriculum/`（82 个路由文件）、`app/curriculum/`、
     `components/curriculum/`、`tests/curriculum/`、`skills/agent-runtime/*`（新增 11 个）。
-    它**不是**在既有文件里加钩子能接住的：新增了 27 张表、一整套 HTTP 面和一个
+    它**不是**在既有文件里加钩子能接住的：新增了 29 张表、一整套 HTTP 面和一个
     工作台。同步上游时的冲突热点因此是 `instrumentation.ts`（钩子注册 + schema
     启动校验）与 `lib/persistence/schema-stores.ts`（`APP_SCHEMA_STORES`）。
     偏离说明与后续动作见
@@ -287,8 +287,8 @@ readonly writesOutsideRegistryDatabase?: true              // 见上文红线
 
 ## 9. 课程产品层与成果导向课程设计（第二个主战场）
 
-这是本 fork 在视频链路之外**最大的自研子系统**（约 **2.8 万行**、**60 个 API 路由**、
-**27 张 `curriculum_*` 表**、**16 个测试文件**），`1.2.0-video.3` 起成形。
+这是本 fork 在视频链路之外**最大的自研子系统**（约 **5.3 万行**（含界面组件、不含测试）、
+**82 个 API 路由文件**、**29 张 `curriculum_*` 表**、**45 个测试文件**），`1.2.0-video.3` 起成形。
 它回答的不是「怎么把课导出成视频」（那是 §4），而是「**一门课该教什么、怎么算教会了**」。
 
 ### 9.1 一条课的完整链路
@@ -313,11 +313,11 @@ readonly writesOutsideRegistryDatabase?: true              // 见上文红线
 
 | 层 | 位置 | 说明 |
 | --- | --- | --- |
-| schema | `lib/persistence/curriculum.ts` | **v1–v12 migration**，27 张 `curriculum_*` 表；checksum 有金标测试 |
+| schema | `lib/persistence/curriculum.ts` | **v1–v15 migration**，29 张 `curriculum_*` 表；checksum 有金标测试 |
 | 服务端 | `lib/server/curriculum/{design-store,store,http,design-http,design-validation,batch,batch-runner,generation,generation-hooks,unit-role-run,validation}.ts` | owner 隔离、阶段机、批量 runner |
 | 纯函数 | `lib/curriculum/*.ts` | `coverage` / `assembly` / `program{,-io,-diff}` / `audit` / `design-{coverage,editing,types}` / `traceability` / `quality-labels` / `lab-authoring` / `production-path` |
-| HTTP | `app/api/curriculum/**`（60 个路由） | 页面与批量 runner 共用同一套入口 |
-| UI | `app/curriculum/**`（6 个页面）、`components/curriculum/**`（15 个组件） | 工作台、设计编辑器、目标×目热力矩阵、批量面板 |
+| HTTP | `app/api/curriculum/**`（82 个路由文件） | 页面与批量 runner 共用同一套入口 |
+| UI | `app/curriculum/**`（7 个页面）、`components/curriculum/**`（39 个组件） | 系列驾驶舱、目工作台（七步条 + 矩阵 + 编辑器 + 生成与导出）、大纲看板、批量面板 |
 | skill | `skills/agent-runtime/*/SKILL.md` | 新增 11 个，**按设计阶段**组织而不是按数据表 |
 
 ### 9.3 两条不变量（改动时最容易破）

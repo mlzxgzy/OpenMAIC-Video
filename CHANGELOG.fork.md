@@ -26,7 +26,50 @@
 
 ## [Unreleased]
 
+## [1.2.0-video.5] - 2026-10-18
+
+基线是上游 `d725f191`（`v1.2.0-rc.2`）。本版由**两件独立的事**组成：
+
+- **一次上游同步**：`cc41a9b3` 合并 `upstream/main`（36 个提交、338 个文件、
+  `+27,498 / −1,661`）。四处冲突都记在 merge 提交里，其中两处是**有意偏离**：
+  `docker-compose.yml` 的 render-service 内存上限保留本 fork 的 16g（本 fork 默认
+  4 块并行渲染，沿用上游 8g 会在导出中途被 OOM kill），`package.json` 保留二开版本号
+  而不是采用上游的 `1.2.0-rc.2`（rc 是上游自身状态号，与二开序列无语义关系）。
+- **二开自己的 9 个提交**（`--first-parent` 口径，不含本次发布提交）：课程生产台
+  UI 大修 **B1–B5**（系列驾驶舱 → 五步铺开 → 旧台账归档 → 首页「继续上次」→ 七步条）
+  与**系列大纲层**（章、节先于目存在）。
+
+**版本号说明**：沿用 `1.2.0-video.N` 版本线，本次递增到 `1.2.0-video.5`。
+本版 `packages/@openmaic/` 下的文件**有改动，但全部来自上游同步**
+（`git diff --name-only v1.2.0-video.4..HEAD -- packages/` 为 56 个文件），六个子包的
+版本号由上游一并 bump 到 `dsl 0.11.3 / generation 0.3.18 / storage 0.37.3 /
+renderer 0.1.13 / editor 0.0.11 / importer 0.3.1`，
+`node scripts/check-package-version-bumps.mjs v1.2.0-video.4` 通过；二开自己没有改这
+六个包。因此本版**会**命中 `publish-packages.yml` 的 `push: main` +
+`packages/*/package.json` 路径条件（前几版因未同步上游而不命中）。
+
+**读法**：本版主题可以概括成一句：**先把位置排出来，再谈每一格里写什么。**
+B1–B5 解决"进去以后不知道干什么"，系列大纲层解决"还没进去的时候没有位置"。
+
+- **B1/B2**：`/curriculum` 收敛成系列驾驶舱，只回答一个问题——"现在做哪一目，
+  为什么是它，卡在第几步"；知识技能图一步先做两栏化试点（AI 出草稿、人逐行签字）。
+- **B3/B4**：五步共用「AI 起草 → 逐行签字」的同一套骨架，草稿不落库从自觉升级为
+  **类型不变量**；旧 6 Tab 台账整体归档为 `/curriculum/legacy`，只把「生成与导出」
+  迁进目工作台——此前设计做完之后，页面上没有任何按钮能拿到视频；首页「继续上次」
+  与驾驶舱同源同函数，没有待做一目时整块不渲染。
+- **B5 七步条**：七步全显示、圆圈里写 1..7、已走完对勾、当前「你在这」；用户可见的
+  每一次步骤引用都必须带序号，修掉"同一个第 3 步、一屏四个名字"。
+- **系列大纲层**：章/节独立于目存在（migration 15），可以先建 6 章 18 节再逐节建目；
+  看板与推荐顺序都改为顺着大纲走，而不是按创建时间挑"最早的"。
+
+本版共 **451 个文件、+42,153 / −2,482 行**（`git diff --shortstat
+v1.2.0-video.4..HEAD`，含上游同步的 338 个文件；不含本次发布提交自身）。
+
 ### Added
+
+> 下列条目原样来自本次的 `[Unreleased]`，未作改写；B1、B5 与系列大纲层的落地已在
+> 上面「读法」里概括，逐条细节见各自提交信息与
+> `docs/curriculum-redesign/SERIES-UI-REDESIGN.md`。
 
 - **系列大纲（章 / 节）：先出章、再出节、最后才出目**。用户打开新系列被要求直接"新建目"，
   原话是"现在直接让我写目，我怎么写啊？这一块需要修改一下"——不是文案问题，是**操作顺序被
@@ -1423,6 +1466,44 @@ v1.2.0-video.2..HEAD -- packages/` 为空），因此不发 `npm` 包、不消�
   `tests/curriculum/human-facing-messages.test.ts` 断言五种位置形状都被识别。提交信息记录
   两半都做了变异测试（还原单个站点会让测试点名文件与行号）。
 
+### `1.2.0-video.5` 的验证状态
+
+**通过**（本机，本次发布提交之前）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `tsc --noEmit` | exit 0 |
+| `npx eslint .` | **0 error**，20 个 warning（均为既有编码风格告警；本次新增的一处未使用导入已修掉） |
+| `npx prettier --check`（本次改动文件） | All matched files use Prettier code style |
+| `node scripts/check-i18n-keys.mjs` | 12 语包通过 |
+| `node scripts/check-node-engine-contract.mjs` | 通过 |
+| `node scripts/check-package-version-bumps.mjs v1.2.0-video.4` | 通过（六个 `@openmaic/*` 版本由上游同步 bump） |
+| `vitest run tests/curriculum` | **45 文件 766 例全绿** |
+| `vitest run tests/persistence/{curriculum-outline-schema,curriculum-design-store,schema-migration-checksums}` | **3 文件 49 例全绿**（真 PostgreSQL） |
+
+合计 **48 文件 815 例**。覆盖面：系列大纲（导入解析 12 例、看板叠加 6 例、大纲路由
+契约 13 例）、migration 15 的数据库约束（8 例：章在顶层 / 节必须挂章 / 编号唯一 /
+删节不删目）、`next-item` 的大纲排序（2 例）、七步条与步骤引用
+（`step-labels.test.ts`：序号与阶段机同序、七键、名字唯一 + 源码扫描三种旧形状为 0），
+以及 B1–B4 原有的驾驶舱、五步骨架、生成与导出的用例。
+
+**未做 / 未跑**（逐条说明，避免与上面那份「全绿」读成同一件事）：
+
+- **migration 15 是手工应用到真实库的**：运行中的 dev server 启动时已把 schema 缓存
+  成「就绪」，不会再跑新迁移，所以按 `applySchemaMigrations` 的同一套算法算出 checksum
+  并写入 `openmaic_schema_migrations`，与源码当前内容一致——重启 dev server 不会报
+  checksum 不匹配。`schema-migration-checksums.test.ts` 的 pin 同版补上（该测试此前
+  一直红着，因为它在 `tests/curriculum` 之外，从来不在发布前跑的那条命令里）。
+- **未跑全量 `vitest`**：本仓库全量存在既有环境性失败（缺 `DEEPSEEK_API_KEY`、
+  需浏览器上下文、5 秒超时）。
+- **未做浏览器端点击验证**：本机没有 chromium，Playwright 无法启动；e2e 选择器与
+  `curriculum-step-copilot.spec.ts` 已按新看板更新，但**没有执行**。界面上的实际点击
+  效果未经人眼确认。
+- **未跑 `scripts/verification/` 下的活体脚本**：本版新增的 `ux-step-labels.mjs`、
+  `ux-produce-{walk,reconcile,export}.mjs` 只做过 lint 与语法检查。
+- **未跑 `pnpm build`**，未跑真实课程生成与 MP4 渲染。视频链路本版**没有改动**
+  （渲染服务与 TTS 是既有能力），本版也没有验证一次端到端导出。
+
 ### `1.2.0-video.4` 的验证状态
 
 **通过**（本机，本次发布提交之前）：
@@ -2109,8 +2190,9 @@ instrumentation.ts                     generation-run 钩子 + 批量 runner + s
 
 ### 上游同步
 
-`upstream` 远端已配置（`2026-10-06`），唯一一次同步（`ccdc88a5`）见
-`[1.2.0-video.2]` 发布节；`1.2.0-video.3` **未同步上游**。日后同步：
+`upstream` 远端已配置（`2026-10-06`），共两次同步：`ccdc88a5`（见
+`[1.2.0-video.2]` 发布节）与 `d725f191` / `v1.2.0-rc.2`（`cc41a9b3`，见
+`[1.2.0-video.5]` 发布节）；`1.2.0-video.3` 与 `1.2.0-video.4` **未同步上游**。日后同步：
 
 ```bash
 git fetch upstream
@@ -2119,8 +2201,8 @@ git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
 git merge upstream/main
 ```
 
-**不要用 `rebase` 同步**：二开有 53 个提交、已发布 `v1.2.0-video.1`、
-`v1.2.0-video.2`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+**不要用 `rebase` 同步**：二开已有 75 个提交、已发布 `v1.2.0-video.1`、
+`v1.2.0-video.2`、`v1.2.0-video.3`、`v1.2.0-video.4`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 `merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
 
 同步后至少要跑：`tsc`、`lint`、`vitest`。若上游改过 `packages/@openmaic`，
@@ -2132,7 +2214,7 @@ git merge upstream/main
 
 | 项 | 值 |
 | --- | --- |
-| 上游基线 | `ccdc88a5`（同步自 `v1.2.0-rc.1` 之后的 3 个提交） |
+| 上游基线 | `d725f191`（`v1.2.0-rc.2`，`2026-10-13` 经 `cc41a9b3` 同步；更早一次是 `ccdc88a5`） |
 | 本 fork 版本线 | `1.2.0-video.N`（首个发布：`1.2.0-video.1`，见上方版本号说明） |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |
@@ -2140,7 +2222,7 @@ git merge upstream/main
 ### 二开提交一览
 
 **这一节不再逐条抄 commit。** 它原来是一张 10 行的手抄表，随后就漂了：
-`1.2.0-video.2` 发布时没有更新它，`1.2.0-video.3` 的 36 个提交也全部不在里面。
+`1.2.0-video.2` 发布时没有更新它，`1.2.0-video.3` 的 37 个提交也全部不在里面。
 手抄 `git log` 没有信息增量，而且保证会再次失同步——要看列表直接跑：
 
 ```bash
@@ -2155,9 +2237,16 @@ git log --oneline --first-parent ccdc88a5..HEAD   # 只看主干（上游 sync �
 | --- | --- |
 | 基线 `ccdc88a5` → 首个独立版本 `v1.2.0-video.1`（`fb94ab3c`） | 9 |
 | `v1.2.0-video.1` → `v1.2.0-video.2`（`57a35712`，含一次上游 `git merge upstream/main`） | 7 |
-| `v1.2.0-video.2` → `v1.2.0-video.3`（`b62c71f0`） | 36 |
-| `v1.2.0-video.3` → `v1.2.0-video.4`（本提交） | 11 |
-| **合计** | **64** |
+| `v1.2.0-video.2` → `v1.2.0-video.3`（`b62c71f0`） | 37 |
+| `v1.2.0-video.3` → `v1.2.0-video.4`（`19a83d8c`） | 12 |
+| `v1.2.0-video.4` → `v1.2.0-video.5`（本提交） | 10 |
+| **合计** | **75** |
+
+> 这张表在 `1.2.0-video.5` 发布时**重算过**：旧表后两行各少 1（36/11 实为 37/12），
+> 合计写 64，而它自己的四行加总只有 63。现在每一行都是
+> `git rev-list --count --first-parent <上一发布 tag>..<本发布 tag>` 的实算值，
+> 合计等于 `git rev-list --count --first-parent ccdc88a5..HEAD`。每行**含**该阶段的
+> 发布提交。
 
 本仓库第一个二开提交是 `939c9027`（docs: 新增 AGENT.md 二开上下文文档）。
 
