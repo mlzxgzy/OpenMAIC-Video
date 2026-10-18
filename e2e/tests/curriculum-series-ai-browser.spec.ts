@@ -410,6 +410,9 @@ test.describe('系列驾驶舱：AI 生成大纲的真实浏览器路径', () =>
       timeout: 60_000,
     });
     await expect(page.getByText('未填写').first()).toBeVisible();
+    // 没有大纲不是错误状态：页面直说"设计先行、落点等大纲建好后再核对"。
+    await expect(page.getByTestId('design-no-outline')).toBeVisible();
+    await expect(page.getByTestId('design-coverage')).toContainText('还没有大纲');
     await page.screenshot({ path: path.join(SHOTS, '10-design-empty.png'), fullPage: true });
 
     await page.getByRole('button', { name: '编辑方向' }).click();
@@ -430,6 +433,8 @@ test.describe('系列驾驶舱：AI 生成大纲的真实浏览器路径', () =>
 
     await page.getByRole('button', { name: 'AI 起草' }).first().click();
     await expect(page.getByRole('heading', { name: 'AI 起草结果' })).toBeVisible();
+    // 草稿对话框也必须承认依据不足，而不是让用户以为核对过落点。
+    await expect(page.getByText(/草稿只依据名称、说明与方向/)).toBeVisible();
     await expect(page.getByText('能独立完成一道 Web 入门题')).toBeVisible();
     await page.screenshot({ path: path.join(SHOTS, '12-design-ai-draft.png'), fullPage: true });
     await page.getByRole('button', { name: '采用这份草稿' }).click();
