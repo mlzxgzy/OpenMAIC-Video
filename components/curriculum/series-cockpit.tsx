@@ -20,21 +20,25 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
   ChevronDown,
+  Compass,
   FileUp,
   Loader2,
   Plus,
   RefreshCw,
   Settings,
+  Sparkles,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CreateItemDialog } from '@/components/curriculum/create-item-dialog';
+import { OutlineAiDialog } from '@/components/curriculum/outline-ai-dialog';
 import { OutlineImportDialog } from '@/components/curriculum/outline-import-dialog';
 import {
   OutlineNodeDialog,
@@ -44,6 +48,11 @@ import { SeriesBoardView } from '@/components/curriculum/series-board';
 import { SeriesSettingsDialog } from '@/components/curriculum/series-settings-dialog';
 import { StepBadge, StepRail } from '@/components/curriculum/step-rail';
 import { chooseNextItem, pendingItems, type NextItemRow } from '@/lib/curriculum/next-item';
+import { seriesDesignComplete, type SeriesDesignSnapshot } from '@/lib/curriculum/series-design';
+import type {
+  SeriesOutlineAiDesignSummary,
+  SeriesOutlineAiLevel,
+} from '@/lib/curriculum/series-outline-ai';
 import { buildSeriesBoard, type BoardRow } from '@/lib/curriculum/series-board';
 import type {
   CurriculumSeriesOutlineNodeRecord,
@@ -99,8 +108,10 @@ function boardRowOf(row: OverviewRow): BoardRow {
 }
 
 export function SeriesCockpit({ seriesId }: { seriesId: string }) {
+  const router = useRouter();
   const [rows, setRows] = useState<OverviewRow[]>([]);
   const [outline, setOutline] = useState<OutlinePayload | null>(null);
+  const [design, setDesign] = useState<SeriesDesignSnapshot | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -116,26 +127,43 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
   const [itemOpen, setItemOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [aiLevel, setAiLevel] = useState<SeriesOutlineAiLevel | null>(null);
 
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
+    // 跳转时不能把 loaded 置真：那会在 router.replace 生效前先渲染一次
+    // "空大纲"的驾驶舱，用户看到的是闪一下的错页面。
+    let redirecting = false;
     try {
-      const [overview, outlinePayload] = await Promise.all([
+      const [overview, outlinePayload, designPayload] = await Promise.all([
         requestJson<{ rows: OverviewRow[] }>(
           `/api/curriculum/design/overview?seriesId=${encodeURIComponent(seriesId)}`,
         ),
         requestJson<OutlinePayload>(`/api/curriculum/series/${seriesId}/outline`),
+        requestJson<SeriesDesignSnapshot>(`/api/curriculum/series/${seriesId}/design`),
       ]);
+      // 系列设计是前三步，大纲是它的推导结果：没有设计、也还没有大纲的系列，
+      // 先落到系列设计页，而不是让用户对着一个只能靠名称猜的 AI 按钮。
+      // 已经有大纲的系列不跳转（那是历史数据），只在上方给横幅说明缺依据。
+      const chapterCount = (outlinePayload.nodes ?? []).filter(
+        (node) => node.nodeType === 'chapter',
+      ).length;
+      if (chapterCount === 0 && !seriesDesignComplete(designPayload.design)) {
+        redirecting = true;
+        router.replace(`/curriculum/series/${seriesId}/design`);
+        return;
+      }
+      setDesign(designPayload);
       setRows(overview.rows ?? []);
       setOutline(outlinePayload);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
-      setLoaded(true);
+      if (!redirecting) setLoaded(true);
       setBusy(false);
     }
-  }, [seriesId]);
+  }, [router, seriesId]);
 
   useEffect(() => {
     void load();
@@ -143,6 +171,22 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
 
   const nodes = useMemo(() => outline?.nodes ?? [], [outline]);
   const board = useMemo(() => buildSeriesBoard(nodes, rows.map(boardRowOf)), [nodes, rows]);
+  const designGaps = useMemo(
+    () => (design ? [...design.gaps.direction, ...design.gaps.objectives] : []),
+    [design],
+  );
+  const designSummary: SeriesOutlineAiDesignSummary | null = useMemo(
+    () =>
+      design
+        ? {
+            complete: seriesDesignComplete(design.design),
+            gaps: designGaps,
+            objectiveCount: design.design.objectives.length,
+            nodeCount: design.design.nodes.length,
+          }
+        : null,
+    [design, designGaps],
+  );
 
   /**
    * 每一目在大纲里的位置。推荐与看板共用同一个数：`chooseNextItem` 在"还没
@@ -228,6 +272,15 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <Link
+              href={`/curriculum/series/${seriesId}/design`}
+              title="方向、课程目标、知识体系一次定完"
+            >
+              <Compass />
+              系列设计
+            </Link>
+          </Button>
           <Button variant="outline" size="sm" onClick={() => void load()} disabled={busy}>
             {busy ? <Loader2 className="animate-spin" /> : <RefreshCw />}
             刷新
@@ -260,6 +313,26 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
         </div>
       ) : null}
 
+      {design && designSummary && !designSummary.complete && hasOutline ? (
+        <Card className="border-amber-500/40 bg-amber-500/5" aria-label="系列设计未完成">
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 py-4">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                <AlertTriangle className="size-4 text-amber-600" />
+                系列设计还没定完，这份大纲缺少课程级依据
+              </p>
+              <p className="text-muted-foreground mt-1 text-xs">
+                缺：{designGaps.slice(0, 3).join('；')}。AI 生成现在只能按系列名称和系列说明
+                猜；补齐后重新生成会以方向、课程目标与知识体系为准（已有目不会被删）。
+              </p>
+            </div>
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/curriculum/series/${seriesId}/design`}>去完成系列设计</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
       {!hasOutline ? (
         <Card className="border-primary/30" aria-label="先把大纲搭出来">
           <CardHeader>
@@ -283,6 +356,9 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
               <Button variant="outline" onClick={() => setImportOpen(true)}>
                 <FileUp />
                 从大纲导入
+              </Button>
+              <Button variant="outline" onClick={() => setAiLevel('chapter')}>
+                <Sparkles />让 AI 生成章
               </Button>
             </div>
           </CardContent>
@@ -366,6 +442,52 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           </CardContent>
         </Card>
       )}
+
+      <Card aria-label="用 AI 生成大纲">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 py-4">
+          <div className="min-w-0">
+            <p className="flex items-center gap-1.5 text-sm font-medium">
+              <Sparkles className="size-4" />用 AI 生成大纲
+            </p>
+            <p className="text-muted-foreground mt-0.5 text-xs">
+              按系列设计（方向、课程目标、知识体系）和系列说明生成，章 → 节 → 目 分三次出。
+              每一步先预览「新增 / 删除 / 跳过」什么，确认后才写库；默认只补空位，不会悄悄改掉
+              已有内容。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAiLevel('chapter')}
+              disabled={!outline}
+            >
+              <Sparkles />
+              AI 生成章
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAiLevel('section')}
+              disabled={!hasOutline}
+              title={hasOutline ? undefined : '先有章才能生成节'}
+            >
+              <Sparkles />
+              AI 生成节
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setAiLevel('item')}
+              disabled={board.totals.sections === 0}
+              title={board.totals.sections === 0 ? '先有节才能生成目' : undefined}
+            >
+              <Sparkles />
+              AI 生成目
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
         <Card className="h-fit" aria-label="待办">
@@ -476,6 +598,17 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
             onOpenChange={setImportOpen}
             seriesId={seriesId}
             onImported={() => void load()}
+          />
+          <OutlineAiDialog
+            open={aiLevel !== null}
+            onOpenChange={(open) => {
+              if (!open) setAiLevel(null);
+            }}
+            level={aiLevel}
+            seriesId={seriesId}
+            series={outline.series}
+            design={designSummary}
+            onCommitted={() => void load()}
           />
         </>
       ) : null}

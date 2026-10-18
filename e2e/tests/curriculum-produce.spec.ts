@@ -139,6 +139,12 @@ test.describe('出片那一段路', () => {
       data: { name: `归档 ${crypto.randomUUID().slice(0, 6)}` },
     });
     const seriesId = ((await series.json()) as { series: { id: string } }).series.id;
+    // 空系列会先被送到系列设计（前三步是课程级依据）；这一条测的是驾驶舱页脚，
+    // 所以给它一章让大纲存在。
+    const chapter = await page.request.post(`/api/curriculum/series/${seriesId}/outline`, {
+      data: { nodeType: 'chapter', title: '第一章 归档' },
+    });
+    expect(chapter.status(), await chapter.text()).toBe(201);
     await page.goto(`/curriculum/series/${seriesId}`);
     await expect(page.getByRole('link', { name: '课程台账（存档）' })).toHaveAttribute(
       'href',

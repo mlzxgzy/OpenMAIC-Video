@@ -87,6 +87,22 @@ function ProgressText({ produced, total }: { produced: number; total: number }) 
   );
 }
 
+/**
+ * 章 / 节的「交底」：生成下一层时原样进入提示词的那段备注。
+ *
+ * 看板显示它，是因为用户接下来点「AI 生成节 / 目」时，模型看到的就是这句话——
+ * 备注写偏了，下一层必然跟着偏。两行 + `title` 全文，既不把看板撑爆，也不逼
+ * 用户去对话框里猜。
+ */
+function HandoffNote({ note }: { note: string | null }) {
+  if (!note) return null;
+  return (
+    <p className="text-muted-foreground line-clamp-2 text-[11px] leading-relaxed" title={note}>
+      {note}
+    </p>
+  );
+}
+
 function EmptySection({
   section,
   onAddItem,
@@ -133,6 +149,7 @@ function SectionBlock({
           新建目
         </Button>
       </div>
+      <HandoffNote note={section.note} />
       {section.items.length === 0 ? (
         <EmptySection section={section} onAddItem={onAddItem} />
       ) : (
@@ -177,6 +194,7 @@ function ChapterBlock({
           新建节
         </Button>
       </div>
+      <HandoffNote note={chapter.note} />
       {chapter.sections.length === 0 ? (
         <button
           type="button"

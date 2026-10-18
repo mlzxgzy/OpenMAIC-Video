@@ -37,10 +37,36 @@ async function seedSeries(page: Page, name: string): Promise<string> {
  * （简介三格齐全 + 用户确认），所以这里只用接口拼出**真实用户能到达的状态**，
  * 不去伪造一个数据库里存在但界面上走不到的状态。
  */
-async function seedItems(page: Page, seriesId: string, items: readonly SeedItem[]): Promise<void> {
+/**
+ * 建"第一章 → 第一节"，返回节 id。
+ *
+ * 目必须挂在节下面（先章、再节、最后目）。没有节的系列，驾驶舱主角是
+ * "先把大纲搭出来"，而不是"现在做这一目"——所以不先建骨架就直接建目，
+ * 驾驶舱根本不会进入这条 spec 要断言的状态。
+ */
+async function seedSection(page: Page, seriesId: string): Promise<string> {
+  const chapter = await page.request.post(`/api/curriculum/series/${seriesId}/outline`, {
+    data: { nodeType: 'chapter', title: '第一章 测试章' },
+  });
+  expect(chapter.status(), await chapter.text()).toBe(201);
+  const chapterId = ((await chapter.json()) as { node: { id: string } }).node.id;
+
+  const section = await page.request.post(`/api/curriculum/series/${seriesId}/outline`, {
+    data: { nodeType: 'section', parentId: chapterId, title: '第一节 测试节' },
+  });
+  expect(section.status(), await section.text()).toBe(201);
+  return ((await section.json()) as { node: { id: string } }).node.id;
+}
+
+async function seedItems(
+  page: Page,
+  seriesId: string,
+  items: readonly SeedItem[],
+  sectionId: string,
+): Promise<void> {
   for (const item of items) {
     const created = await page.request.post('/api/curriculum/design/tasks', {
-      data: { seriesId, title: item.title },
+      data: { seriesId, sectionId, title: item.title },
     });
     expect(created.status(), await created.text()).toBe(201);
     const taskId = ((await created.json()) as { task: { id: string } }).task.id;
@@ -63,26 +89,34 @@ async function seedItems(page: Page, seriesId: string, items: readonly SeedItem[
 }
 
 test.describe('系列驾驶舱', () => {
-  test('空系列只说一件事：现在该建第一个目', async ({ page }) => {
+  test('空系列先落到系列设计：前三步定完之前不进大纲', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-空 ${crypto.randomUUID().slice(0, 6)}`);
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.page.goto(`/curriculum/series/${seriesId}`);
 
-    // 没有目时不能推荐——推荐的字段无处可指。这是有意的：空系列里"建第一个目"
-    // 就是下一步，界面必须自己说出来，而不是让排序函数编一个理由。
-    await expect(cockpit.decision).toHaveCount(0);
-    // 空系列的第一步不是"写一个目"：目挂在节下面，所以主角卡是"先把大纲搭出来"。
-    await expect(page.getByRole('button', { name: '建第一章' })).toBeVisible();
-    await expect(cockpit.matrix).toContainText('这个系列还没有章');
+    // 系列设计是前三步，大纲是推导结果：没有设计、也没有大纲时，驾驶舱不做
+    // "空大纲"的落地页，直接把用户送到系列设计。
+    await expect(page).toHaveURL(new RegExp(`/curriculum/series/${seriesId}/design$`), {
+      timeout: 60_000,
+    });
+    await expect(page.getByRole('heading', { name: /系列设计 · / })).toBeVisible();
+    // 前三步没定完时，第 4 步（大纲）是灰的，理由就在按钮上。
+    await expect(page.getByTestId('design-outline-cta')).toBeDisabled();
   });
 
   test('多目时推荐唯一一个主角，主角与待办第一条是同一目', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-推荐 ${crypto.randomUUID().slice(0, 6)}`);
-    await seedItems(page, seriesId, [
-      { title: 'CTF 概述与竞赛形式', brief: true },
-      { title: '信息收集实操', brief: true },
-      { title: '综合复盘' },
-    ]);
+    const sectionId = await seedSection(page, seriesId);
+    await seedItems(
+      page,
+      seriesId,
+      [
+        { title: 'CTF 概述与竞赛形式', brief: true },
+        { title: '信息收集实操', brief: true },
+        { title: '综合复盘' },
+      ],
+      sectionId,
+    );
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -108,7 +142,12 @@ test.describe('系列驾驶舱', () => {
     // 只确认了方向、一步都没走的目。审核对它有 4 条 error 级发现（"还没有条目"
     // "还没有题目"…），但那些属于后面几步。驾驶舱若照数显示，用户每次打开
     // 看到的第一件事都会是"这一目有 4 处问题"，而点进去一处也修不了。
-    await seedItems(page, seriesId, [{ title: '刚建的目', brief: true }]);
+    await seedItems(
+      page,
+      seriesId,
+      [{ title: '刚建的目', brief: true }],
+      await seedSection(page, seriesId),
+    );
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -121,7 +160,8 @@ test.describe('系列驾驶舱', () => {
 
   test('真正走到那一步的缺陷才被算成阻塞，并压过没开始的目', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-真阻塞 ${crypto.randomUUID().slice(0, 6)}`);
-    await seedItems(page, seriesId, [{ title: '目标没写清', brief: true }]);
+    const sectionId = await seedSection(page, seriesId);
+    await seedItems(page, seriesId, [{ title: '目标没写清', brief: true }], sectionId);
 
     // 一个不可验证的学习目标：`outcomes_verifiable` 层上的 error，而这一目
     // 已经走到 `outcomes`。这不是"还没做"，是"做了但做错了"。
@@ -133,7 +173,7 @@ test.describe('系列驾驶舱', () => {
       data: { title: '了解 SQL 注入', objectiveType: 'knowledge' },
     });
     expect(objective.status(), await objective.text()).toBe(201);
-    await seedItems(page, seriesId, [{ title: '还没开始的那一目', brief: false }]);
+    await seedItems(page, seriesId, [{ title: '还没开始的那一目', brief: false }], sectionId);
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -154,7 +194,12 @@ test.describe('系列驾驶舱', () => {
   test('推荐卡里七步全在，当前那一步只有一个', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-七步 ${crypto.randomUUID().slice(0, 6)}`);
     // `brief: true` 会把这一目推进到 `outcomes`：第 1 步已签、第 2 步正在进行。
-    await seedItems(page, seriesId, [{ title: '正在定目标的一目', brief: true }]);
+    await seedItems(
+      page,
+      seriesId,
+      [{ title: '正在定目标的一目', brief: true }],
+      await seedSection(page, seriesId),
+    );
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -177,11 +222,16 @@ test.describe('系列驾驶舱', () => {
 
   test('待办第一条与推荐是同一目——两块内容不各说各话', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-一致 ${crypto.randomUUID().slice(0, 6)}`);
-    await seedItems(page, seriesId, [
-      { title: '甲', brief: true },
-      { title: '乙', brief: false },
-      { title: '丙', brief: false },
-    ]);
+    await seedItems(
+      page,
+      seriesId,
+      [
+        { title: '甲', brief: true },
+        { title: '乙', brief: false },
+        { title: '丙', brief: false },
+      ],
+      await seedSection(page, seriesId),
+    );
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -197,10 +247,15 @@ test.describe('系列驾驶舱', () => {
 
   test('出片看板给出"已出片 N / 共 M 目"，而序列页从不给', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-看板 ${crypto.randomUUID().slice(0, 6)}`);
-    await seedItems(page, seriesId, [
-      { title: '甲', brief: true },
-      { title: '乙', brief: true },
-    ]);
+    await seedItems(
+      page,
+      seriesId,
+      [
+        { title: '甲', brief: true },
+        { title: '乙', brief: true },
+      ],
+      await seedSection(page, seriesId),
+    );
 
     const cockpit = new SeriesCockpitPage(page);
     await cockpit.goto(seriesId);
@@ -214,7 +269,12 @@ test.describe('系列驾驶舱', () => {
 
   test('接口失败时页面仍可用：推荐之外的其余部分照常渲染', async ({ page }) => {
     const seriesId = await seedSeries(page, `驾驶舱-降级 ${crypto.randomUUID().slice(0, 6)}`);
-    await seedItems(page, seriesId, [{ title: '甲', brief: true }]);
+    await seedItems(
+      page,
+      seriesId,
+      [{ title: '甲', brief: true }],
+      await seedSection(page, seriesId),
+    );
 
     // 只打掉聚合接口，系列名照常读得到。名字失败与数据失败都要能被看见，
     // 但不能把整页变成死路——那会把一个取名失败变成"系统坏了"。

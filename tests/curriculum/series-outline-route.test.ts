@@ -19,6 +19,8 @@ const DATABASE_URL = 'postgres://series-outline';
 
 const mocks = vi.hoisted(() => ({
   resolveOwnerId: vi.fn(),
+  resolveModel: vi.fn(),
+  callLLM: vi.fn(),
   provider: {
     current: null as null | {
       pool: unknown;
@@ -37,6 +39,12 @@ vi.mock('@/lib/server/curriculum/design-store', async (importOriginal) => {
 // The series-level PATCH route goes through the *curriculum product* provider,
 // not the design provider. Substituting only the design one left that route
 // reaching for a real Postgres it does not have in this test.
+vi.mock('@/lib/server/resolve-model', () => ({ resolveModel: mocks.resolveModel }));
+vi.mock('@/lib/ai/llm', () => ({ callLLM: mocks.callLLM }));
+vi.mock('@/lib/server/model-config/runtime', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/server/model-config/runtime')>();
+  return { ...actual, backgroundWorkspaceId: async (ownerId: string) => ownerId };
+});
 vi.mock('@/lib/server/curriculum/store', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/server/curriculum/store')>();
   return {
@@ -57,6 +65,7 @@ import {
   DELETE as deleteNode,
   PATCH as patchNode,
 } from '@/app/api/curriculum/series/[id]/outline/[nodeId]/route';
+import { POST as generateOutlineAi } from '@/app/api/curriculum/series/[id]/outline/ai/route';
 import { POST as importOutline } from '@/app/api/curriculum/series/[id]/outline/import/route';
 import { GET as overview } from '@/app/api/curriculum/design/overview/route';
 import { POST as createTask } from '@/app/api/curriculum/design/tasks/route';
@@ -120,6 +129,14 @@ describe('series outline routes (PGlite)', () => {
     pool = new PGlitePool(db);
     await ensureCurriculumSchema(pool);
     mocks.resolveOwnerId.mockReturnValue(OWNER);
+    mocks.callLLM.mockReset();
+    mocks.resolveModel.mockResolvedValue({
+      model: {},
+      modelInfo: {},
+      modelString: 'test/model',
+      thinkingConfig: undefined,
+      serverManaged: false,
+    });
     mocks.provider.current = { pool, withTransaction: (body) => body(pool) };
     const series = await createCurriculumSeries(pool, OWNER, {
       name: 'CTF综合实战',
@@ -134,12 +151,17 @@ describe('series outline routes (PGlite)', () => {
     await db.close();
   });
 
-  async function createChapter(title = 'CTF 基础与工具环境', code?: string): Promise<string> {
+  async function createChapter(
+    title = 'CTF 基础与工具环境',
+    code?: string,
+    note?: string,
+  ): Promise<string> {
     const response = await postNode(
       request(`/api/curriculum/series/${seriesId}/outline`, 'POST', {
         nodeType: 'chapter',
         title,
         ...(code ? { code } : {}),
+        ...(note ? { note } : {}),
       }),
       seriesParams(seriesId),
     );
@@ -148,18 +170,62 @@ describe('series outline routes (PGlite)', () => {
     return body.node.id;
   }
 
-  async function createSection(parentId: string, title = 'CTF 入门与赛制'): Promise<string> {
+  async function createSection(
+    parentId: string,
+    title = 'CTF 入门与赛制',
+    note?: string,
+  ): Promise<string> {
     const response = await postNode(
       request(`/api/curriculum/series/${seriesId}/outline`, 'POST', {
         nodeType: 'section',
         parentId,
         title,
+        ...(note ? { note } : {}),
       }),
       seriesParams(seriesId),
     );
     expect(response.status).toBe(201);
     const body = await read<{ node: { id: string } }>(response);
     return body.node.id;
+  }
+
+  /** 直接写系列设计列：这一层的行为只取决于读到的设计，不必绕一遍 PATCH 接口。 */
+  async function seedSeriesDesign(): Promise<void> {
+    await db.query(
+      `UPDATE curriculum_series
+          SET audience = $3, default_hours = $4, problem_statement = $5,
+              course_objectives = $6::jsonb, knowledge_system = $7::jsonb
+        WHERE owner_id = $1 AND id = $2`,
+      [
+        OWNER,
+        seriesId,
+        '零基础高校网络安全专业学生',
+        54,
+        '覆盖 CTF 五个方向；不包含内网渗透',
+        JSON.stringify([
+          {
+            id: 'so_1',
+            title: '能独立完成入门级 Web 题',
+            expectedBehavior: '独立定位并利用漏洞拿到 flag',
+            minCriteria: ['提交的 flag 正确'],
+            evidence: 'Web 方向综合靶场',
+            nodeIds: ['sn_1'],
+          },
+        ]),
+        JSON.stringify({
+          nodes: [
+            {
+              id: 'sn_1',
+              name: 'SQL 注入原理',
+              type: 'knowledge',
+              summary: '注入成因与常见手法',
+              difficulty: 'basic',
+              prerequisites: [],
+            },
+          ],
+        }),
+      ],
+    );
   }
 
   it('章和节可以在任何目之前存在，编号自动生成', async () => {
@@ -447,5 +513,302 @@ describe('series outline routes (PGlite)', () => {
       series: { audience: string | null; defaultHours: number | null };
     }>(outline);
     expect(body.series).toMatchObject({ audience: '社会人员', defaultHours: 2 });
+  });
+
+  // ── AI 生成大纲 ──────────────────────────────────────────────────────────
+
+  type AiPreviewBody = {
+    preview: {
+      canCommit: boolean;
+      replaceAllowed: boolean;
+      replaceBlockedReason: string | null;
+      blockedReason: string | null;
+      writes: { chapters: number; sections: number; items: number };
+      removes: { chapters: number; sections: number; items: number };
+    };
+    plan: unknown;
+    design: { complete: boolean; gaps: string[]; objectiveCount: number; nodeCount: number };
+  };
+  const ai = (body: unknown) =>
+    generateOutlineAi(
+      request(`/api/curriculum/series/${seriesId}/outline/ai`, 'POST', body),
+      seriesParams(seriesId),
+    );
+
+  it('生成以系列设计为依据：提示词带上方向 / 课程目标 / 知识体系，响应回报完成度', async () => {
+    await seedSeriesDesign();
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ chapters: [{ title: 'Web 安全', note: 'Web 方向' }] }),
+    });
+    const preview = await ai({ level: 'chapter', action: 'preview' });
+    expect(preview.status).toBe(200);
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.design).toEqual({
+      complete: true,
+      gaps: [],
+      objectiveCount: 1,
+      nodeCount: 1,
+    });
+
+    const prompt = mocks.callLLM.mock.calls[0]?.[0] as { prompt: string };
+    expect(prompt.prompt).toContain('系列设计已定稿');
+    expect(prompt.prompt).toContain('课程范围：覆盖 CTF 五个方向');
+    expect(prompt.prompt).toContain('能独立完成入门级 Web 题');
+    expect(prompt.prompt).toContain('最低达标线：提交的 flag 正确');
+    expect(prompt.prompt).toContain('SQL 注入原理（基础）');
+  });
+
+  it('系列设计没定完时提示词明说，并回传缺口给界面', async () => {
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ chapters: [{ title: 'Web 安全', note: 'Web 方向' }] }),
+    });
+    const preview = await ai({ level: 'chapter', action: 'preview' });
+    expect(preview.status).toBe(200);
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.design.complete).toBe(false);
+    expect(body.design.gaps.join()).toMatch(/课程范围|课程目标/);
+
+    const prompt = mocks.callLLM.mock.calls[0]?.[0] as { prompt: string };
+    expect(prompt.prompt).toContain('系列设计还没定完');
+  });
+
+  it('AI 生成章：先预览（不写库），提交后按编号建出章', async () => {
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        chapters: [
+          { title: 'CTF 基础与工具环境', note: '入门' },
+          { title: 'Web 安全', note: 'Web 方向' },
+        ],
+      }),
+    });
+    const preview = await ai({ level: 'chapter', action: 'preview' });
+    expect(preview.status).toBe(200);
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.preview.canCommit).toBe(true);
+    expect(body.preview.writes.chapters).toBe(2);
+    expect(body.preview.replaceAllowed).toBe(true);
+    expect(await listSeriesOutline(pool, OWNER, seriesId)).toHaveLength(0);
+
+    const commit = await ai({ level: 'chapter', action: 'commit', plan: body.plan });
+    expect(commit.status).toBe(201);
+    const nodes = await listSeriesOutline(pool, OWNER, seriesId);
+    expect(nodes.map((node) => [node.nodeType, node.code, node.title])).toEqual([
+      ['chapter', '1', 'CTF 基础与工具环境'],
+      ['chapter', '2', 'Web 安全'],
+    ]);
+    expect(nodes.map((node) => node.note)).toEqual(['入门', 'Web 方向']);
+  });
+
+  it('AI 生成节：只给空章生成；预览之后大纲变了，提交整批拒绝而不是部分写入', async () => {
+    const chapterId = await createChapter('CTF 基础与工具环境');
+    await createSection(chapterId, 'CTF 入门与赛制');
+    const emptyChapter = await createChapter(
+      'Web 安全',
+      undefined,
+      '覆盖 Web 常见漏洞与利用；不涉及内网。拆 3 节。',
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        chapters: [
+          {
+            chapter: '2',
+            sections: [{ title: 'HTTP 与 Web 基础', note: 'HTTP 请求响应、Cookie' }],
+          },
+        ],
+      }),
+    });
+    const preview = await ai({ level: 'section', action: 'preview' });
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.preview.canCommit).toBe(true);
+    expect(body.preview.writes.sections).toBe(1);
+    expect(body.preview.replaceAllowed).toBe(true);
+    // 章备注必须原样进入提示词：节只能从章交底声明的范围内长出来。
+    const prompt = mocks.callLLM.mock.calls[0]?.[0] as { prompt: string };
+    expect(prompt.prompt).toContain('章交底：覆盖 Web 常见漏洞与利用');
+
+    // 预览之后有人手工给第 2 章建了一节：提交用的引用已不在目标里，必须整批拒绝。
+    await createSection(emptyChapter, '手工加的节');
+    const commit = await ai({ level: 'section', action: 'commit', plan: body.plan });
+    expect(commit.status).toBe(409);
+    const nodes = await listSeriesOutline(pool, OWNER, seriesId);
+    expect(nodes.filter((node) => node.nodeType === 'section')).toHaveLength(2);
+  });
+
+  it('AI 生成目：编号连续、类型与学时落库、继承系列默认 brief', async () => {
+    const chapterId = await createChapter(
+      'CTF 基础与工具环境',
+      undefined,
+      '覆盖赛制、工具与提交流程；不涉及漏洞利用。',
+    );
+    const sectionId = await createSection(
+      chapterId,
+      'CTF 入门与赛制',
+      '以一道入门题为例：理论讲赛制，实操走提交，复盘讲坑。',
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        sections: [
+          {
+            section: '1-1',
+            items: [
+              {
+                title: 'CTF 概述与竞赛形式',
+                kind: 'theory',
+                hours: 1,
+                note: 'CTF起源、Jeopardy/AWD、flag格式',
+              },
+              {
+                title: '竞赛平台与提交实操',
+                kind: 'practice',
+                hours: 1,
+                note: '平台注册、题目下载、flag提交',
+              },
+              { title: '队伍分工与赛后复盘', kind: 'review', hours: 2, note: '分工、复盘' },
+            ],
+          },
+        ],
+      }),
+    });
+    const preview = await ai({ level: 'item', action: 'preview' });
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.preview.writes.items).toBe(3);
+    // 生成目时，节交底与章交底都要在提示词里：只给节标题是"完全脱节"的来源。
+    const prompt = mocks.callLLM.mock.calls[0]?.[0] as { prompt: string };
+    expect(prompt.prompt).toContain('节交底：以一道入门题为例');
+    expect(prompt.prompt).toContain('章交底：覆盖赛制、工具与提交流程');
+
+    const commit = await ai({ level: 'item', action: 'commit', plan: body.plan });
+    expect(commit.status).toBe(201);
+    const tasks = await pool.query<{
+      code: string | null;
+      kind: string | null;
+      audience: string | null;
+      duration_hours: number | string | null;
+      problem_statement: string | null;
+      section_id: string | null;
+    }>(
+      `SELECT code, kind, audience, duration_hours, problem_statement, section_id
+         FROM curriculum_task WHERE owner_id = $1 AND series_id = $2 ORDER BY code`,
+      [OWNER, seriesId],
+    );
+    expect(tasks.rows.map((row) => row.code)).toEqual(['1-1-1', '1-1-2', '1-1-3']);
+    expect(tasks.rows[0]).toMatchObject({
+      kind: 'theory',
+      audience: '零基础高校网络安全专业学生',
+      problem_statement: '学完这一目，能说清并处理：CTF起源、Jeopardy/AWD、flag格式',
+      section_id: sectionId,
+    });
+    expect(Number(tasks.rows[2]!.duration_hours)).toBe(2);
+  });
+
+  it('系列里已经有目时，覆盖重建章/节在预检就被拒绝，且不调模型', async () => {
+    const chapterId = await createChapter();
+    const sectionId = await createSection(chapterId);
+    await createTask(
+      request('/api/curriculum/design/tasks', 'POST', {
+        sectionId,
+        title: 'CTF概述与竞赛形式',
+        kind: 'theory',
+      }),
+    );
+    mocks.callLLM.mockClear();
+
+    const chapterPreview = await ai({ level: 'chapter', action: 'preview', replace: true });
+    expect(chapterPreview.status).toBe(200);
+    const chapterBody = await read<AiPreviewBody>(chapterPreview);
+    expect(chapterBody.preview.canCommit).toBe(false);
+    expect(chapterBody.preview.replaceAllowed).toBe(false);
+    expect(chapterBody.preview.replaceBlockedReason).toContain('已经有 1 个目');
+    expect(chapterBody.plan).toBeNull();
+
+    const sectionPreview = await ai({ level: 'section', action: 'preview', replace: true });
+    const sectionBody = await read<AiPreviewBody>(sectionPreview);
+    expect(sectionBody.preview.canCommit).toBe(false);
+    expect(sectionBody.preview.blockedReason).toContain('重建节');
+    expect(mocks.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('每一章都有节时，AI 生成节 fill 在预检返回原因，不调模型', async () => {
+    const chapterId = await createChapter();
+    await createSection(chapterId);
+    mocks.callLLM.mockClear();
+    const preview = await ai({ level: 'section', action: 'preview' });
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.preview.blockedReason).toContain('每一章都已经有节');
+    expect(body.plan).toBeNull();
+    expect(mocks.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('目覆盖只删除还没开始设计的目，已开始设计的节被保留', async () => {
+    const chapterId = await createChapter();
+    const sectionA = await createSection(chapterId, '可覆盖的节');
+    const sectionB = await createSection(chapterId, '进行中的节');
+    const started = await createTask(
+      request('/api/curriculum/design/tasks', 'POST', {
+        sectionId: sectionB,
+        title: '进行中的目',
+        kind: 'theory',
+      }),
+    );
+    const startedBody = await read<{ task: { id: string } }>(started);
+    await pool.query(
+      `UPDATE curriculum_task SET design_phase = 'outcomes' WHERE owner_id = $1 AND id = $2`,
+      [OWNER, startedBody.task.id],
+    );
+    await createTask(
+      request('/api/curriculum/design/tasks', 'POST', {
+        sectionId: sectionA,
+        title: '旧的理论目',
+        kind: 'theory',
+      }),
+    );
+
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        sections: [
+          {
+            section: '1-1',
+            items: [{ title: '新的理论目', kind: 'theory', hours: 1, note: null }],
+          },
+        ],
+      }),
+    });
+    const preview = await ai({ level: 'item', action: 'preview', replace: true });
+    const body = await read<AiPreviewBody>(preview);
+    expect(body.preview.canCommit).toBe(true);
+    expect(body.preview.removes.items).toBe(1);
+
+    const commit = await ai({ level: 'item', action: 'commit', replace: true, plan: body.plan });
+    expect(commit.status).toBe(201);
+    const tasks = await pool.query<{ title: string; section_id: string | null }>(
+      `SELECT title, section_id FROM curriculum_task
+        WHERE owner_id = $1 AND series_id = $2 ORDER BY title`,
+      [OWNER, seriesId],
+    );
+    expect(tasks.rows.map((row) => row.title)).toEqual(['新的理论目', '进行中的目']);
+    expect(tasks.rows.find((row) => row.title === '进行中的目')?.section_id).toBe(sectionB);
+  });
+
+  it('模型回答不可用时 502，一行都不写', async () => {
+    mocks.callLLM.mockResolvedValueOnce({ text: '抱歉，我无法完成这个请求。' });
+    const preview = await ai({ level: 'chapter', action: 'preview' });
+    expect(preview.status).toBe(502);
+    expect(await listSeriesOutline(pool, OWNER, seriesId)).toHaveLength(0);
+  });
+
+  it('commit 缺少 preview 的 plan 时被拒绝', async () => {
+    const response = await ai({ level: 'chapter', action: 'commit' });
+    expect(response.status).toBe(400);
+  });
+
+  it('系列不存在时 404', async () => {
+    const response = await generateOutlineAi(
+      request('/api/curriculum/series/series-missing/outline/ai', 'POST', {
+        level: 'chapter',
+        action: 'preview',
+      }),
+      seriesParams('series-missing'),
+    );
+    expect(response.status).toBe(404);
   });
 });
