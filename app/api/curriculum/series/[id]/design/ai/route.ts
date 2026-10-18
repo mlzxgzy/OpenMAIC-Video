@@ -5,36 +5,30 @@
  * 让用户先看到"会写进去什么"，比写完再道歉便宜；而两次点击不会生成两份不同的
  * 东西，因为保存的是用户看过的那一份。
  *
- * 输入除了系列名称与说明，还带上**大纲**：知识体系必须能落回章 / 节 / 目。不带
- * 大纲时模型会写一份通用 CTF 知识树，和用户真实排的 63 目对不上——这正是"生成
- * 出来就脱节"的老问题。
+ * 输入除了系列名称与说明，还尽量带上**大纲**：知识体系要能落回章 / 节 / 目，
+ * 有大纲时模型按真实排课写，比凭名字猜准得多。但大纲**不是前提**——新系列是设计
+ * 先行（方向 → 目标 → 知识点 → 大纲），这时还什么都没有。没有大纲就照名称、说明
+ * 与方向起草，并在提示词里明说"落点要等大纲建好后再核对"，而不是把用户挡在门外。
+ * 落点覆盖由 `readSeriesDesignCoverage` 在大纲建好后单独校验。
  */
-import { NextResponse, type NextRequest } from 'next/server';
+import type { NextRequest } from 'next/server';
 import type { Queryable } from '@openmaic/storage/document/pg';
 
 import { createLogger } from '@/lib/logger';
 import { isSameOriginJsonRequest } from '@/lib/persistence/owner-claim-http';
 import { ownerJson } from '@/lib/server/agent-runtime/route-response';
-import { runDesignRoute, type DesignContext } from '@/lib/server/curriculum/design-http';
+import { runDesignRoute } from '@/lib/server/curriculum/design-http';
 import { curriculumJsonError } from '@/lib/server/curriculum/http';
 import { getSeriesDesign } from '@/lib/server/curriculum/series-design';
+import { resolveSeriesDesignModel } from '@/lib/server/curriculum/series-design-model';
 import { draftSeriesDesign } from '@/lib/server/curriculum/series-design-step';
 import { formatSeriesDirection, SeriesDesignInvalidError } from '@/lib/curriculum/series-design';
-import {
-  backgroundWorkspaceId,
-  SlotDisabledError,
-  SlotUnassignedError,
-} from '@/lib/server/model-config/runtime';
-import { resolveModel } from '@/lib/server/resolve-model';
 
 export const runtime = 'nodejs';
 
 type Params = { params: Promise<{ id: string }> };
 
 const log = createLogger('SeriesDesignAi');
-
-/** 与系列大纲生成共用课程设计模型：这一步生成的是结构，不是素材。 */
-const DESIGN_STAGE = 'scene-outlines-stream';
 
 interface OutlineRow extends Record<string, unknown> {
   id: string;
@@ -76,16 +70,10 @@ export async function POST(req: NextRequest, { params }: Params) {
     }
 
     const outlineSummary = await readOutlineSummary(ctx.queryable, ctx.ownerId, ctx.taskId);
-    if (outlineSummary.trim() === '') {
-      return curriculumJsonError(
-        400,
-        'CURRICULUM_SERIES_DESIGN_INVALID',
-        '这个系列还没有大纲：先建章 / 节 / 目，知识体系才有落点',
-        ctx.headers,
-      );
-    }
+    // 有大纲时以大纲为依据（回填场景）；没有大纲也能起草（设计先行场景）。
+    const hasOutline = outlineSummary.trim() !== '';
 
-    const model = await resolveDesignModel(ctx);
+    const model = await resolveSeriesDesignModel(ctx);
     if ('response' in model) return model.response;
 
     try {
@@ -95,6 +83,7 @@ export async function POST(req: NextRequest, { params }: Params) {
           seriesDescription: snapshot.series.description,
           directionText: formatSeriesDirection(snapshot.design.direction),
           outlineSummary,
+          hasOutline,
           existing: snapshot.design,
           model: model.value,
         },
@@ -181,29 +170,4 @@ async function readOutlineSummary(
     }
   }
   return lines.join('\n');
-}
-
-async function resolveDesignModel(
-  ctx: DesignContext,
-): Promise<{ value: Awaited<ReturnType<typeof resolveModel>> } | { response: NextResponse }> {
-  try {
-    return {
-      value: await resolveModel({
-        stage: DESIGN_STAGE,
-        workspaceId: await backgroundWorkspaceId(ctx.ownerId),
-      }),
-    };
-  } catch (error) {
-    if (error instanceof SlotUnassignedError || error instanceof SlotDisabledError) {
-      return {
-        response: curriculumJsonError(
-          400,
-          'MISSING_MODEL',
-          '没有为课程设计配置语言模型',
-          ctx.headers,
-        ),
-      };
-    }
-    throw error;
-  }
 }

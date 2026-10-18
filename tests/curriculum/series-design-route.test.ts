@@ -56,6 +56,9 @@ import {
   PATCH as patchDesign,
 } from '@/app/api/curriculum/series/[id]/design/route';
 import { POST as generateDesignAi } from '@/app/api/curriculum/series/[id]/design/ai/route';
+import { POST as generateDirectionAi } from '@/app/api/curriculum/series/[id]/design/direction/ai/route';
+import { POST as generateObjectivesAi } from '@/app/api/curriculum/series/[id]/design/objectives/ai/route';
+import { POST as generateKnowledgeAi } from '@/app/api/curriculum/series/[id]/design/knowledge/ai/route';
 import { POST as confirmDirection } from '@/app/api/curriculum/design/tasks/[id]/direction/route';
 import { ensureCurriculumSchema } from '@/lib/persistence/curriculum';
 import {
@@ -138,6 +141,142 @@ const DESIGN_BODY = {
   ],
 };
 
+const OBJECTIVE_CANDIDATES = [
+  {
+    title: '能交付一份可复现的 Writeup',
+    type: 'task',
+    expectedBehavior: '写完别人能照着复现',
+    minCriteria: ['步骤可复现'],
+    evidence: '作品评分',
+  },
+  {
+    title: '能用 sqlmap 完成联合注入',
+    type: 'skill',
+    expectedBehavior: '独立跑完并取出数据',
+    minCriteria: ['拿到目标表内容'],
+    evidence: '靶场实操',
+  },
+  {
+    title: '能解释注入成因',
+    type: '知识',
+    expectedBehavior: '说清触发条件',
+    minCriteria: ['三类成因说对'],
+    evidence: '理论题',
+  },
+  {
+    title: '能独立拿下陌生靶场',
+    type: '能力',
+    expectedBehavior: '从信息收集走到拿 flag',
+    minCriteria: ['60 分钟内拿 flag'],
+    evidence: '综合靶场',
+  },
+  {
+    title: '能说出三种编码的区别',
+    type: 'knowledge',
+    expectedBehavior: '举例说明',
+    minCriteria: ['三类编码举例正确'],
+    evidence: '理论题',
+  },
+  {
+    title: '能独立完成目录扫描',
+    type: 'skill',
+    expectedBehavior: '扫出隐藏目录',
+    minCriteria: ['找到至少一个隐藏目录'],
+    evidence: '靶场实操',
+  },
+  {
+    title: '能完成一套入门赛题',
+    type: 'task',
+    expectedBehavior: '限时独立完成',
+    minCriteria: ['拿到至少 3 个 flag'],
+    evidence: '模拟赛',
+  },
+  {
+    title: '能解释同源策略',
+    type: 'knowledge',
+    expectedBehavior: '说清限制范围',
+    minCriteria: ['能判断哪些请求会被拦'],
+    evidence: '理论题',
+  },
+] as const;
+
+/**
+ * 第 3 步的候选：10 个点，知识在前、技能在后，故意包含两个已有节点的重名
+ * （`HTTP 请求与响应` / `SQL 注入原理`），用来验证"重复候选被筛掉"。
+ */
+const KNOWLEDGE_CANDIDATES = [
+  {
+    name: 'SQL 注入原理',
+    type: 'knowledge',
+    summary: '注入成因与常见手法',
+    difficulty: 'basic',
+    prerequisites: [],
+  },
+  {
+    name: 'HTTP 请求与响应',
+    type: '知识',
+    summary: '请求方法、状态码、Cookie',
+    difficulty: '入门',
+    prerequisites: [],
+  },
+  {
+    name: '联合注入',
+    type: 'knowledge',
+    summary: 'UNION 回显的构造',
+    difficulty: 'intermediate',
+    prerequisites: ['SQL 注入原理'],
+  },
+  {
+    name: 'RSA 数论基础',
+    type: 'knowledge',
+    summary: '模运算与欧拉函数',
+    difficulty: 'advanced',
+    prerequisites: [],
+  },
+  {
+    name: '用 sqlmap 完成联合注入',
+    type: 'skill',
+    summary: '跑通 sqlmap 并取出目标表数据',
+    difficulty: 'basic',
+    prerequisites: ['联合注入'],
+  },
+  {
+    name: '目录扫描',
+    type: 'skill',
+    summary: '用 ffuf 扫出隐藏目录',
+    difficulty: 'basic',
+    prerequisites: ['HTTP 请求与响应'],
+  },
+  {
+    name: '抓包分析',
+    type: 'skill',
+    summary: '用 Wireshark 过滤并提取文件',
+    difficulty: 'intermediate',
+    prerequisites: [],
+  },
+  {
+    name: '编写 Writeup',
+    type: 'skill',
+    summary: '把解题过程写成别人能复现的文档',
+    difficulty: 'advanced',
+    prerequisites: [],
+  },
+  {
+    name: '栈溢出利用',
+    type: 'skill',
+    summary: '覆盖返回地址并跳转后门',
+    difficulty: 'advanced',
+    prerequisites: [],
+  },
+  {
+    name: '编码识别',
+    type: 'knowledge',
+    summary: 'Base / URL / Unicode 的识别',
+    difficulty: 'intro',
+    prerequisites: [],
+  },
+] as const;
+
 describe('series design routes (PGlite)', () => {
   let db: PGlite;
   let pool: PGlitePool;
@@ -187,6 +326,10 @@ describe('series design routes (PGlite)', () => {
         nodes: Array<{ id: string; name: string; prerequisites: string[] }>;
       };
       nodeNames: Record<string, string>;
+      coverage: {
+        objectives: { total: number; unclaimed: number; titles: string[] };
+        nodes: { total: number; unclaimed: number; names: string[] };
+      };
     }>(response);
   }
 
@@ -327,13 +470,379 @@ describe('series design routes (PGlite)', () => {
     expect(reread.design.nodes).toEqual([]);
   });
 
-  it('没有大纲时 AI 起草直接拒绝，不花模型预算', async () => {
+  it('没有大纲也能起草：设计先行，提示词明说落点待大纲建好后校验', async () => {
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        objectives: [
+          {
+            title: '能独立完成入门级 Web 题',
+            expectedBehavior: '拿到 flag',
+            minCriteria: ['flag 正确'],
+            evidence: '靶场',
+            nodeNames: ['SQL 注入原理'],
+          },
+        ],
+        nodes: [
+          {
+            name: 'SQL 注入原理',
+            type: 'knowledge',
+            summary: '联合查询',
+            difficulty: 'basic',
+            prerequisites: [],
+          },
+        ],
+      }),
+    });
+
     const response = await generateDesignAi(
       request(`/api/curriculum/series/${seriesId}/design/ai`, 'POST', {}),
       seriesParams(seriesId),
     );
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
+    expect(mocks.callLLM).toHaveBeenCalledTimes(1);
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    // 没有大纲不是拒绝的理由；但提示词必须承认"没有核对过落点"，
+    // 否则模型会假装自己落回过一份不存在的大纲。
+    expect(call.prompt).toContain('还没有大纲');
+    expect(call.prompt).toContain('落点');
+    const body = await read<{ draft: { objectives: Array<{ title: string }> } }>(response);
+    expect(body.draft.objectives[0]?.title).toBe('能独立完成入门级 Web 题');
+  });
+
+  it('AI 填写方向：只回草稿、不写库，槽位被规范化', async () => {
+    mocks.callLLM.mockResolvedValueOnce({
+      text: [
+        '```json',
+        JSON.stringify({
+          direction: {
+            audience: '零基础高校网络安全专业学生',
+            learnerLevel: '会 Linux 基本命令',
+            trainingScenario: '线下集中实训 + 线上自学',
+            applicationScene: '校内选拔赛 / 校队集训',
+            problemStatement: '覆盖 CTF 五个方向，不做真实攻防演练',
+            // 中文对话里模型常把单位带上；这里必须收成数字，否则整格被丢。
+            durationHours: '54 学时',
+            notes: '模型自造的键必须被丢掉',
+          },
+        }),
+        '```',
+      ].join('\n'),
+    });
+
+    const response = await generateDirectionAi(
+      request(`/api/curriculum/series/${seriesId}/design/direction/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const body = await read<{
+      direction: {
+        audience: string;
+        durationHours: number;
+        problemStatement: string;
+        [key: string]: unknown;
+      };
+    }>(response);
+    expect(body.direction.audience).toBe('零基础高校网络安全专业学生');
+    expect(body.direction.durationHours).toBe(54);
+    expect(body.direction.problemStatement).toContain('不做真实攻防演练');
+    expect(body.direction).not.toHaveProperty('notes');
+
+    // 草稿不是写入：再读接口，方向仍然是空的。
+    const reread = await getSnapshot();
+    expect(reread.design.direction).toMatchObject({ audience: null, durationHours: null });
+  });
+
+  it('AI 填写方向：把用户已经写下的方向送进提示词，让模型保留而不是覆盖', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', {
+        direction: { audience: '计算机学院大三学生', learnerLevel: '会 Python 基础' },
+      }),
+      seriesParams(seriesId),
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({
+        direction: {
+          audience: '计算机学院大三学生',
+          learnerLevel: '会 Python 基础',
+          trainingScenario: '线上自学',
+          applicationScene: '校队选拔',
+          problemStatement: '面向校赛的 Web 与 Misc 入门训练，不做内网渗透',
+          durationHours: 32,
+        },
+      }),
+    });
+
+    const response = await generateDirectionAi(
+      request(`/api/curriculum/series/${seriesId}/design/direction/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    expect(call.prompt).toContain('计算机学院大三学生');
+    expect(call.prompt).toContain('会 Python 基础');
+  });
+
+  it('AI 填写方向：没有授课对象时回 502，而不是存一份没有"谁学"的草稿', async () => {
+    mocks.callLLM.mockResolvedValue({
+      text: JSON.stringify({ direction: { trainingScenario: '线上自学' } }),
+    });
+    const response = await generateDirectionAi(
+      request(`/api/curriculum/series/${seriesId}/design/direction/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(502);
+  });
+
+  it('AI 生成课程目标候选：只回候选、不写库，中文类型收成枚举并按类型排序', async () => {
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ objectives: OBJECTIVE_CANDIDATES }),
+    });
+    const response = await generateObjectivesAi(
+      request(`/api/curriculum/series/${seriesId}/design/objectives/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const body = await read<{ candidates: Array<{ title: string; type: string }> }>(response);
+    expect(body.candidates.map((candidate) => candidate.type)).toEqual([
+      'knowledge',
+      'knowledge',
+      'knowledge',
+      'skill',
+      'skill',
+      'competency',
+      'task',
+      'task',
+    ]);
+    // 提示词把方向带进去了：候选目标是「这门系列要兑现什么」。
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    expect(call.prompt).toContain('授课对象');
+    expect(call.prompt).toContain('18–28');
+    // 候选不是写入：设计里仍然没有目标。
+    const reread = await getSnapshot();
+    expect(reread.design.objectives).toEqual([]);
+  });
+
+  it('AI 生成候选：已有目标进提示词，重复的候选被筛掉', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', {
+        direction: { audience: '计算机学院大三学生' },
+        objectives: [
+          {
+            title: '能解释注入成因',
+            type: '知识',
+            expectedBehavior: '说清触发条件',
+            minCriteria: ['三类成因说对'],
+            evidence: '理论题',
+          },
+        ],
+      }),
+      seriesParams(seriesId),
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ objectives: OBJECTIVE_CANDIDATES }),
+    });
+    const response = await generateObjectivesAi(
+      request(`/api/curriculum/series/${seriesId}/design/objectives/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const body = await read<{ candidates: Array<{ title: string }> }>(response);
+    expect(body.candidates.some((candidate) => candidate.title === '能解释注入成因')).toBe(false);
+    expect(body.candidates.length).toBeGreaterThanOrEqual(6);
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    expect(call.prompt).toContain('计算机学院大三学生');
+    expect(call.prompt).toContain('能解释注入成因');
+  });
+
+  it('AI 生成候选：可用候选太少 → 502，而不是收下一小撮', async () => {
+    mocks.callLLM.mockResolvedValue({
+      text: JSON.stringify({ objectives: OBJECTIVE_CANDIDATES.slice(0, 2) }),
+    });
+    const response = await generateObjectivesAi(
+      request(`/api/curriculum/series/${seriesId}/design/objectives/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(502);
+    expect(await readSnapshotBody(response)).toMatch(/至少 6 条/);
+  });
+
+  it('AI 生成知识体系候选：没有课程目标时 409，不调用模型', async () => {
+    const response = await generateKnowledgeAi(
+      request(`/api/curriculum/series/${seriesId}/design/knowledge/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(409);
+    expect(await readSnapshotBody(response)).toMatch(/还没有课程目标/);
+    // 前置条件不满足时不该烧一次模型调用。
     expect(mocks.callLLM).not.toHaveBeenCalled();
+  });
+
+  it('AI 生成知识体系候选：依据课程目标，只回候选不写库，按类型排序', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', {
+        direction: DESIGN_BODY.direction,
+        objectives: [
+          {
+            title: '能独立完成入门级 Web 题',
+            type: '能力',
+            expectedBehavior: '独立定位并利用题目漏洞拿到 flag',
+            minCriteria: ['提交的 flag 正确'],
+            evidence: 'Web 方向综合靶场',
+          },
+        ],
+      }),
+      seriesParams(seriesId),
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ nodes: KNOWLEDGE_CANDIDATES }),
+    });
+
+    const response = await generateKnowledgeAi(
+      request(`/api/curriculum/series/${seriesId}/design/knowledge/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const body = await read<{ candidates: Array<{ name: string; type: string }> }>(response);
+    expect(body.candidates).toHaveLength(10);
+    // 类型 / 难度两种写法都收成枚举，知识全部排在技能前面。
+    const types = body.candidates.map((candidate) => candidate.type);
+    expect(types.lastIndexOf('knowledge')).toBeLessThan(types.indexOf('skill'));
+
+    // 提示词把第 2 步的目标与方向带进去了：知识体系是它们的支撑。
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    expect(call.prompt).toContain('能独立完成入门级 Web 题');
+    expect(call.prompt).toContain('授课对象');
+    expect(call.prompt).toContain('先修');
+
+    // 候选不是写入：知识体系里仍然没有节点。
+    const reread = await getSnapshot();
+    expect(reread.design.nodes).toEqual([]);
+  });
+
+  it('AI 生成知识体系候选：已有节点进提示词，重复的候选被筛掉', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', DESIGN_BODY),
+      seriesParams(seriesId),
+    );
+    mocks.callLLM.mockResolvedValueOnce({
+      text: JSON.stringify({ nodes: KNOWLEDGE_CANDIDATES }),
+    });
+
+    const response = await generateKnowledgeAi(
+      request(`/api/curriculum/series/${seriesId}/design/knowledge/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(200);
+    const body = await read<{ candidates: Array<{ name: string }> }>(response);
+    // DESIGN_BODY 里已有「HTTP 请求与响应」「SQL 注入原理」两个节点。
+    expect(body.candidates).toHaveLength(8);
+    expect(
+      body.candidates.some(
+        (candidate) => candidate.name === 'HTTP 请求与响应' || candidate.name === 'SQL 注入原理',
+      ),
+    ).toBe(false);
+    const call = mocks.callLLM.mock.calls[0][0] as { prompt: string };
+    expect(call.prompt).toContain('HTTP 请求与响应');
+    expect(call.prompt).toContain('SQL 注入原理');
+  });
+
+  it('AI 生成知识体系候选：可用候选太少 → 502，而不是收下一小撮', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', DESIGN_BODY),
+      seriesParams(seriesId),
+    );
+    mocks.callLLM.mockResolvedValue({
+      text: JSON.stringify({ nodes: KNOWLEDGE_CANDIDATES.slice(0, 3) }),
+    });
+    const response = await generateKnowledgeAi(
+      request(`/api/curriculum/series/${seriesId}/design/knowledge/ai`, 'POST', {}),
+      seriesParams(seriesId),
+    );
+    expect(response.status).toBe(502);
+    expect(await readSnapshotBody(response)).toMatch(/至少 8 个/);
+  });
+
+  it('保存带类型的课程目标：类型落库，读回来还是它；乱写的类型 400', async () => {
+    const saved = await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', {
+        objectives: [
+          {
+            title: '能独立拿下陌生靶场',
+            type: '能力',
+            expectedBehavior: '从信息收集走到拿 flag',
+            minCriteria: ['60 分钟内拿 flag'],
+            evidence: '综合靶场',
+          },
+        ],
+      }),
+      seriesParams(seriesId),
+    );
+    expect(saved.status).toBe(200);
+    const reread = await getSnapshot();
+    expect(reread.design.objectives[0]).toMatchObject({ type: 'competency' });
+
+    const rejected = await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', {
+        objectives: [{ ...reread.design.objectives[0], type: '玄学' }],
+      }),
+      seriesParams(seriesId),
+    );
+    expect(rejected.status).toBe(400);
+    expect(await readSnapshotBody(rejected)).toMatch(/类型/);
+  });
+
+  it('落点覆盖：只认本系列目里的承接，别的系列的声明不算', async () => {
+    await patchDesign(
+      request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', DESIGN_BODY),
+      seriesParams(seriesId),
+    );
+    const fresh = await getSnapshot();
+    expect(fresh.coverage.objectives).toMatchObject({ total: 1, unclaimed: 1 });
+    expect(fresh.coverage.nodes).toMatchObject({ total: 2, unclaimed: 2 });
+
+    // 另一个系列里也有目声明了同一个系列知识点：不能给它算落点。
+    const other = await createCurriculumSeries(pool, OWNER, { name: '另一个系列' });
+    const otherTask = await createCurriculumTask(pool, OWNER, {
+      seriesId: other.id,
+      title: '别的系列的一目',
+    });
+    await pool.query(
+      `INSERT INTO curriculum_objective
+         (id, owner_id, task_id, title, objective_type, expected_behavior, series_objective_id)
+       VALUES ('obj_other', $1, $2, '别人的目标', 'knowledge', '', 'so_1')`,
+      [OWNER, otherTask.id],
+    );
+    await pool.query(
+      `INSERT INTO curriculum_learning_node
+         (id, owner_id, task_id, name, node_type, series_node_id)
+       VALUES ('node_other', $1, $2, '别人的知识点', 'knowledge', 'sn_1')`,
+      [OWNER, otherTask.id],
+    );
+    const stillUnclaimed = await getSnapshot();
+    expect(stillUnclaimed.coverage.objectives.unclaimed).toBe(1);
+    expect(stillUnclaimed.coverage.nodes.unclaimed).toBe(2);
+
+    // 本系列的目承接一条目标与一个知识点后，只剩没被承接的那些。
+    const task = await createCurriculumTask(pool, OWNER, {
+      seriesId,
+      title: '本系列的一目',
+    });
+    await pool.query(
+      `INSERT INTO curriculum_objective
+         (id, owner_id, task_id, title, objective_type, expected_behavior, series_objective_id)
+       VALUES ('obj_own', $1, $2, '承接下来的目标', 'knowledge', '', 'so_1')`,
+      [OWNER, task.id],
+    );
+    await pool.query(
+      `INSERT INTO curriculum_learning_node
+         (id, owner_id, task_id, name, node_type, series_node_id)
+       VALUES ('node_own', $1, $2, '承接下来的知识点', 'knowledge', 'sn_1')`,
+      [OWNER, task.id],
+    );
+    const covered = await getSnapshot();
+    expect(covered.coverage.objectives).toMatchObject({ total: 1, unclaimed: 0 });
+    expect(covered.coverage.nodes).toMatchObject({ total: 2, unclaimed: 1 });
+    expect(covered.coverage.nodes.names).toEqual(['SQL 注入原理']);
   });
 
   it('目先建、方向后补：确认第 1 步也认系列方向', async () => {

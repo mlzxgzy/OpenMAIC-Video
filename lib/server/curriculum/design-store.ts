@@ -3745,7 +3745,9 @@ export async function inheritSeriesObjectives(
         null,
         objective.title,
         null,
-        'skill',
+        // 系列目标带类型时照抄（知识 / 技能 / 能力 / 任务）：目里这条承诺的性质
+        // 与系列层是同一件事。旧系列没有类型，退回原来的默认值。
+        objective.type ?? 'skill',
         null,
         'component',
         expectedBehavior,

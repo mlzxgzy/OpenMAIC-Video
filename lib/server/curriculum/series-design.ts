@@ -23,6 +23,7 @@ import {
   seriesDesignPhase,
   validateSeriesDesignPatch,
   type OutlineDesignDrift,
+  type SeriesDesignCoverage,
   type SeriesDesignDoc,
   type SeriesDesignSnapshot,
 } from '@/lib/curriculum/series-design';
@@ -303,6 +304,66 @@ export async function readOutlineDesignDrift(
       chapters: chapters.total,
       sections: sections.total,
       items: Number(itemsRow?.total ?? 0),
+    },
+  };
+}
+
+/**
+ * 课程目标 / 知识点在目里的落点覆盖。
+ *
+ * 两类「已落点」的证据都来自目自己的第 2 / 3 步：`curriculum_objective
+ * .series_objective_id` 与 `curriculum_learning_node.series_node_id`。不 JOIN
+ * 设计文档的 JSONB，是因为落点这件事的定义就是「目里真的有一行承接过它」，
+ * 而不是「模型觉得大纲里有」。别的系列的行不会被算进来（按 series_id 过滤），
+ * 否则复制过设计的两个系列会互相"证明"对方已覆盖。
+ *
+ * 没有大纲时调用方不展示这份读数：全部未落点是必然的，显示出来只是噪声。
+ */
+export async function readSeriesDesignCoverage(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  design: SeriesDesignDoc,
+): Promise<SeriesDesignCoverage> {
+  if (design.objectives.length === 0 && design.nodes.length === 0) {
+    return {
+      objectives: { total: 0, unclaimed: 0, titles: [] },
+      nodes: { total: 0, unclaimed: 0, names: [] },
+    };
+  }
+
+  const claimedObjectives = await queryable.query<{ id: string }>(
+    `SELECT DISTINCT o.series_objective_id AS id
+       FROM curriculum_objective o
+       JOIN curriculum_task t ON t.id = o.task_id AND t.owner_id = o.owner_id
+      WHERE o.owner_id = $1 AND t.series_id = $2 AND o.series_objective_id IS NOT NULL`,
+    [ownerId, seriesId],
+  );
+  const claimedNodes = await queryable.query<{ id: string }>(
+    `SELECT DISTINCT n.series_node_id AS id
+       FROM curriculum_learning_node n
+       JOIN curriculum_task t ON t.id = n.task_id AND t.owner_id = n.owner_id
+      WHERE n.owner_id = $1 AND t.series_id = $2 AND n.series_node_id IS NOT NULL`,
+    [ownerId, seriesId],
+  );
+
+  const claimedObjectiveIds = new Set(claimedObjectives.rows.map((row) => row.id));
+  const claimedNodeIds = new Set(claimedNodes.rows.map((row) => row.id));
+  const unclaimedObjectives = design.objectives.filter(
+    (objective) => !claimedObjectiveIds.has(objective.id),
+  );
+  const unclaimedNodes = design.nodes.filter((node) => !claimedNodeIds.has(node.id));
+
+  return {
+    objectives: {
+      total: design.objectives.length,
+      unclaimed: unclaimedObjectives.length,
+      titles: unclaimedObjectives.map((objective) => objective.title),
+    },
+    nodes: {
+      total: design.nodes.length,
+      unclaimed: unclaimedNodes.length,
+      names: unclaimedNodes.map((node) => node.name),
     },
   };
 }

@@ -13,22 +13,38 @@ import { describe, expect, it } from 'vitest';
 
 import { directionValuesOf, effectiveDirectionValues } from '@/lib/curriculum/design-direction';
 import {
+  appendNodeCandidates,
+  appendObjectiveCandidates,
   canonicalSeriesDesign,
+  countDroppedNodePrerequisites,
   formatNodesText,
   formatObjectivesText,
+  groupSeriesNodes,
+  groupSeriesObjectives,
   inheritableDirection,
   isDerivedFromStaleDesign,
   mergeSeriesDesign,
   normalizeSeriesDesignDoc,
+  objectiveTypeValue,
   parseNodesText,
   parseObjectivesText,
   parseSeriesDesignAnswer,
+  parseSeriesDirectionAnswer,
+  parseSeriesKnowledgeCandidatesAnswer,
+  parseSeriesObjectiveCandidatesAnswer,
+  screenNodeCandidates,
+  screenObjectiveCandidates,
+  SeriesDirectionInvalidError,
   seriesDesignComplete,
   seriesDesignGaps,
   seriesDesignPhase,
   SeriesDesignInvalidError,
+  SeriesKnowledgeCandidatesInvalidError,
+  SeriesObjectiveCandidatesInvalidError,
+  seriesObjectiveTypeLabel,
   validateSeriesDesignPatch,
   type SeriesDesignDoc,
+  type SeriesKnowledgeCandidate,
 } from '@/lib/curriculum/series-design';
 
 function doc(overrides: Partial<SeriesDesignDoc> = {}): SeriesDesignDoc {
@@ -44,6 +60,7 @@ function doc(overrides: Partial<SeriesDesignDoc> = {}): SeriesDesignDoc {
     objectives: [
       {
         id: 'so_1',
+        type: 'competency',
         title: '能独立完成入门级 Web 题',
         expectedBehavior: '独立定位并利用题目漏洞拿到 flag',
         minCriteria: ['提交的 flag 正确'],
@@ -271,9 +288,11 @@ describe('series design text round-trip', () => {
     const text = formatObjectivesText(base.objectives, base);
     const parsed = parseObjectivesText(text, base.nodes);
     expect(parsed.errors).toEqual([]);
+    expect(text).toContain('类型：能力');
     expect(parsed.value).toEqual([
       {
         id: 'so_1',
+        type: 'competency',
         title: '能独立完成入门级 Web 题',
         expectedBehavior: '独立定位并利用题目漏洞拿到 flag',
         minCriteria: ['提交的 flag 正确'],
@@ -360,6 +379,58 @@ describe('series design ai answer', () => {
 
   it('回答不是 JSON 时给出可读错误', () => {
     expect(() => parseSeriesDesignAnswer('抱歉，我无法完成')).toThrow(/JSON/);
+  });
+});
+
+describe('series direction ai answer', () => {
+  it('解析方向草稿：只收六个槽位，学时收成数字，未知键丢掉', () => {
+    const direction = parseSeriesDirectionAnswer(
+      JSON.stringify({
+        direction: {
+          audience: '零基础高校网络安全专业学生',
+          learnerLevel: '会 Linux 基本命令',
+          trainingScenario: '线下集中实训',
+          applicationScene: '校内选拔赛',
+          problemStatement: '覆盖 CTF 五个方向',
+          durationHours: '54 学时',
+          title: '模型自造的标题',
+          notes: '模型自造的备注',
+        },
+      }),
+    );
+    expect(direction).toEqual({
+      audience: '零基础高校网络安全专业学生',
+      learnerLevel: '会 Linux 基本命令',
+      trainingScenario: '线下集中实训',
+      applicationScene: '校内选拔赛',
+      problemStatement: '覆盖 CTF 五个方向',
+      durationHours: 54,
+    });
+  });
+
+  it('模型把对象摊平时也认，空字符串算未填写', () => {
+    const direction = parseSeriesDirectionAnswer(
+      JSON.stringify({
+        audience: '校队成员',
+        learnerLevel: '',
+        problemStatement: null,
+        durationHours: null,
+      }),
+    );
+    expect(direction.audience).toBe('校队成员');
+    expect(direction.learnerLevel).toBeNull();
+    expect(direction.problemStatement).toBeNull();
+    expect(direction.durationHours).toBeNull();
+  });
+
+  it('没有授课对象时拒绝：这份草稿没回答"谁学"', () => {
+    expect(() =>
+      parseSeriesDirectionAnswer(JSON.stringify({ direction: { audience: '' } })),
+    ).toThrow(SeriesDirectionInvalidError);
+  });
+
+  it('回答不是 JSON 时给出可读错误', () => {
+    expect(() => parseSeriesDirectionAnswer('好的，我来写。')).toThrow(/JSON/);
   });
 });
 
@@ -479,5 +550,431 @@ describe('设计指纹与派生层过期判断', () => {
     expect(isDerivedFromStaleDesign(undefined, 'fp')).toBe(false);
     expect(isDerivedFromStaleDesign('fp', 'fp')).toBe(false);
     expect(isDerivedFromStaleDesign('old', 'fp')).toBe(true);
+  });
+});
+
+describe('课程目标的类型与候选清单', () => {
+  it('类型两种写法都认：枚举与中文标签', () => {
+    expect(objectiveTypeValue('knowledge')).toBe('knowledge');
+    expect(objectiveTypeValue('技能')).toBe('skill');
+    expect(objectiveTypeValue(' 能力 ')).toBe('competency');
+    expect(objectiveTypeValue('任务')).toBe('task');
+    expect(objectiveTypeValue('')).toBeNull();
+    expect(objectiveTypeValue(undefined)).toBeNull();
+    expect(objectiveTypeValue('玄学')).toBeNull();
+    expect(seriesObjectiveTypeLabel(null)).toBe('未分类');
+    expect(seriesObjectiveTypeLabel('competency')).toBe('能力');
+  });
+
+  it('按类型分组：知识 → 技能 → 能力 → 任务，未分类排最后，组内保持原顺序', () => {
+    const objectives = [
+      { id: 'so_1', type: 'task' as const, title: 'T1' },
+      { id: 'so_2', type: 'knowledge' as const, title: 'K1' },
+      { id: 'so_3', type: null, title: 'U1' },
+      { id: 'so_4', type: 'skill' as const, title: 'S1' },
+      { id: 'so_5', type: 'knowledge' as const, title: 'K2' },
+    ];
+    const groups = groupSeriesObjectives(objectives);
+    expect(groups.map((group) => group.type)).toEqual(['knowledge', 'skill', 'task', null]);
+    expect(groups[0].items.map((objective) => objective.title)).toEqual(['K1', 'K2']);
+    expect(groups[3].items.map((objective) => objective.title)).toEqual(['U1']);
+  });
+
+  it('解析候选：中文类型、字符串达标线都认；残缺与重复被丢掉；结果按类型排序', () => {
+    const valid = [
+      {
+        title: '能交付一份可复现的 Writeup',
+        type: 'task',
+        expectedBehavior: '写完别人能照着复现',
+        minCriteria: ['步骤可复现'],
+        evidence: '作品评分',
+      },
+      {
+        title: '能用 sqlmap 完成联合注入',
+        type: 'skill',
+        expectedBehavior: '独立跑完并取出数据',
+        minCriteria: ['拿到目标表内容'],
+        evidence: '靶场实操',
+      },
+      {
+        title: '能解释注入成因',
+        type: 'knowledge',
+        expectedBehavior: '说清触发条件',
+        minCriteria: '三类成因说对',
+        evidence: '理论题',
+      },
+      {
+        title: '能独立拿下陌生靶场',
+        type: '能力',
+        expectedBehavior: '从信息收集走到拿 flag',
+        minCriteria: ['60 分钟内拿 flag'],
+        evidence: '综合靶场',
+      },
+      {
+        title: '能说出三种编码的区别',
+        type: 'knowledge',
+        expectedBehavior: '举例说明',
+        minCriteria: ['三类编码举例正确'],
+        evidence: '理论题',
+      },
+      {
+        title: '能独立完成目录扫描',
+        type: 'skill',
+        expectedBehavior: '扫出隐藏目录',
+        minCriteria: ['找到至少一个隐藏目录'],
+        evidence: '靶场实操',
+      },
+      {
+        title: '能完成一套入门赛题',
+        type: 'task',
+        expectedBehavior: '限时独立完成',
+        minCriteria: ['拿到至少 3 个 flag'],
+        evidence: '模拟赛',
+      },
+      {
+        title: '能解释同源策略',
+        type: 'knowledge',
+        expectedBehavior: '说清限制范围',
+        minCriteria: ['能判断哪些请求会被拦'],
+        evidence: '理论题',
+      },
+      // 残缺候选：没有类型 / 没写行为 / 与已有候选重复（空白不同）。
+      {
+        title: '没有类型的目标',
+        expectedBehavior: '行为',
+        minCriteria: ['标准'],
+        evidence: '证据',
+      },
+      {
+        title: '没有可观察行为的目标',
+        type: 'skill',
+        minCriteria: ['标准'],
+        evidence: '证据',
+      },
+      {
+        title: '能解释 注入成因',
+        type: 'knowledge',
+        expectedBehavior: '说清触发条件',
+        minCriteria: ['三类成因说对'],
+        evidence: '理论题',
+      },
+    ];
+    const parsed = parseSeriesObjectiveCandidatesAnswer(JSON.stringify({ objectives: valid }));
+    expect(parsed).toHaveLength(8);
+    expect(parsed.map((candidate) => candidate.type)).toEqual([
+      'knowledge',
+      'knowledge',
+      'knowledge',
+      'skill',
+      'skill',
+      'competency',
+      'task',
+      'task',
+    ]);
+    // 字符串达标线被拆开，不是整段丢掉。
+    expect(parsed[0].minCriteria).toEqual(['三类成因说对']);
+    expect(parsed[0].title).toBe('能解释注入成因');
+  });
+
+  it('可用候选太少时整份拒绝：挑不出东西和生成失败对用户是一回事', () => {
+    expect(() =>
+      parseSeriesObjectiveCandidatesAnswer(
+        JSON.stringify({
+          objectives: [
+            {
+              title: '能完成 Web 题',
+              type: 'skill',
+              expectedBehavior: '拿到 flag',
+              minCriteria: ['flag 正确'],
+              evidence: '靶场',
+            },
+          ],
+        }),
+      ),
+    ).toThrow(SeriesObjectiveCandidatesInvalidError);
+  });
+
+  it('已有目标去重按"去空白"比较；追加只加新条目，不动已有目标', () => {
+    const existing = doc().objectives;
+    const candidates = [
+      {
+        title: '能独立完成入门级Web题',
+        type: 'competency' as const,
+        expectedBehavior: '行为',
+        minCriteria: ['标准'],
+        evidence: '证据',
+      },
+      {
+        title: '能完成一套入门赛题',
+        type: 'task' as const,
+        expectedBehavior: '限时独立完成',
+        minCriteria: ['拿到 3 个 flag'],
+        evidence: '模拟赛',
+      },
+    ];
+    expect(screenObjectiveCandidates(candidates, existing)).toHaveLength(1);
+    const next = appendObjectiveCandidates(existing, candidates);
+    expect(next).toHaveLength(2);
+    expect(next[0]).toEqual(existing[0]);
+    expect(next[1]).toMatchObject({
+      id: 'so_2',
+      type: 'task',
+      title: '能完成一套入门赛题',
+      nodeIds: [],
+    });
+  });
+
+  it('文本编辑：旧格式没有「类型」行，读成未分类；写错类型报错而不是静默丢弃', () => {
+    const legacy = parseObjectivesText(
+      '## 能完成 Web 题\n能做什么：拿到 flag\n最低达标：flag 正确\n怎么证明：靶场\n支撑知识点：SQL 注入原理',
+      doc().nodes,
+    );
+    expect(legacy.errors).toEqual([]);
+    expect(legacy.value[0].type).toBeNull();
+
+    const bad = parseObjectivesText('## 能完成 Web 题\n类型：玄学\n能做什么：拿到 flag', []);
+    expect(bad.errors.join()).toMatch(/类型/);
+  });
+
+  it('保存接口接受类型；读不懂的类型 400 而不是静默存成 null', () => {
+    const patch = validateSeriesDesignPatch(
+      {
+        objectives: [
+          {
+            ...doc().objectives[0],
+            type: '知识',
+          },
+        ],
+      },
+      doc(),
+    );
+    expect(patch.objectives?.[0].type).toBe('knowledge');
+
+    expect(() =>
+      validateSeriesDesignPatch({ objectives: [{ ...doc().objectives[0], type: '玄学' }] }, doc()),
+    ).toThrow(/类型/);
+  });
+
+  it('指纹：类型有值才参与，旧设计的指纹不变', () => {
+    const legacy = doc({ objectives: [{ ...doc().objectives[0], type: null }] });
+    const expectedLegacy = [
+      'v1',
+      '零基础高校网络安全专业学生',
+      '会 Linux 基本命令',
+      '线下集中实训',
+      '校内选拔赛',
+      '覆盖 CTF 五个方向，不做内网渗透',
+      '54',
+      [
+        'so_1',
+        '能独立完成入门级 Web 题',
+        '独立定位并利用题目漏洞拿到 flag',
+        '提交的 flag 正确',
+        'Web 方向综合靶场',
+        'sn_1',
+      ].join('\u0002'),
+      ['sn_1', 'SQL 注入原理', 'knowledge', '注入成因与常见手法', 'intro', ''].join('\u0002'),
+    ].join('\u0004');
+    expect(canonicalSeriesDesign(legacy)).toBe(expectedLegacy);
+    // 分类是设计的一部分：改了它，指纹跟着变。
+    expect(canonicalSeriesDesign(doc())).not.toBe(canonicalSeriesDesign(legacy));
+  });
+});
+
+/**
+ * 第 3 步的候选池：生成、筛选、勾选采用。
+ *
+ * 这里钉的是"采用"这一步的正确性，不是模型质量：
+ * - 类型 / 难度两种写法（枚举与中文）都收成枚举；
+ * - 名字去重按折叠空白后的键，先修去掉自引用；
+ * - 采用是追加，先修解析成 id，指向未勾选候选的引用被丢弃（而不是留下坏引用
+ *   让保存接口 400）；
+ * - 采用结果本身必须能通过保存校验（不会成环）。
+ */
+describe('AI 生成候选知识 / 技能点', () => {
+  const ANSWER = JSON.stringify({
+    nodes: [
+      {
+        name: '用 sqlmap 完成联合注入',
+        type: '技能',
+        summary: '跑通 sqlmap 并取出目标表数据',
+        difficulty: '中等',
+        prerequisites: ['SQL 注入原理'],
+      },
+      {
+        name: 'SQL 注入原理',
+        type: '知识点',
+        summary: '注入成因与常见手法',
+        difficulty: '基础',
+        // 自引用：必须被丢掉，否则采用后会变成"自己先修自己"。
+        prerequisites: ['SQL 注入原理'],
+      },
+      {
+        name: 'HTTP 基础',
+        type: 'knowledge',
+        summary: '请求响应、状态码、Cookie',
+        difficulty: '入门',
+        prerequisites: [],
+      },
+      // 与上一条只差空白：按名字键去重。
+      { name: 'HTTP基础', type: '知识', summary: '重复', difficulty: '入门' },
+      {
+        name: '信息收集',
+        type: 'knowledge',
+        summary: '目录扫描、指纹识别',
+        difficulty: '基础',
+        prerequisites: [],
+      },
+      {
+        name: '联合注入',
+        type: 'knowledge',
+        summary: 'UNION 回显的构造',
+        difficulty: '进阶',
+        prerequisites: ['SQL 注入原理'],
+      },
+      {
+        name: '目录扫描',
+        type: 'skill',
+        summary: '用 ffuf 扫出隐藏目录',
+        difficulty: '基础',
+        prerequisites: ['HTTP 基础'],
+      },
+      {
+        name: '抓包分析',
+        type: 'skill',
+        summary: '用 Wireshark 过滤并提取文件',
+        difficulty: '进阶',
+        prerequisites: [],
+      },
+      {
+        name: '编写 Writeup',
+        type: 'skill',
+        summary: '把解题过程写成别人能复现的文档',
+        difficulty: '高级',
+        prerequisites: [],
+      },
+      // 缺名字 / 缺类型：丢弃，但不会让整份回答不可用。
+      { type: 'knowledge', summary: '没有名字' },
+      { name: '没有类型', summary: '认不出类型' },
+    ],
+  });
+
+  const candidate = (
+    overrides: Partial<SeriesKnowledgeCandidate> = {},
+  ): SeriesKnowledgeCandidate => ({
+    name: '新知识点',
+    type: 'knowledge',
+    summary: '摘要',
+    difficulty: 'basic',
+    prerequisites: [],
+    ...overrides,
+  });
+
+  it('解析：中文类型 / 难度收成枚举，去重、去自引用，按类型与难度排序', () => {
+    const parsed = parseSeriesKnowledgeCandidatesAnswer(ANSWER);
+    expect(parsed.map((entry) => entry.name)).toEqual([
+      'HTTP 基础',
+      'SQL 注入原理',
+      '信息收集',
+      '联合注入',
+      '目录扫描',
+      '用 sqlmap 完成联合注入',
+      '抓包分析',
+      '编写 Writeup',
+    ]);
+    expect(parsed[0]).toMatchObject({ type: 'knowledge', difficulty: 'intro' });
+    // 自引用被丢掉。
+    expect(parsed[1].prerequisites).toEqual([]);
+    // 技能点可以引用知识。
+    expect(parsed[5].prerequisites).toEqual(['SQL 注入原理']);
+    expect(parsed[6].difficulty).toBe('intermediate');
+    // 类型认不出的候选被丢弃，不参与排序。
+    expect(parsed.some((entry) => entry.name === '没有类型')).toBe(false);
+  });
+
+  it('解析：可用候选少于下限时整份拒绝', () => {
+    expect(() =>
+      parseSeriesKnowledgeCandidatesAnswer(
+        JSON.stringify({ nodes: [{ name: '只有一个', type: 'knowledge' }] }),
+      ),
+    ).toThrow(SeriesKnowledgeCandidatesInvalidError);
+    expect(() =>
+      parseSeriesKnowledgeCandidatesAnswer(
+        JSON.stringify({ nodes: [{ name: '只有一个', type: 'knowledge' }] }),
+      ),
+    ).toThrow(/至少 8 个/);
+  });
+
+  it('筛选：与已有节点重名的候选不出现（折叠空白比较）', () => {
+    const screened = screenNodeCandidates(parseSeriesKnowledgeCandidatesAnswer(ANSWER), [
+      { ...doc().nodes[0], name: 'SQL 注入原理' },
+    ]);
+    expect(screened.some((entry) => entry.name === 'SQL 注入原理')).toBe(false);
+  });
+
+  it('采用：追加到已有节点之后，先修解析成 id，指向未勾选候选的引用被丢弃', () => {
+    const existing = doc().nodes;
+    const selected: SeriesKnowledgeCandidate[] = [
+      candidate({ name: 'HTTP 基础', difficulty: 'intro' }),
+      candidate({
+        name: '联合注入',
+        difficulty: 'intermediate',
+        prerequisites: ['SQL 注入原理', 'HTTP 基础', '未勾选的点'],
+      }),
+      candidate({
+        name: '用 sqlmap 完成联合注入',
+        type: 'skill',
+        difficulty: 'intermediate',
+        prerequisites: ['联合注入'],
+      }),
+      // 已有节点重名：不追加第二次。
+      candidate({ name: 'SQL 注入原理' }),
+    ];
+    const merged = appendNodeCandidates(existing, selected);
+
+    expect(merged.map((node) => node.id)).toEqual(['sn_1', 'sn_2', 'sn_3', 'sn_4']);
+    expect(merged.map((node) => node.name)).toEqual([
+      'SQL 注入原理',
+      'HTTP 基础',
+      '联合注入',
+      '用 sqlmap 完成联合注入',
+    ]);
+    // 已有节点原样不动。
+    expect(merged[0]).toEqual(existing[0]);
+    // 已有节点 / 前面已选候选 → id；未勾选的点 → 丢掉。
+    expect(merged[2].prerequisites).toEqual(['sn_1', 'sn_2']);
+    expect(merged[3].prerequisites).toEqual(['sn_3']);
+
+    // 采用结果必须能通过保存校验：先修都有落点、不成环。
+    expect(() =>
+      validateSeriesDesignPatch({ nodes: merged }, { ...doc(), nodes: existing }),
+    ).not.toThrow();
+  });
+
+  it('采用前先算清楚：有多少条先修引用会落不了地', () => {
+    const existing = doc().nodes;
+    const selected = [
+      candidate({
+        name: '联合注入',
+        prerequisites: ['SQL 注入原理', 'HTTP 基础', '未勾选的点'],
+      }),
+    ];
+    // 已有 SQL 注入原理；HTTP 基础与「未勾选的点」都没选 → 两条落不了地。
+    expect(countDroppedNodePrerequisites(existing, selected)).toBe(2);
+    expect(
+      countDroppedNodePrerequisites(existing, [candidate({ prerequisites: ['SQL 注入原理'] })]),
+    ).toBe(0);
+  });
+
+  it('分组：知识在前、技能在后，组内由浅入深', () => {
+    const groups = groupSeriesNodes([
+      candidate({ name: '高级技能', type: 'skill', difficulty: 'advanced' }),
+      candidate({ name: '入门知识', type: 'knowledge', difficulty: 'intro' }),
+      candidate({ name: '基础技能', type: 'skill', difficulty: 'basic' }),
+      candidate({ name: '进阶知识', type: 'knowledge', difficulty: 'intermediate' }),
+    ]);
+    expect(groups.map((group) => group.type)).toEqual(['knowledge', 'skill']);
+    expect(groups[0].items.map((item) => item.name)).toEqual(['入门知识', '进阶知识']);
+    expect(groups[1].items.map((item) => item.name)).toEqual(['基础技能', '高级技能']);
   });
 });

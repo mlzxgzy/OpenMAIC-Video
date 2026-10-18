@@ -140,6 +140,20 @@ export interface CurriculumDesignConfirmationRecord {
 export const CURRICULUM_OBJECTIVE_TYPES = ['knowledge', 'skill', 'competency', 'task'] as const;
 export type CurriculumObjectiveType = (typeof CURRICULUM_OBJECTIVE_TYPES)[number];
 
+/**
+ * 目标类型的中文名。定义在这里而不是目层：类型是**两层共用**的词汇——系列层
+ * 用它给课程目标分类、供用户挑选与排序，目层承接时照抄这个分类。两个地方各写
+ * 一份中文名，迟早会出现"系列说这是能力、目里显示成技能"。
+ *
+ * 顺序即显示顺序：知识 → 技能 → 能力 → 任务（由"知道"到"做成"）。
+ */
+export const OUTCOME_TYPE_LABELS: Record<CurriculumObjectiveType, string> = {
+  knowledge: '知识',
+  skill: '技能',
+  competency: '能力',
+  task: '任务',
+};
+
 export const CURRICULUM_BLOOM_LEVELS = [
   'remember',
   'understand',

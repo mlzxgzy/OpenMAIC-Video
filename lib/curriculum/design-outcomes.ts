@@ -30,13 +30,11 @@ import {
 
 // ── 类型 ────────────────────────────────────────────────────────────────────
 
-/** 目标类型的中文名，提示词与界面共用一份。 */
-export const OUTCOME_TYPE_LABELS: Record<CurriculumObjectiveType, string> = {
-  knowledge: '知识',
-  skill: '技能',
-  competency: '能力',
-  task: '任务',
-};
+/**
+ * 目标类型的中文名。定义挪到 `design-types` 了（系列层也要用同一份），这里
+ * 保留同名 re-export，目层的调用方不用改 import 路径。
+ */
+export { OUTCOME_TYPE_LABELS } from './design-types';
 
 /** 证据类型的中文名。 */
 export const EVIDENCE_TYPE_LABELS: Record<CurriculumEvidenceType, string> = {

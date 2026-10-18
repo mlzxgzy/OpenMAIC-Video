@@ -19,6 +19,7 @@ import { curriculumJsonError } from '@/lib/server/curriculum/http';
 import {
   getSeriesDesign,
   readOutlineDesignDrift,
+  readSeriesDesignCoverage,
   SeriesDesignNotFoundError,
   SeriesDesignValidationError,
   updateSeriesDesign,
@@ -36,21 +37,13 @@ export async function GET(req: NextRequest, { params }: Params) {
   return runDesignRoute(req, params, async (ctx) => {
     const snapshot = await getSeriesDesign(ctx.queryable, ctx.ownerId, ctx.taskId);
     if (!snapshot) return seriesNotFound(ctx.headers);
-    return ownerJson(
-      {
-        ...snapshot,
-        // 设计页要回答"刚存完这一版，大纲跟上没有"，所以读设计时顺便给一份
-        // 派生层的过期读数；不在这里算，页面就得再发一次请求。
-        outlineDrift: await readOutlineDesignDrift(
-          ctx.queryable,
-          ctx.ownerId,
-          ctx.taskId,
-          snapshot,
-        ),
-      },
-      200,
-      ctx.headers,
-    );
+    // 两份派生读数：大纲有没有跟上这版设计；设计有没有落到目的第 2 / 3 步。
+    // 落点是"设计写完、大纲建好之后"的校验，不是设计的前提。
+    const [outlineDrift, coverage] = await Promise.all([
+      readOutlineDesignDrift(ctx.queryable, ctx.ownerId, ctx.taskId, snapshot),
+      readSeriesDesignCoverage(ctx.queryable, ctx.ownerId, ctx.taskId, snapshot.design),
+    ]);
+    return ownerJson({ ...snapshot, outlineDrift, coverage }, 200, ctx.headers);
   });
 }
 
@@ -61,19 +54,11 @@ export async function PATCH(req: NextRequest, { params }: Params) {
       const snapshot = await ctx.write((tx) =>
         updateSeriesDesign(tx, ctx.ownerId, ctx.taskId, body),
       );
-      return ownerJson(
-        {
-          ...snapshot,
-          outlineDrift: await readOutlineDesignDrift(
-            ctx.queryable,
-            ctx.ownerId,
-            ctx.taskId,
-            snapshot,
-          ),
-        },
-        200,
-        ctx.headers,
-      );
+      const [outlineDrift, coverage] = await Promise.all([
+        readOutlineDesignDrift(ctx.queryable, ctx.ownerId, ctx.taskId, snapshot),
+        readSeriesDesignCoverage(ctx.queryable, ctx.ownerId, ctx.taskId, snapshot.design),
+      ]);
+      return ownerJson({ ...snapshot, outlineDrift, coverage }, 200, ctx.headers);
     } catch (error) {
       if (error instanceof SeriesDesignNotFoundError) return seriesNotFound(ctx.headers);
       if (error instanceof SeriesDesignValidationError) {

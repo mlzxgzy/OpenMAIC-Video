@@ -28,8 +28,10 @@ export interface SeriesDesignDraftInput {
   seriesDescription: string | null;
   /** 已填的方向（可能为空）。 */
   directionText: string;
-  /** 大纲的文本形态（章 / 节 / 目 + 每层备注）。 */
+  /** 大纲的文本形态（章 / 节 / 目 + 每层备注）。可能为空：新系列是设计先行的。 */
   outlineSummary: string;
+  /** 有没有大纲。没有时提示词要走「只能依据名称与方向起草」那条分支。 */
+  hasOutline: boolean;
   /** 已有设计：模型保留并补全，而不是推倒重来。 */
   existing: SeriesDesignDoc;
   model: StepLanguageModel;
@@ -45,7 +47,10 @@ export async function draftSeriesDesign(
       input.seriesDescription ? `说明：${input.seriesDescription}` : '说明：（未填写）',
       input.directionText,
     ].join('\n'),
-    outlineSummary: input.outlineSummary,
+    // 没有大纲时不要留空：空块会让模型以为"大纲就是没有"，而不是"还没建"。
+    outlineSummary: input.hasOutline
+      ? input.outlineSummary
+      : '（这个系列还没有大纲。只能依据名称、说明与方向起草；知识点暂时没有落点可核对，落点等大纲建好后再校验。）',
     existingDesign:
       input.existing.objectives.length === 0 && input.existing.nodes.length === 0
         ? '（还没有任何设计，这是第一版）'
@@ -56,7 +61,8 @@ export async function draftSeriesDesign(
 
   ctx.log.info(
     `Series design draft: ${input.seriesName} ` +
-      `[outline=${input.outlineSummary.length} chars, existing=${input.existing.objectives.length} 目标 / ${input.existing.nodes.length} 节点]`,
+      `[outline=${input.hasOutline ? `${input.outlineSummary.length} chars` : 'none'}, ` +
+      `existing=${input.existing.objectives.length} 目标 / ${input.existing.nodes.length} 节点]`,
   );
 
   const result = await callLLM(
