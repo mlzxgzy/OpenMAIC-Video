@@ -321,6 +321,14 @@ const SHIPPED: readonly (readonly [
     true,
     '159f86a5350418edeaac96b310acfa1cbec183f7cfc5964b16a2cb55e7da321b',
   ],
+  // 派生层记住"是哪一版设计生成的"：设计变了才能指出哪里没跟上。
+  [
+    'curriculum',
+    18,
+    'series_design_drift',
+    true,
+    '9f7566933a101cf7a69fe65655ba7a35e0e2136bb30820c0108f5a4316bd6855',
+  ],
 ];
 
 /**

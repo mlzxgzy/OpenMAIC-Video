@@ -63,7 +63,11 @@ import {
   confirmCurriculumDesignStep,
   createCurriculumTask,
 } from '@/lib/server/curriculum/design-store';
-import { createCurriculumSeries, createSeriesOutlineNode } from '@/lib/server/curriculum/store';
+import {
+  createCurriculumSeries,
+  createSeriesOutlineNode,
+  updateSeriesOutlineNode,
+} from '@/lib/server/curriculum/store';
 
 class PGlitePool {
   constructor(readonly db: PGlite) {}
@@ -409,6 +413,114 @@ describe('series design routes (PGlite)', () => {
     await confirmCurriculumDesignStep(pool, OWNER, lateTask.id, 'task', 'user');
     const advanced = await advanceCurriculumTaskPhase(pool, OWNER, lateTask.id);
     expect(advanced.designPhase).toBe('outcomes');
+  });
+
+  /**
+   * 设计变了之后的提示：推导出来的大纲与目必须记得"当时是哪一版设计"。
+   *
+   * 这组用例盯的是**提示的依据**，不是文案：
+   * - 设计一改，按旧版生成的章 / 节 / 目都算过期，数量分类给出；
+   * - 内容没变的重存不算（指纹按内容算，不按保存时间）；
+   * - 手写 / 导入的行没有指纹，**永远不**被标成旧版——对来源不明的内容喊过期，
+   *   用户没法用"重新生成"消掉它；
+   * - 人改过标题或交底，那一行就不再算旧版（它已经被改对了）。
+   */
+  describe('系列设计变更后的过期提示（PGlite）', () => {
+    async function saveDesign(body: unknown) {
+      const response = await patchDesign(
+        request(`/api/curriculum/series/${seriesId}/design`, 'PATCH', body),
+        seriesParams(seriesId),
+      );
+      expect(response.status).toBe(200);
+      return read<{
+        designFingerprint: string;
+        series: { designUpdatedAt: string | null };
+        outlineDrift: {
+          designUpdatedAt: string | null;
+          fingerprint: string;
+          stale: { chapters: number; sections: number; items: number };
+          total: { chapters: number; sections: number; items: number };
+        };
+      }>(response);
+    }
+
+    async function seedDerivedOutline(fingerprint: string) {
+      const chapter = await createSeriesOutlineNode(pool, OWNER, seriesId, {
+        nodeType: 'chapter',
+        title: 'Web 安全',
+        note: '覆盖信息收集、注入与文件漏洞',
+        designFingerprint: fingerprint,
+      });
+      const section = await createSeriesOutlineNode(pool, OWNER, seriesId, {
+        nodeType: 'section',
+        title: '信息收集',
+        parentId: chapter.id,
+        designFingerprint: fingerprint,
+      });
+      const item = await createCurriculumTask(pool, OWNER, {
+        title: '信息收集实操',
+        sectionId: section.id,
+        designFingerprint: fingerprint,
+      });
+      return { chapter, section, item };
+    }
+
+    it('设计一改，按旧版生成的章 / 节 / 目都报过期', async () => {
+      const first = await saveDesign(DESIGN_BODY);
+      await seedDerivedOutline(first.designFingerprint);
+
+      // 手写一行：没有指纹，不参与过期判断。
+      await createSeriesOutlineNode(pool, OWNER, seriesId, {
+        nodeType: 'chapter',
+        title: '手工补的章',
+      });
+
+      const changed = await saveDesign({
+        direction: { ...DESIGN_BODY.direction, audience: '改过的授课对象' },
+      });
+      expect(changed.designFingerprint).not.toBe(first.designFingerprint);
+      expect(changed.series.designUpdatedAt).toBeTruthy();
+      expect(changed.outlineDrift.designUpdatedAt).toBe(changed.series.designUpdatedAt);
+      expect(changed.outlineDrift.stale).toEqual({ chapters: 1, sections: 1, items: 1 });
+      expect(changed.outlineDrift.total).toEqual({ chapters: 2, sections: 1, items: 1 });
+
+      // 读接口与保存接口同一口径（驾驶舱读 /outline，设计页读 /design）。
+      const got = await getDesign(
+        request(`/api/curriculum/series/${seriesId}/design`, 'GET'),
+        seriesParams(seriesId),
+      );
+      const gotBody = await read<{
+        outlineDrift: { stale: { chapters: number; sections: number; items: number } };
+      }>(got);
+      expect(gotBody.outlineDrift.stale).toEqual({ chapters: 1, sections: 1, items: 1 });
+    });
+
+    it('内容没变的重存不会把大纲标成过期：指纹按内容算，不按保存时间', async () => {
+      const first = await saveDesign(DESIGN_BODY);
+      await seedDerivedOutline(first.designFingerprint);
+      const again = await saveDesign(DESIGN_BODY);
+      expect(again.designFingerprint).toBe(first.designFingerprint);
+      expect(again.outlineDrift.stale).toEqual({ chapters: 0, sections: 0, items: 0 });
+    });
+
+    it('人改过标题或交底后，那一行就不再算旧版', async () => {
+      const first = await saveDesign(DESIGN_BODY);
+      const { chapter } = await seedDerivedOutline(first.designFingerprint);
+      await saveDesign({ direction: { ...DESIGN_BODY.direction, audience: '又改了一版对象' } });
+
+      const edited = await updateSeriesOutlineNode(pool, OWNER, seriesId, chapter.id, {
+        note: '人工按新设计改写的交底',
+      });
+      expect(edited.designFingerprint).toBeNull();
+      const got = await getDesign(
+        request(`/api/curriculum/series/${seriesId}/design`, 'GET'),
+        seriesParams(seriesId),
+      );
+      const body = await read<{
+        outlineDrift: { stale: { chapters: number; sections: number; items: number } };
+      }>(got);
+      expect(body.outlineDrift.stale).toEqual({ chapters: 0, sections: 1, items: 1 });
+    });
   });
 });
 

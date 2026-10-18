@@ -84,6 +84,8 @@ export interface CurriculumTaskRecord {
   problemStatement: string | null;
   status: CurriculumTaskStatus;
   designPhase: CurriculumDesignPhase;
+  /** 生成这一目时的系列设计指纹；手写 / 导入为 null（不参与过期判断）。 */
+  designFingerprint: string | null;
   createdAt: string;
   updatedAt: string;
 }

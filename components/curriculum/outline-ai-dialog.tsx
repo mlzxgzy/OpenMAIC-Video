@@ -27,6 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Textarea } from '@/components/ui/textarea';
+import type { OutlineDesignDrift } from '@/lib/curriculum/series-design';
 import {
   SERIES_OUTLINE_AI_LEVEL_NOUN,
   type SeriesOutlineAiDesignSummary,
@@ -176,6 +177,7 @@ export function OutlineAiDialog({
   seriesId,
   series,
   design,
+  drift,
   onCommitted,
 }: {
   open: boolean;
@@ -185,6 +187,8 @@ export function OutlineAiDialog({
   series: CurriculumSeriesRecord | null;
   /** 这次生成依据的系列设计；驾驶舱已经读过，不在这里再发一次请求。 */
   design: SeriesOutlineAiDesignSummary | null;
+  /** 已有大纲里有多少是按旧版设计生成的；只补空位时它们不会被更新。 */
+  drift: OutlineDesignDrift | null;
   onCommitted: (counts: CommittedCounts) => void;
 }) {
   const [mode, setMode] = useState<SeriesOutlineAiMode>('fill');
@@ -295,6 +299,19 @@ export function OutlineAiDialog({
                 </Link>
               </div>
             )
+          ) : null}
+
+          {drift && drift.stale.chapters + drift.stale.sections > 0 ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-xs">
+              <p className="flex items-center gap-1.5 font-medium">
+                <AlertTriangle className="size-3.5" />
+                已有的章 / 节里有 {drift.stale.chapters} 章 / {drift.stale.sections}{' '}
+                节是按旧版设计生成的
+              </p>
+              <p className="text-muted-foreground mt-1">
+                「只补空位」不会更新它们；要让它们跟上当前设计，选「覆盖重建」或在看板上直接改交底。
+              </p>
+            </div>
           ) : null}
 
           <div className="flex flex-col gap-1.5">

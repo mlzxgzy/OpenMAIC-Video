@@ -37,6 +37,7 @@ import {
   parseNodesText,
   parseObjectivesText,
   seriesDesignComplete,
+  type OutlineDesignDrift,
   type SeriesDesignDoc,
   type SeriesDesignSnapshot,
 } from '@/lib/curriculum/series-design';
@@ -49,6 +50,14 @@ const PHASE_INDEX: Record<SeriesDesignSnapshot['phase'], number> = {
   knowledge: 2,
 };
 
+/**
+ * 设计接口的读 / 写响应：设计快照 + 大纲跟没跟上的读数。
+ *
+ * 放在一起返回，是因为"刚存完这一版，之前生成的大纲要不要重做"是同一个问题的
+ * 两半；分成两次请求会出现"保存成功、提示却来自上一版"的窗口。
+ */
+type SeriesDesignPayload = SeriesDesignSnapshot & { outlineDrift: OutlineDesignDrift };
+
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { credentials: 'same-origin', cache: 'no-store', ...init });
   const payload = (await response.json().catch(() => null)) as {
@@ -59,7 +68,7 @@ async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function SeriesDesignWorkspace({ seriesId }: { seriesId: string }) {
-  const [snapshot, setSnapshot] = useState<SeriesDesignSnapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<SeriesDesignPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
@@ -71,7 +80,7 @@ export function SeriesDesignWorkspace({ seriesId }: { seriesId: string }) {
 
   const reload = useCallback(async () => {
     try {
-      const next = await requestJson<SeriesDesignSnapshot>(
+      const next = await requestJson<SeriesDesignPayload>(
         `/api/curriculum/series/${seriesId}/design`,
       );
       setSnapshot(next);
@@ -90,7 +99,7 @@ export function SeriesDesignWorkspace({ seriesId }: { seriesId: string }) {
       setBusy(label);
       setError(null);
       try {
-        const next = await requestJson<SeriesDesignSnapshot>(
+        const next = await requestJson<SeriesDesignPayload>(
           `/api/curriculum/series/${seriesId}/design`,
           {
             method: 'PATCH',
@@ -215,6 +224,32 @@ export function SeriesDesignWorkspace({ seriesId }: { seriesId: string }) {
         <div className="border-destructive/40 bg-destructive/10 text-destructive rounded-lg border p-3 text-sm">
           {error}
         </div>
+      ) : null}
+
+      {snapshot.outlineDrift.stale.chapters +
+        snapshot.outlineDrift.stale.sections +
+        snapshot.outlineDrift.stale.items >
+      0 ? (
+        <Card
+          className="border-amber-500/40 bg-amber-500/5"
+          data-testid="design-outline-drift"
+          aria-label="大纲还没跟上这版设计"
+        >
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 py-4 text-sm">
+            <div className="min-w-0">
+              <p className="font-medium">大纲里还有内容是按旧版设计生成的</p>
+              <p className="text-muted-foreground mt-1 text-xs">
+                已有 {snapshot.outlineDrift.stale.chapters} 章 /{' '}
+                {snapshot.outlineDrift.stale.sections} 节 / {snapshot.outlineDrift.stale.items}{' '}
+                目没跟上。已生成的内容不会自动跟着改：去驾驶舱重新生成对应层，或直接改章 / 节的
+                交底（改过就不再算旧版）。
+              </p>
+            </div>
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/curriculum/series/${seriesId}`}>去驾驶舱看大纲</Link>
+            </Button>
+          </CardContent>
+        </Card>
       ) : null}
 
       <DirectionCard

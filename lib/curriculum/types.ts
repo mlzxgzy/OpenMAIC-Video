@@ -70,6 +70,8 @@ export interface CurriculumSeriesOutlineNodeRecord {
   title: string;
   note: string | null;
   orderIndex: number;
+  /** 生成这一章 / 节时的系列设计指纹；手写或导入为 null（不参与过期判断）。 */
+  designFingerprint: string | null;
   createdAt: string;
   updatedAt: string;
 }

@@ -162,6 +162,11 @@ export interface SeriesOutlineAiContext {
   series: SeriesOutlineAiSeries;
   /** 系列设计；null 表示读不到（读接口异常）。系列存在时它一定有值，可能为空文档。 */
   design: SeriesOutlineAiDesign | null;
+  /**
+   * 生成这一层时系列设计的内容指纹。写完的章 / 节 / 目把它带在身上，
+   * 之后设计再改，界面就能指出"哪些还是旧版设计的产物"。
+   */
+  designFingerprint: string | null;
   chapters: SeriesOutlineAiChapter[];
   sections: SeriesOutlineAiSection[];
   items: SeriesOutlineAiItem[];

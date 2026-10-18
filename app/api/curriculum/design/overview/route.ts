@@ -62,6 +62,9 @@ export async function GET(req: NextRequest) {
           sectionId: task.sectionId,
           kind: task.kind,
           orderIndex: task.orderIndex,
+          // 看板据此给每一目标「旧版设计」。与当前设计指纹的比较在界面做，
+          // 因为当前指纹已经随 /outline 一起读回来了。
+          designFingerprint: task.designFingerprint,
           unitCount: snapshot.units.length,
           itemCount: snapshot.units.filter((unit) => unit.unitType === 'item').length,
           producedCount: snapshot.units.filter((unit) => unit.stageId !== null).length,

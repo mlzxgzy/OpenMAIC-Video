@@ -13,9 +13,11 @@ import { describe, expect, it } from 'vitest';
 
 import { directionValuesOf, effectiveDirectionValues } from '@/lib/curriculum/design-direction';
 import {
+  canonicalSeriesDesign,
   formatNodesText,
   formatObjectivesText,
   inheritableDirection,
+  isDerivedFromStaleDesign,
   mergeSeriesDesign,
   normalizeSeriesDesignDoc,
   parseNodesText,
@@ -429,5 +431,53 @@ describe('series direction inheritance', () => {
         durationHours: 54,
       }),
     ).toEqual({ audience: '学生', durationHours: 54 });
+  });
+});
+
+describe('设计指纹与派生层过期判断', () => {
+  it('同一份设计写两遍得到同一个指纹：集合顺序不影响', () => {
+    const a = doc({
+      nodes: [
+        {
+          id: 'sn_1',
+          name: 'HTTP',
+          type: 'knowledge',
+          summary: '',
+          difficulty: 'intro',
+          prerequisites: ['sn_2', 'sn_3'],
+        },
+      ],
+    });
+    const b = doc({
+      nodes: [
+        {
+          id: 'sn_1',
+          name: 'HTTP',
+          type: 'knowledge',
+          summary: '',
+          difficulty: 'intro',
+          prerequisites: ['sn_3', 'sn_2'],
+        },
+      ],
+    });
+    expect(canonicalSeriesDesign(a)).toBe(canonicalSeriesDesign(b));
+  });
+
+  it('内容变了指纹就变：受众、目标、节点任一字段', () => {
+    const base = canonicalSeriesDesign(doc());
+    expect(
+      canonicalSeriesDesign(
+        doc({ direction: { ...doc().direction, audience: '换了一个授课对象' } }),
+      ),
+    ).not.toBe(base);
+    expect(canonicalSeriesDesign(doc({ objectives: [] }))).not.toBe(base);
+    expect(canonicalSeriesDesign(doc({ nodes: [] }))).not.toBe(base);
+  });
+
+  it('没有指纹的行不算过期：手写 / 导入的内容不该被喊旧版', () => {
+    expect(isDerivedFromStaleDesign(null, 'fp')).toBe(false);
+    expect(isDerivedFromStaleDesign(undefined, 'fp')).toBe(false);
+    expect(isDerivedFromStaleDesign('fp', 'fp')).toBe(false);
+    expect(isDerivedFromStaleDesign('old', 'fp')).toBe(true);
   });
 });

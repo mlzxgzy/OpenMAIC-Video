@@ -15,6 +15,7 @@ import { ownerJson } from '@/lib/server/agent-runtime/route-response';
 import { designInvalid, runDesignRoute } from '@/lib/server/curriculum/design-http';
 import { curriculumJsonError } from '@/lib/server/curriculum/http';
 import { parseOutlineNodeInput } from '@/lib/server/curriculum/design-validation';
+import { getSeriesDesign, readOutlineDesignDrift } from '@/lib/server/curriculum/series-design';
 import {
   createSeriesOutlineNode,
   getCurriculumSeries,
@@ -32,7 +33,13 @@ export async function GET(req: NextRequest, { params }: Params) {
       return curriculumJsonError(404, 'CURRICULUM_SERIES_NOT_FOUND', '课程系列不存在', ctx.headers);
     }
     const nodes = await listSeriesOutline(ctx.queryable, ctx.ownerId, ctx.taskId);
-    return ownerJson({ series, nodes }, 200, ctx.headers);
+    // 「设计变了」的读数与目录同一趟回给界面：驾驶舱拿它给页头横幅，看板拿它
+    // 给每块砖标过期，两处共用一个指纹，不会出现页头说过期、砖块却没标的错位。
+    const design = await getSeriesDesign(ctx.queryable, ctx.ownerId, ctx.taskId);
+    const designDrift = design
+      ? await readOutlineDesignDrift(ctx.queryable, ctx.ownerId, ctx.taskId, design)
+      : null;
+    return ownerJson({ series, nodes, designDrift }, 200, ctx.headers);
   });
 }
 

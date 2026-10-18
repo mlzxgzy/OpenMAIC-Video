@@ -48,7 +48,11 @@ import { SeriesBoardView } from '@/components/curriculum/series-board';
 import { SeriesSettingsDialog } from '@/components/curriculum/series-settings-dialog';
 import { StepBadge, StepRail } from '@/components/curriculum/step-rail';
 import { chooseNextItem, pendingItems, type NextItemRow } from '@/lib/curriculum/next-item';
-import { seriesDesignComplete, type SeriesDesignSnapshot } from '@/lib/curriculum/series-design';
+import {
+  seriesDesignComplete,
+  type OutlineDesignDrift,
+  type SeriesDesignSnapshot,
+} from '@/lib/curriculum/series-design';
 import type {
   SeriesOutlineAiDesignSummary,
   SeriesOutlineAiLevel,
@@ -76,11 +80,15 @@ interface OverviewRow {
   acceptedCount: number;
   exportable: boolean;
   updatedAt: string;
+  /** 生成这一目时的系列设计指纹；null = 手写 / 导入，不参与过期判断。 */
+  designFingerprint: string | null;
 }
 
 interface OutlinePayload {
   series: CurriculumSeriesRecord;
   nodes: CurriculumSeriesOutlineNodeRecord[];
+  /** 「按旧版设计生成」的读数；见 `series-design.ts` 的 `OutlineDesignDrift`。 */
+  designDrift: OutlineDesignDrift | null;
 }
 
 async function requestJson<T>(url: string): Promise<T> {
@@ -104,6 +112,7 @@ function boardRowOf(row: OverviewRow): BoardRow {
     started: row.phase !== 'task' || row.objectiveCount > 0 || row.unitCount > 0,
     sectionId: row.sectionId,
     orderIndex: row.orderIndex,
+    designFingerprint: row.designFingerprint,
   };
 }
 
@@ -170,7 +179,19 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
   }, [load]);
 
   const nodes = useMemo(() => outline?.nodes ?? [], [outline]);
-  const board = useMemo(() => buildSeriesBoard(nodes, rows.map(boardRowOf)), [nodes, rows]);
+  const designDrift = outline?.designDrift ?? null;
+  const board = useMemo(
+    () => buildSeriesBoard(nodes, rows.map(boardRowOf), designDrift?.fingerprint ?? null),
+    [nodes, rows, designDrift],
+  );
+  const staleTotal = designDrift
+    ? designDrift.stale.chapters + designDrift.stale.sections + designDrift.stale.items
+    : 0;
+  const designUpdatedLabel = useMemo(() => {
+    const value = designDrift?.designUpdatedAt;
+    if (!value) return null;
+    return new Date(value).toLocaleString('zh-CN', { dateStyle: 'medium', timeStyle: 'short' });
+  }, [designDrift]);
   const designGaps = useMemo(
     () => (design ? [...design.gaps.direction, ...design.gaps.objectives] : []),
     [design],
@@ -328,6 +349,35 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
             </div>
             <Button asChild size="sm" variant="outline">
               <Link href={`/curriculum/series/${seriesId}/design`}>去完成系列设计</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      ) : null}
+
+      {designDrift && staleTotal > 0 ? (
+        <Card
+          className="border-amber-500/40 bg-amber-500/5"
+          aria-label="系列设计改过，大纲还没跟上"
+          data-testid="design-drift-banner"
+        >
+          <CardContent className="flex flex-wrap items-start justify-between gap-3 py-4">
+            <div className="min-w-0">
+              <p className="flex items-center gap-1.5 text-sm font-medium">
+                <AlertTriangle className="size-4 text-amber-600" />
+                系列设计改过了，这份大纲还没跟上
+              </p>
+              <p className="text-muted-foreground mt-1 text-xs">
+                {designUpdatedLabel ? `设计在 ${designUpdatedLabel} 更新；` : ''}已有{' '}
+                {designDrift.stale.chapters} 章 / {designDrift.stale.sections} 节 /{' '}
+                {designDrift.stale.items} 目仍按旧版设计生成。
+              </p>
+              <p className="text-muted-foreground mt-1 text-xs">
+                重新生成对应层会以当前设计为准；系列里已有目时，章 / 节只能补新、不能覆盖重建。
+                也可以直接改章 / 节的交底——人改过的那一行就不再算旧版。
+              </p>
+            </div>
+            <Button asChild size="sm" variant="outline">
+              <Link href={`/curriculum/series/${seriesId}/design`}>回系列设计看看</Link>
             </Button>
           </CardContent>
         </Card>
@@ -608,6 +658,7 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
             seriesId={seriesId}
             series={outline.series}
             design={designSummary}
+            drift={designDrift}
             onCommitted={() => void load()}
           />
         </>

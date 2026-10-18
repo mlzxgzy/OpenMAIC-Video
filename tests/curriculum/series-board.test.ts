@@ -17,6 +17,7 @@ function node(
   parentId: string | null,
   orderIndex: number,
   title = id,
+  designFingerprint: string | null = null,
 ): CurriculumSeriesOutlineNodeRecord {
   return {
     id,
@@ -27,6 +28,7 @@ function node(
     title,
     note: null,
     orderIndex,
+    designFingerprint,
     createdAt: NOW,
     updatedAt: NOW,
   };
@@ -43,6 +45,7 @@ function row(overrides: Partial<BoardRow> & { taskId: string }): BoardRow {
     started: false,
     sectionId: null,
     orderIndex: 1,
+    designFingerprint: overrides.designFingerprint ?? null,
     ...overrides,
   };
 }
@@ -125,5 +128,42 @@ describe('buildSeriesBoard', () => {
       [row({ taskId: 'b', code: '2-1-1' }), row({ taskId: 'a', code: '1-1-1' })],
     );
     expect(board.unassigned.items.map((item) => item.taskId)).toEqual(['a', 'b']);
+  });
+});
+
+describe('按旧版设计生成的标记', () => {
+  it('生成时指纹与当前设计不同 → 标为旧版；相同或没有指纹 → 不标', () => {
+    const nodes = [
+      node('c1', 'chapter', null, 1, 'Web 安全', 'design-v1'),
+      node('s11', 'section', 'c1', 1, '信息收集', 'design-v1'),
+      node('c2', 'chapter', null, 2, '手写章', null),
+    ];
+    const rows = [
+      row({ taskId: 'old', sectionId: 's11', designFingerprint: 'design-v1' }),
+      row({ taskId: 'fresh', sectionId: 's11', designFingerprint: 'design-v2' }),
+      row({ taskId: 'manual', sectionId: 's11', designFingerprint: null }),
+    ];
+    const board = buildSeriesBoard(nodes, rows, 'design-v2');
+    const [web, manualChapter] = board.chapters;
+    expect(web!.stale).toBe(true);
+    expect(web!.sections[0]!.stale).toBe(true);
+    // 同一节内的顺序按编号 / 标题排，所以断言里不假设插入顺序。
+    const staleById = new Map(
+      web!.sections[0]!.items.map((item) => [item.taskId, item.stale] as const),
+    );
+    expect(staleById.get('old')).toBe(true);
+    expect(staleById.get('fresh')).toBe(false);
+    expect(staleById.get('manual')).toBe(false);
+    expect(manualChapter!.stale).toBe(false);
+  });
+
+  it('没有当前指纹（设计还没读到时）不标旧版：宁可少提示也不乱指', () => {
+    const board = buildSeriesBoard(
+      [node('c1', 'chapter', null, 1, 'Web 安全', 'design-v1')],
+      [row({ taskId: 't1', designFingerprint: 'design-v1' })],
+      null,
+    );
+    expect(board.chapters[0]!.stale).toBe(false);
+    expect(board.unassigned.items[0]!.stale).toBe(false);
   });
 });

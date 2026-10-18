@@ -124,6 +124,7 @@ function makeSnapshot(): CurriculumDesignSnapshot {
       kind: null,
       orderIndex: 0,
       title: 'CTF',
+      designFingerprint: null,
       audience: 'students',
       learnerLevel: 'beginner',
       trainingScenario: null,

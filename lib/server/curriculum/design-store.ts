@@ -151,6 +151,11 @@ export interface CurriculumTaskInput {
   applicationScene?: string | null;
   problemStatement?: string | null;
   status?: CurriculumTaskStatus;
+  /**
+   * 生成这一目时的系列设计指纹（AI 路径传入）。手写 / 导入留空 —— 空表示
+   * "不是从设计派生的"，不参与"设计变了"的过期判断。
+   */
+  designFingerprint?: string | null;
 }
 
 export type CurriculumTaskPatch = Partial<CurriculumTaskInput>;
@@ -332,6 +337,8 @@ interface TaskRow extends Row {
   problem_statement: string | null;
   status: string;
   design_phase: string;
+  /** 生成这一目时的系列设计指纹；手写 / 导入为 null。 */
+  design_fingerprint: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -543,7 +550,7 @@ interface ConfirmationRow extends Row {
 
 const TASK_COLUMNS = `id, series_id, section_id, code, kind, order_index, title, audience,
        learner_level, training_scenario, duration_hours, application_scene, problem_statement,
-       status, design_phase, created_at, updated_at`;
+       status, design_phase, design_fingerprint, created_at, updated_at`;
 
 const OBJECTIVE_COLUMNS = `id, task_id, parent_id, code, title, description, objective_type,
        bloom_level, level, expected_behavior, min_criteria, proficient_criteria,
@@ -689,6 +696,7 @@ function mapTask(row: TaskRow): CurriculumTaskRecord {
     problemStatement: row.problem_statement,
     status: row.status as CurriculumTaskStatus,
     designPhase: row.design_phase as CurriculumDesignPhase,
+    designFingerprint: row.design_fingerprint,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -1387,8 +1395,8 @@ export async function createCurriculumTask(
       `INSERT INTO curriculum_task
          (id, owner_id, series_id, section_id, code, kind, order_index, title, audience,
           learner_level, training_scenario, duration_hours, application_scene,
-          problem_statement, status, design_phase)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'task')
+          problem_statement, status, design_phase, design_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 'task', $16)
        RETURNING ${TASK_COLUMNS}`,
       [
         createId('task'),
@@ -1406,6 +1414,7 @@ export async function createCurriculumTask(
         optionalText(input.applicationScene) ?? inherited?.applicationScene ?? null,
         optionalText(input.problemStatement),
         input.status ?? 'draft',
+        optionalText(input.designFingerprint ?? null),
       ],
     );
     const row = result.rows[0];

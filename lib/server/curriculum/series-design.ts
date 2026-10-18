@@ -11,14 +11,18 @@
  * 反过来要读系列方向做继承，互相 import 会成环。这里自带两个错误类型，路由把
  * 它们映射成 404 / 400。
  */
+import { createHash } from 'node:crypto';
+
 import type { Queryable } from '@openmaic/storage/document/pg';
 
 import {
+  canonicalSeriesDesign,
   mergeSeriesDesign,
   normalizeSeriesDesignDoc,
   seriesDesignGaps,
   seriesDesignPhase,
   validateSeriesDesignPatch,
+  type OutlineDesignDrift,
   type SeriesDesignDoc,
   type SeriesDesignSnapshot,
 } from '@/lib/curriculum/series-design';
@@ -52,11 +56,12 @@ interface SeriesDesignRow extends Record<string, unknown> {
   course_objectives: unknown;
   knowledge_system: unknown;
   updated_at: Date | string;
+  design_updated_at: Date | string | null;
 }
 
 const DESIGN_COLUMNS = `id, name, description, audience, default_hours, learner_level,
        training_scenario, application_scene, problem_statement, course_objectives,
-       knowledge_system, updated_at`;
+       knowledge_system, updated_at, design_updated_at`;
 
 function numeric(value: number | string | null): number | null {
   if (value === null) return null;
@@ -91,8 +96,10 @@ function toSnapshot(row: SeriesDesignRow): SeriesDesignSnapshot {
       applicationScene: row.application_scene,
       problemStatement: row.problem_statement,
       updatedAt: iso(row.updated_at),
+      designUpdatedAt: row.design_updated_at === null ? null : iso(row.design_updated_at),
     },
     design,
+    designFingerprint: fingerprintSeriesDesign(design),
     phase: seriesDesignPhase(design),
     gaps: seriesDesignGaps(design),
     objectiveTitles: Object.fromEntries(
@@ -160,6 +167,7 @@ export async function updateSeriesDesign(
             problem_statement = $8,
             course_objectives = $9::jsonb,
             knowledge_system = $10::jsonb,
+            design_updated_at = now(),
             updated_at = now()
       WHERE owner_id = $1 AND id = $2
       RETURNING ${DESIGN_COLUMNS}`,
@@ -220,5 +228,81 @@ export async function readSeriesDirectionForInheritance(
     applicationScene: row.application_scene,
     problemStatement: row.problem_statement,
     defaultHours: numeric(row.default_hours),
+  };
+}
+
+/**
+ * 设计文档的内容指纹：规范化文本的 SHA-256 前 128 位。
+ *
+ * 截断到 16 个十六进制字符是够用且不占地方：这里比较的是同一条编辑线上前后
+ * 两版设计，不是对抗性输入；真撞了也只会漏一次提示，不会写坏数据。
+ */
+export function fingerprintSeriesDesign(design: SeriesDesignDoc): string {
+  return createHash('sha256').update(canonicalSeriesDesign(design)).digest('hex').slice(0, 16);
+}
+
+/**
+ * 「按旧版设计生成」的章 / 节 / 目各有多少。
+ *
+ * 一次两条聚合查询，而不是把整张表读回内存数：这个读接口挂在驾驶舱首屏，也挂在
+ * 系列设计页保存之后，两处都不该为了一次提示把几十行 JSON 搬两遍。
+ *
+ * 传 `snapshot` 而不是只传指纹，是为了让返回里的 `designUpdatedAt` 与 `fingerprint`
+ * 来自同一次读——分开读会让"设计刚保存、指纹却是旧的"这种窗口出现在提示里。
+ */
+export async function readOutlineDesignDrift(
+  queryable: Queryable,
+  ownerId: string,
+  seriesId: string,
+  snapshot: Pick<SeriesDesignSnapshot, 'designFingerprint'> & {
+    series: Pick<SeriesDesignSnapshot['series'], 'designUpdatedAt'>;
+  },
+): Promise<OutlineDesignDrift> {
+  const fingerprint = snapshot.designFingerprint;
+  const nodes = await queryable.query<{ node_type: string; stale: string; total: string }>(
+    `SELECT node_type,
+            count(*) FILTER (
+              WHERE design_fingerprint IS NOT NULL AND design_fingerprint <> $3
+            ) AS stale,
+            count(*) AS total
+       FROM curriculum_series_outline_node
+      WHERE owner_id = $1 AND series_id = $2
+      GROUP BY node_type`,
+    [ownerId, seriesId, fingerprint],
+  );
+  const items = await queryable.query<{ stale: string; total: string }>(
+    `SELECT count(*) FILTER (
+              WHERE design_fingerprint IS NOT NULL AND design_fingerprint <> $3
+            ) AS stale,
+            count(*) AS total
+       FROM curriculum_task
+      WHERE owner_id = $1 AND series_id = $2`,
+    [ownerId, seriesId, fingerprint],
+  );
+
+  const countOf = (
+    rows: readonly { node_type: string; stale: string; total: string }[],
+    type: string,
+  ) => {
+    const row = rows.find((candidate) => candidate.node_type === type);
+    return { stale: Number(row?.stale ?? 0), total: Number(row?.total ?? 0) };
+  };
+  const chapters = countOf(nodes.rows, 'chapter');
+  const sections = countOf(nodes.rows, 'section');
+  const itemsRow = items.rows[0];
+
+  return {
+    designUpdatedAt: snapshot.series.designUpdatedAt,
+    fingerprint,
+    stale: {
+      chapters: chapters.stale,
+      sections: sections.stale,
+      items: Number(itemsRow?.stale ?? 0),
+    },
+    total: {
+      chapters: chapters.total,
+      sections: sections.total,
+      items: Number(itemsRow?.total ?? 0),
+    },
   };
 }

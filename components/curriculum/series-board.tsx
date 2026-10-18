@@ -47,6 +47,26 @@ const TONE_LABEL: Record<TileTone, string> = {
   skeleton: '没开始',
 };
 
+/**
+ * 「按旧版系列设计生成」的标记。
+ *
+ * 设计改过之后，已生成的章 / 节 / 目不会自动跟着变。不标出来，用户改完设计
+ * 回到驾驶舱会觉得"怎么什么都没变"。标记只说事实，处理方式（重新生成、手工
+ * 改备注把这一层改对）由用户决定，所以放在 title 里说清楚。
+ */
+function StaleBadge() {
+  return (
+    <span
+      data-testid="board-stale-badge"
+      title="按旧版系列设计生成：系列设计后来改过，这一层不会自动跟着变"
+      className="inline-flex shrink-0 items-center gap-0.5 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-700 dark:text-amber-300"
+    >
+      <AlertTriangle className="size-2.5" />
+      旧版设计
+    </span>
+  );
+}
+
 function itemStatusText(item: BoardItem): string {
   const tone = toneOf(item);
   if (tone === 'done') return TONE_LABEL.done;
@@ -75,6 +95,7 @@ function Tile({ item, recommended }: { item: BoardItem; recommended: boolean }) 
         ) : null}
       </span>
       <span className="line-clamp-2 text-[11px] leading-tight font-medium">{item.title}</span>
+      {item.stale ? <StaleBadge /> : null}
     </Link>
   );
 }
@@ -138,6 +159,7 @@ function SectionBlock({
           <span className="text-muted-foreground tabular-nums">{section.code ?? '—'}</span>
           <span className="truncate font-medium">{section.title}</span>
           <ProgressText produced={section.produced} total={section.total} />
+          {section.stale ? <StaleBadge /> : null}
         </span>
         <Button
           size="sm"
@@ -183,6 +205,7 @@ function ChapterBlock({
           </span>
           <span className="text-sm font-semibold">{chapter.title}</span>
           <ProgressText produced={chapter.produced} total={chapter.total} />
+          {chapter.stale ? <StaleBadge /> : null}
         </span>
         <Button
           size="sm"

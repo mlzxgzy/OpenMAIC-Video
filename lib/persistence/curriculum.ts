@@ -1196,6 +1196,28 @@ CREATE INDEX IF NOT EXISTS curriculum_learning_node_series_origin_idx
   ON curriculum_learning_node (owner_id, task_id, series_node_id);
 `;
 
+/**
+ * 设计变了：大纲与目都是从系列设计派生出来的，派生之后必须记得"当时是哪一版"。
+ *
+ * 为什么不只存一个时间戳：设计保存一次、内容却没变（改回原值、重复提交）不该
+ * 让整份大纲显示"过期"；指纹按内容算，只认真正的变化。三列各管一件事：
+ *
+ * - `curriculum_series.design_updated_at`：设计最后一次经由保存接口写入的时间。
+ *   界面用它说"设计是什么时候改的"，而不是把 `updated_at` 当设计时间——系列
+ *   改名也动 `updated_at`。
+ * - 章/节与目上的 `design_fingerprint`：生成它们时那一版设计的指纹。为空表示
+ *   "不是从设计派生的"（手写、导入），**不参与**过期判断：对来源不明的内容喊
+ *   过期只会变成噪声。
+ *
+ * 没有外键：指纹是内容哈希，不指向任何行；设计被清空时指纹仍然算得出来
+ * （空文档的哈希），因此"从空设计生成、后来又补了设计"同样会被判成需要更新。
+ */
+const CURRICULUM_SERIES_DESIGN_DRIFT_SCHEMA = `
+ALTER TABLE curriculum_series ADD COLUMN IF NOT EXISTS design_updated_at TIMESTAMPTZ;
+ALTER TABLE curriculum_series_outline_node ADD COLUMN IF NOT EXISTS design_fingerprint TEXT;
+ALTER TABLE curriculum_task ADD COLUMN IF NOT EXISTS design_fingerprint TEXT;
+`;
+
 export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
   store: 'curriculum',
   migrations: [
@@ -1310,6 +1332,13 @@ export const CURRICULUM_MIGRATIONS: SchemaMigrationSet = {
       version: 17,
       name: 'series_inherit_origin',
       up: CURRICULUM_SERIES_INHERIT_SCHEMA,
+      transaction: true,
+    },
+    // 派生出来的大纲与目记住"当时是哪一版设计"，设计改了才提示哪里还没跟上。
+    {
+      version: 18,
+      name: 'series_design_drift',
+      up: CURRICULUM_SERIES_DESIGN_DRIFT_SCHEMA,
       transaction: true,
     },
   ],

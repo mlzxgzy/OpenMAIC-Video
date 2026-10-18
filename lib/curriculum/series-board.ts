@@ -16,6 +16,7 @@
  *    推荐与待办共用它，所以"现在做哪一目"和看板上第一块未做的目不会打架。
  */
 import type { CurriculumDesignPhase } from './design-types';
+import { isDerivedFromStaleDesign } from './series-design';
 import type { CurriculumSeriesOutlineNodeRecord } from './types';
 
 export type BoardKind = 'theory' | 'practice' | 'review' | null;
@@ -32,6 +33,8 @@ export interface BoardRow {
   started: boolean;
   sectionId: string | null;
   orderIndex: number;
+  /** 生成这一目时的系列设计指纹；null 表示手写 / 导入，不参与过期判断。 */
+  designFingerprint: string | null;
 }
 
 export interface BoardItem {
@@ -44,6 +47,8 @@ export interface BoardItem {
   blockingCount: number;
   started: boolean;
   outlineRank: number | null;
+  /** 按旧版系列设计生成：设计后来改过，这一目不会自动跟着变。 */
+  stale: boolean;
 }
 
 export interface BoardSection {
@@ -55,6 +60,8 @@ export interface BoardSection {
   items: BoardItem[];
   produced: number;
   total: number;
+  /** 按旧版系列设计生成。 */
+  stale: boolean;
 }
 
 export interface BoardChapter {
@@ -66,6 +73,8 @@ export interface BoardChapter {
   sections: BoardSection[];
   produced: number;
   total: number;
+  /** 按旧版系列设计生成。 */
+  stale: boolean;
 }
 
 export interface BoardUnassigned {
@@ -80,7 +89,11 @@ export interface SeriesBoard {
   totals: { chapters: number; sections: number; items: number; produced: number };
 }
 
-function toItem(row: BoardRow, outlineRank: number | null): BoardItem {
+function toItem(
+  row: BoardRow,
+  outlineRank: number | null,
+  currentFingerprint: string | null,
+): BoardItem {
   return {
     taskId: row.taskId,
     code: row.code,
@@ -91,6 +104,9 @@ function toItem(row: BoardRow, outlineRank: number | null): BoardItem {
     blockingCount: row.blockingCount,
     started: row.started,
     outlineRank,
+    stale: currentFingerprint
+      ? isDerivedFromStaleDesign(row.designFingerprint, currentFingerprint)
+      : false,
   };
 }
 
@@ -114,6 +130,7 @@ function rankOf(chapterOrder: number, sectionOrder: number, itemOrder: number): 
 export function buildSeriesBoard(
   nodes: readonly CurriculumSeriesOutlineNodeRecord[],
   rows: readonly BoardRow[],
+  currentFingerprint: string | null = null,
 ): SeriesBoard {
   const chapters = nodes
     .filter((node) => node.nodeType === 'chapter')
@@ -123,6 +140,8 @@ export function buildSeriesBoard(
     .filter((node) => node.nodeType === 'section')
     .slice()
     .sort((a, b) => a.orderIndex - b.orderIndex || a.title.localeCompare(b.title, 'zh-CN'));
+  const staleOf = (fingerprint: string | null): boolean =>
+    currentFingerprint ? isDerivedFromStaleDesign(fingerprint, currentFingerprint) : false;
 
   const sectionById = new Map(sections.map((section) => [section.id, section]));
   const chapterById = new Map(chapters.map((chapter) => [chapter.id, chapter]));
@@ -133,12 +152,12 @@ export function buildSeriesBoard(
     const section = row.sectionId ? sectionById.get(row.sectionId) : undefined;
     const chapter = section?.parentId ? chapterById.get(section.parentId) : undefined;
     if (!section || !chapter) {
-      unassigned.push(toItem(row, null));
+      unassigned.push(toItem(row, null, currentFingerprint));
       continue;
     }
     const rank = rankOf(chapter.orderIndex, section.orderIndex, row.orderIndex);
     const list = grouped.get(section.id) ?? [];
-    list.push(toItem(row, rank));
+    list.push(toItem(row, rank, currentFingerprint));
     grouped.set(section.id, list);
   }
 
@@ -155,6 +174,7 @@ export function buildSeriesBoard(
           outlineRank: rankOf(chapter.orderIndex, section.orderIndex, 0),
           items,
           ...sectionStats(items),
+          stale: staleOf(section.designFingerprint),
         };
       });
     const chapterItems = chapterSections.flatMap((section) => section.items);
@@ -166,6 +186,7 @@ export function buildSeriesBoard(
       outlineRank: rankOf(chapter.orderIndex, 0, 0),
       sections: chapterSections,
       ...sectionStats(chapterItems),
+      stale: staleOf(chapter.designFingerprint),
     };
   });
 

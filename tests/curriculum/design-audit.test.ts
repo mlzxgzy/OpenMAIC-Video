@@ -298,6 +298,7 @@ function makeSnapshot(overrides: SnapshotOverrides = {}): CurriculumDesignSnapsh
       applicationScene: 'CTF',
       problemStatement: 'learn to solve web challenges',
       status: 'active',
+      designFingerprint: null,
       designPhase: 'review',
       createdAt: NOW,
       updatedAt: NOW,

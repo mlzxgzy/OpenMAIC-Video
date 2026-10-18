@@ -50,7 +50,7 @@ export async function readSeriesOutlineAiContext(
 
   const nodes = await listSeriesOutline(queryable, ownerId, seriesId);
   const tasks = await listCurriculumTasks(queryable, ownerId, seriesId);
-  const design = await readSeriesDesignForOutline(queryable, ownerId, seriesId);
+  const designRead = await readSeriesDesignForOutline(queryable, ownerId, seriesId);
 
   const freshness = await queryable.query<{ id: string; untouched: boolean }>(
     `SELECT t.id,
@@ -117,7 +117,8 @@ export async function readSeriesOutlineAiContext(
       audience: series.audience,
       defaultHours: series.defaultHours,
     },
-    design,
+    design: designRead?.design ?? null,
+    designFingerprint: designRead?.fingerprint ?? null,
     chapters,
     sections,
     items: tasks.map((task) => ({
@@ -145,7 +146,7 @@ async function readSeriesDesignForOutline(
   queryable: Queryable,
   ownerId: string,
   seriesId: string,
-): Promise<SeriesOutlineAiDesign | null> {
+): Promise<{ design: SeriesOutlineAiDesign; fingerprint: string } | null> {
   try {
     const snapshot = await getSeriesDesign(queryable, ownerId, seriesId);
     if (!snapshot) return null;
@@ -153,28 +154,31 @@ async function readSeriesDesignForOutline(
     const nodeNames = new Map(doc.nodes.map((node) => [node.id, node.name]));
     const complete = seriesDesignComplete(doc);
     return {
-      complete,
-      // 未定完时只列会挡住"前三步完成"的缺口；定完后不再提示，避免把质量建议
-      // （例如"所有节点都没有先修"）混成"还差一项才能继续"。
-      gaps: complete ? [] : [...snapshot.gaps.direction, ...snapshot.gaps.objectives],
-      direction: {
-        learnerLevel: doc.direction.learnerLevel,
-        trainingScenario: doc.direction.trainingScenario,
-        applicationScene: doc.direction.applicationScene,
-        problemStatement: doc.direction.problemStatement,
+      design: {
+        complete,
+        // 未定完时只列会挡住"前三步完成"的缺口；定完后不再提示，避免把质量建议
+        // （例如"所有节点都没有先修"）混成"还差一项才能继续"。
+        gaps: complete ? [] : [...snapshot.gaps.direction, ...snapshot.gaps.objectives],
+        direction: {
+          learnerLevel: doc.direction.learnerLevel,
+          trainingScenario: doc.direction.trainingScenario,
+          applicationScene: doc.direction.applicationScene,
+          problemStatement: doc.direction.problemStatement,
+        },
+        objectives: doc.objectives.map((objective) => ({
+          title: objective.title,
+          expectedBehavior: objective.expectedBehavior,
+          minCriteria: objective.minCriteria,
+          evidence: objective.evidence,
+        })),
+        nodes: doc.nodes.map((node) => ({
+          name: node.name,
+          summary: node.summary,
+          difficulty: node.difficulty,
+          prerequisites: node.prerequisites.map((id) => nodeNames.get(id) ?? id),
+        })),
       },
-      objectives: doc.objectives.map((objective) => ({
-        title: objective.title,
-        expectedBehavior: objective.expectedBehavior,
-        minCriteria: objective.minCriteria,
-        evidence: objective.evidence,
-      })),
-      nodes: doc.nodes.map((node) => ({
-        name: node.name,
-        summary: node.summary,
-        difficulty: node.difficulty,
-        prerequisites: node.prerequisites.map((id) => nodeNames.get(id) ?? id),
-      })),
+      fingerprint: snapshot.designFingerprint,
     };
   } catch (error) {
     console.error('[series-outline] 读取系列设计失败，按"没有设计"生成:', error);
@@ -217,6 +221,7 @@ export async function applySeriesOutlineAiPlan(
       nodeType: 'chapter',
       title: draft.title,
       note: draft.note,
+      designFingerprint: context.designFingerprint,
     });
   }
   for (const draft of summary.sections) {
@@ -231,6 +236,7 @@ export async function applySeriesOutlineAiPlan(
       parentId,
       title: draft.title,
       note: draft.note,
+      designFingerprint: context.designFingerprint,
     });
   }
   for (const draft of summary.items) {
@@ -248,6 +254,7 @@ export async function applySeriesOutlineAiPlan(
       durationHours: draft.hours ?? context.series.defaultHours ?? null,
       audience: context.series.audience,
       problemStatement: draftProblemStatement(draft.note),
+      designFingerprint: context.designFingerprint,
     });
   }
 

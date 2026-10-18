@@ -36,6 +36,7 @@ function makeContext(partial: Partial<SeriesOutlineAiContext> = {}): SeriesOutli
       defaultHours: 1,
     },
     design: null,
+    designFingerprint: null,
     chapters: [],
     sections: [],
     items: [],

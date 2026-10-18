@@ -112,15 +112,53 @@ export interface SeriesDesignSnapshot {
     trainingScenario: string | null;
     applicationScene: string | null;
     problemStatement: string | null;
+    /** 系列行最后一次被写的时间（改名也会动它），不是设计时间。 */
     updatedAt: string;
+    /** 设计最后一次经由保存接口写入的时间；从未保存过为 null。 */
+    designUpdatedAt: string | null;
   };
   design: SeriesDesignDoc;
+  /**
+   * 这份设计的内容指纹。大纲与目上各存一份生成时的指纹，两者不等就说明
+   * "这一层是旧版设计的产物"——界面据此提示，而不是靠比较保存时间。
+   */
+  designFingerprint: string;
   phase: SeriesDesignPhase;
   /** 每个阶段的缺口；空数组表示该阶段已满足。 */
   gaps: { direction: string[]; objectives: string[]; knowledge: string[] };
   /** 目标 id → 它的中文名，界面与目层引用用。 */
   objectiveTitles: Record<string, string>;
   nodeNames: Record<string, string>;
+}
+
+/**
+ * 「设计变了，大纲与目哪里还没跟上」的一次读数。
+ *
+ * 由服务端按当前指纹与各行的指纹比对得出，界面不自己算：同一套规则在驾驶舱、
+ * 系列设计页、大纲接口各算一份，迟早会出现"页头说过期、看板却没标"的分裂。
+ */
+export interface OutlineDesignDrift {
+  /** 设计最后一次保存的时间；从未保存过为 null。 */
+  designUpdatedAt: string | null;
+  /** 当前设计指纹。 */
+  fingerprint: string;
+  /** 按旧版设计生成的章 / 节 / 目数量。 */
+  stale: { chapters: number; sections: number; items: number };
+  /** 章 / 节 / 目的总数，用来区分"全部过期"与"部分过期"。 */
+  total: { chapters: number; sections: number; items: number };
+}
+
+/**
+ * 某一行是不是旧版设计的产物。
+ *
+ * 指纹为空表示这一行不是从设计派生的（手写、大纲导入），**不算过期**：对来源
+ * 不明的内容喊过期只会变成噪声，而用户没法用"重新生成"消掉它。
+ */
+export function isDerivedFromStaleDesign(
+  fingerprint: string | null | undefined,
+  currentFingerprint: string,
+): boolean {
+  return fingerprint !== null && fingerprint !== undefined && fingerprint !== currentFingerprint;
 }
 
 /** 模型回答或请求体不是可用的设计文档：调用方映射成 400/502，一行都不写。 */
@@ -269,6 +307,52 @@ export function seriesDesignGaps(doc: SeriesDesignDoc): {
     objectives: seriesObjectiveGaps(doc.objectives),
     knowledge: seriesKnowledgeGaps(doc.objectives, doc.nodes),
   };
+}
+
+/**
+ * 设计文档的规范化文本，指纹就是它的哈希。
+ *
+ * 逐项写死字段与顺序，而不是 `JSON.stringify(doc)`：对象键序由写入方决定，同一
+ * 份设计经两条路径（PATCH 与 AI 采用）写进来会得到两个指纹，于是整份大纲被误判
+ * 成过期。集合字段（目标的 `nodeIds`、节点的 `prerequisites`）排序：调换先修
+ * 关系的书写顺序不是设计变更。
+ *
+ * 本函数不哈希（客户端也能调），哈希在服务端做（`fingerprintSeriesDesign`）。
+ */
+export function canonicalSeriesDesign(doc: SeriesDesignDoc): string {
+  const field = (value: string | null) => (value === null ? '' : value);
+  const direction = doc.direction;
+  const objectives = doc.objectives.map((objective) =>
+    [
+      objective.id,
+      objective.title,
+      objective.expectedBehavior,
+      objective.minCriteria.join('\u0001'),
+      objective.evidence,
+      [...objective.nodeIds].sort().join('\u0001'),
+    ].join('\u0002'),
+  );
+  const nodes = doc.nodes.map((node) =>
+    [
+      node.id,
+      node.name,
+      node.type,
+      node.summary,
+      node.difficulty,
+      [...node.prerequisites].sort().join('\u0001'),
+    ].join('\u0002'),
+  );
+  return [
+    'v1',
+    field(direction.audience),
+    field(direction.learnerLevel),
+    field(direction.trainingScenario),
+    field(direction.applicationScene),
+    field(direction.problemStatement),
+    direction.durationHours === null ? '' : String(direction.durationHours),
+    objectives.join('\u0003'),
+    nodes.join('\u0003'),
+  ].join('\u0004');
 }
 
 /**

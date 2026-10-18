@@ -207,6 +207,8 @@ interface OutlineNodeRow extends Record<string, unknown> {
   title: string;
   note: string | null;
   order_index: number | string;
+  /** 生成这一章 / 节时的系列设计指纹；手写或导入为 null。 */
+  design_fingerprint: string | null;
   created_at: Date | string;
   updated_at: Date | string;
 }
@@ -349,7 +351,7 @@ interface ExportJobRow extends Record<string, unknown> {
 const SERIES_COLUMNS = `id, name, description, audience, default_hours, created_at, updated_at`;
 
 const OUTLINE_NODE_COLUMNS = `id, series_id, parent_id, node_type, code, title, note,
-       order_index, created_at, updated_at`;
+       order_index, design_fingerprint, created_at, updated_at`;
 
 const COURSE_COLUMNS = `id, series_id, stage_id, title, code, description, chapter, section,
        lesson_order, credits, hours, semester, status, created_at, updated_at`;
@@ -455,6 +457,7 @@ function mapOutlineNode(row: OutlineNodeRow): CurriculumSeriesOutlineNodeRecord 
     title: row.title,
     note: row.note,
     orderIndex: numeric(row.order_index),
+    designFingerprint: row.design_fingerprint,
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at),
   };
@@ -1204,6 +1207,11 @@ export interface SeriesOutlineNodeInput {
   code?: string | null;
   note?: string | null;
   orderIndex?: number | null;
+  /**
+   * 生成时那一版系列设计的指纹（AI 路径传入）；手写 / 导入留空。
+   * 界面靠它判断"这一层是不是旧版设计的产物"，不传就不会被提示过期。
+   */
+  designFingerprint?: string | null;
 }
 
 /**
@@ -1281,6 +1289,7 @@ export async function createSeriesOutlineNode(
   if (!title) throw new CurriculumValidationError('标题不能为空');
   const note = outlineNodeText(input.note, OUTLINE_NODE_NOTE_LIMIT, '说明');
   const explicitCode = outlineNodeText(input.code, OUTLINE_NODE_CODE_LIMIT, '编号');
+  const designFingerprint = optionalText(input.designFingerprint ?? null);
 
   let parentId: string | null = null;
   if (input.nodeType === 'section') {
@@ -1304,10 +1313,22 @@ export async function createSeriesOutlineNode(
   try {
     const result = await queryable.query<OutlineNodeRow>(
       `INSERT INTO curriculum_series_outline_node
-         (id, owner_id, series_id, parent_id, node_type, code, title, note, order_index)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         (id, owner_id, series_id, parent_id, node_type, code, title, note, order_index,
+          design_fingerprint)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        RETURNING ${OUTLINE_NODE_COLUMNS}`,
-      [createId('node'), ownerId, seriesId, parentId, input.nodeType, code, title, note, nextOrder],
+      [
+        createId('node'),
+        ownerId,
+        seriesId,
+        parentId,
+        input.nodeType,
+        code,
+        title,
+        note,
+        nextOrder,
+        designFingerprint,
+      ],
     );
     const row = result.rows[0];
     if (!row) throw new CurriculumValidationError('章节创建失败');
@@ -1384,11 +1405,15 @@ export async function updateSeriesOutlineNode(
       ? outlineNodeText(patch.title, OUTLINE_NODE_TITLE_LIMIT, '标题')
       : existing.title;
   if (!nextTitle) throw new CurriculumValidationError('标题不能为空');
+  // 人改了标题或交底，这一行就不再是"照旧版设计生成"的了：留着旧指纹会让
+  // 它永远显示过期，而用户已经亲手把它改对了。只挪顺序不算改内容，不清指纹。
+  const clearFingerprint = patch.title !== undefined || patch.note !== undefined;
   const result = await queryable.query<OutlineNodeRow>(
     `UPDATE curriculum_series_outline_node
         SET title = $4,
             note = $5,
             order_index = $6,
+            design_fingerprint = CASE WHEN $7 THEN NULL ELSE design_fingerprint END,
             updated_at = now()
       WHERE owner_id = $1 AND series_id = $2 AND id = $3
       RETURNING ${OUTLINE_NODE_COLUMNS}`,
@@ -1401,6 +1426,7 @@ export async function updateSeriesOutlineNode(
         ? outlineNodeText(patch.note, OUTLINE_NODE_NOTE_LIMIT, '说明')
         : existing.note,
       patch.orderIndex ?? numeric(existing.order_index),
+      clearFingerprint,
     ],
   );
   const row = result.rows[0];
