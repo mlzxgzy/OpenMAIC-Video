@@ -12,6 +12,7 @@
  * start the server (see `validateModelConfiguration`, called from
  * instrumentation).
  */
+import { DEFAULT_WEB_FETCH_PROVIDER } from '@/lib/web-fetch/registry';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
@@ -23,6 +24,7 @@ import {
   type SlotId,
 } from '@/lib/config/model-slots';
 import { getProviderPreset } from '@/lib/config/provider-presets';
+import { retiredPresetReason } from '@/lib/config/preset-ids';
 import { VALID_EFFORTS, VALID_LEVELS, VALID_MODES } from '@/lib/server/model-routes';
 
 export const DEFAULT_MODEL_CONFIG_FILE = 'openmaic.yml';
@@ -293,7 +295,11 @@ function crossCheck(
     const at = `providers.${id}.preset`;
     const preset = getProviderPreset(provider.preset);
     if (!preset) {
-      issues.push(`${at}: unknown preset ${shown(provider.preset, at)}`);
+      // A retired preset does not stop the server: the deployment layer
+      // leaves the provider unused and says so (deployment-layer.ts).
+      if (!retiredPresetReason(provider.preset)) {
+        issues.push(`${at}: unknown preset ${shown(provider.preset, at)}`);
+      }
       continue;
     }
     if (preset.requiresBaseUrl && !provider.baseUrl) {
@@ -308,6 +314,12 @@ function crossCheck(
     }
     // Own keys only: `constructor` and friends are not declared providers.
     const provider = Object.hasOwn(providers, providerId) ? providers[providerId] : undefined;
+    if (
+      !provider &&
+      getSlot(slot).capability === 'webFetch' &&
+      providerId === DEFAULT_WEB_FETCH_PROVIDER.id
+    )
+      return;
     if (!provider) {
       issues.push(`${at}: provider ${shown(providerId, at)} is not declared under providers`);
       return;

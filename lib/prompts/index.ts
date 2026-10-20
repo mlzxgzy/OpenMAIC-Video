@@ -41,9 +41,4 @@ export const PROMPT_IDS = {
   COURSE_SERIES_OBJECTIVES: 'course-series-objectives',
   COURSE_SERIES_KNOWLEDGE: 'course-series-knowledge',
   WEB_SEARCH_QUERY_REWRITE: 'web-search-query-rewrite',
-  AGENT_SYSTEM: 'agent-system',
-  AGENT_SYSTEM_WB_TEACHER: 'agent-system-wb-teacher',
-  AGENT_SYSTEM_WB_ASSISTANT: 'agent-system-wb-assistant',
-  AGENT_SYSTEM_WB_STUDENT: 'agent-system-wb-student',
-  DIRECTOR: 'director',
 } as const satisfies Record<string, PromptId>;

@@ -38,6 +38,7 @@ function capabilities(ttsModelId?: string): ModelCapabilities {
     image: null,
     video: null,
     webSearch: null,
+    webFetch: null,
     document: null,
     resolved: new Set<SlotId>(),
     tts: ttsModelId

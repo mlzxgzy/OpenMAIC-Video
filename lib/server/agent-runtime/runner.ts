@@ -48,6 +48,7 @@ import {
 } from './design-tools';
 import {
   buildFetchUrlTool,
+  resolveWebFetchCapability,
   fetchPromptBlock,
   untrustedContentPolicyPromptBlock,
 } from './fetch-url';
@@ -127,7 +128,7 @@ export const MINIMAL_AGENT_TOOL_NAMES = new Set(['ask_user']);
  * capability block that is actually registered — the web-search block only
  * when a web-search backend is configured, the curriculum block always, the
  * skill discovery block when skills are installed, the fetch_url guidance
- * and untrusted-content policy always (fetch_url is always registered), and
+ * when fetching is enabled, and untrusted-content policy always, and
  * the session-materials block only when the session has materials.
  */
 function isLeaseLostError(error: unknown): boolean {
@@ -1357,7 +1358,9 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
     // unconfigured deployment gets no tool, so the model never sees a dead one.
     // Every result URL is registered with this session's durable URL trust
     // gate before the tool result is returned (reference semantics).
-    const search = await resolveWebSearchCapability(await backgroundWorkspaceId(meta.ownerId));
+    const workspaceId = await backgroundWorkspaceId(meta.ownerId);
+    const search = await resolveWebSearchCapability(workspaceId);
+    const fetchConnection = await resolveWebFetchCapability(workspaceId);
     const webSearchTools = search
       ? [
           buildWebSearchTool(search, (urls) =>
@@ -1544,12 +1547,17 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         // The native `read` tool is restricted to installed skill resources; it is
         // present exactly when skills exist. Discovery and invocation stay pi-native.
         skillReadTool ? [skillReadTool] : [],
-        // fetch_url is registered unconditionally (reference semantics: the
-        // material tools are always registered alongside the capability-gated
-        // web_search). The URL trust gate — not registration — is what keeps a
-        // fetch inside the session's observed origins, and it is the tool's core
-        // security property.
-        [buildFetchUrlTool({ sessionId: id, ownerId: meta.ownerId })],
+        ...(fetchConnection
+          ? [
+              [
+                buildFetchUrlTool({
+                  sessionId: id,
+                  ownerId: meta.ownerId,
+                  connection: fetchConnection,
+                }),
+              ],
+            ]
+          : []),
         dslTools,
         curriculumTools,
         curriculumDesignTools,
@@ -1570,8 +1578,8 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         curriculum: CURRICULUM_TOOLS_PROMPT,
         design: CURRICULUM_DESIGN_TOOLS_PROMPT,
         ...(search ? { search: searchPromptBlock() } : {}),
-        fetch: fetchPromptBlock(),
-        untrustedContent: untrustedContentPolicyPromptBlock(),
+        ...(fetchConnection ? { fetch: fetchPromptBlock() } : {}),
+        untrustedContent: untrustedContentPolicyPromptBlock(!!fetchConnection),
         ...(materials.length ? { materials: sessionMaterialsPromptBlock(materials) } : {}),
         roster: ROSTER_TOOLS_PROMPT,
         voice: voiceCloneToolsPrompt(voiceRegistrationEnabled),
@@ -1585,6 +1593,7 @@ export async function runSession(ctx: RunContext, meta: ClaimedAgentSession): Pr
         ...SKILL_EDIT_TOOL_NAMES,
         ...(skillReadTool ? ['read'] : []),
         ...MATERIAL_TOOL_NAMES,
+        ...(fetchConnection ? ['fetch_url'] : []),
         ...dslTools.map((tool) => tool.name),
         ...scenePreviewTools.map((tool) => tool.name),
         ...CURRICULUM_ALLOWLIST,
@@ -2014,7 +2023,7 @@ export function startAgentRunner(): AgentRunnerHandle {
   log.info(
     'agent runner toolset: ask_user always; web_search when a web-search backend is configured; ' +
       'create_skill/read_skill/patch_skill and the skill-scoped read when skills are installed; ' +
-      'fetch_url always (URL trust gate enforced per call); ' +
+      'fetch_url when enabled (URL trust gate enforced per call); ' +
       'read_stage/patch_stage/grep_stage and create_stage/read_stage_outline always (owner-scoped store)',
   );
 

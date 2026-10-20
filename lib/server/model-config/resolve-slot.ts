@@ -19,6 +19,7 @@
  *
  * This is pure: it takes the layers as input and builds no SDK clients.
  */
+import { DEFAULT_WEB_FETCH_PROVIDER } from '@/lib/web-fetch/registry';
 import { officialRegionalEndpoint } from '@/lib/config/official-endpoints';
 import {
   assertDeploymentModelAuthorized,
@@ -38,6 +39,7 @@ import {
   type SlotRequirement,
 } from '@/lib/config/model-slots';
 import { getProviderPreset } from '@/lib/config/provider-presets';
+import { retiredPresetReason } from '@/lib/config/preset-ids';
 import type { ThinkingConfig } from '@/lib/types/provider';
 import {
   parseModelRef,
@@ -192,13 +194,28 @@ function resolveTarget(
   if (modelId === undefined && capability === 'chat' && !providerOnly) {
     throw new SlotResolutionError(`${at}: a chat model needs "providerId:modelId"`);
   }
+  if (capability === 'webFetch' && providerId === defaultWebFetchProviderId(layers)) {
+    return {
+      providerId,
+      providerSource: 'deployment',
+      presetId: DEFAULT_WEB_FETCH_PROVIDER.id,
+      registryId: DEFAULT_WEB_FETCH_PROVIDER.id,
+    };
+  }
   const found = findProvider(providerId, layers);
   // Errors name the path, never a value taken from the reference: a key pasted
   // into the provider position must not end up in a log.
   if (!found) throw new SlotResolutionError(`${at}: the provider is not declared`);
   const { provider } = found;
   const preset = getProviderPreset(provider.preset);
-  if (!preset) throw new SlotResolutionError(`${at}: the provider has an unknown preset`);
+  if (!preset) {
+    const retired = retiredPresetReason(provider.preset);
+    throw new SlotResolutionError(
+      retired
+        ? `${at}: the provider can no longer be used: ${retired}`
+        : `${at}: the provider has an unknown preset`,
+    );
+  }
   const target = preset.capabilities[capability];
   if (!target) {
     throw new SlotResolutionError(
@@ -248,10 +265,10 @@ function resolveTarget(
 }
 
 /** Requirement status from the built-in chat model catalogue. */
-function checkRequirement(
+export function checkRequirement(
   requirement: SlotRequirement,
   capability: SlotCapability,
-  target: ResolvedModelTarget,
+  target: Pick<ResolvedModelTarget, 'registryId' | 'modelId' | 'catalogue'>,
 ): RequirementCheck {
   if (requirement !== 'toolCalling' || capability !== 'chat' || target.catalogue === false) {
     return { requirement, status: 'unknown' };
@@ -266,6 +283,61 @@ function checkRequirement(
 }
 
 type ModelLike = { id: string; capabilities?: { tools?: boolean } };
+
+/**
+ * The providers whose preset this build retired (RETIRED_PRESETS), as the
+ * layers resolve them: an id the deployment declares is the deployment's.
+ */
+export function retiredProviderIds(layers: readonly (ModelConfigLayer | null)[]): Set<string> {
+  const seen = new Set<string>();
+  const retired = new Set<string>();
+  for (const layer of inPrecedence(layers.filter((entry): entry is ModelConfigLayer => !!entry))) {
+    for (const [id, provider] of Object.entries(layer.config.providers ?? {})) {
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (retiredPresetReason(provider.preset)) retired.add(id);
+    }
+  }
+  return retired;
+}
+
+/**
+ * Slot assignments without the ones that name a provider in `ids`, so those
+ * slots follow their parents again. An assignment whose fallback alone names
+ * one keeps its model.
+ */
+export function withoutAssignmentsNaming(
+  slots: ModelConfigFile['slots'],
+  ids: ReadonlySet<string>,
+): Record<string, SlotAssignment> {
+  const names = (ref: string | undefined) => {
+    if (!ref) return false;
+    try {
+      return ids.has(parseModelRef(ref).providerId);
+    } catch {
+      return false;
+    }
+  };
+  const kept: Record<string, SlotAssignment> = {};
+  for (const [slot, assignment] of Object.entries(slots ?? {})) {
+    if (assignment === null || assignment === undefined) {
+      if (assignment === null) kept[slot] = null;
+      continue;
+    }
+    if (typeof assignment === 'string') {
+      if (!names(assignment)) kept[slot] = assignment;
+      continue;
+    }
+    if (names(assignment.model)) continue;
+    if (names(assignment.fallback)) {
+      const { fallback: _fallback, ...rest } = assignment;
+      kept[slot] = rest as SlotAssignment;
+    } else {
+      kept[slot] = assignment;
+    }
+  }
+  return kept;
+}
 
 const SOURCE_RANK: Record<ConfigSource, number> = { deployment: 0, workspace: 1 };
 
@@ -368,9 +440,33 @@ export function resolveSlot(
       ...(fallbackRequirements ? { fallbackRequirements } : {}),
     };
   }
+  if (capability === 'webFetch') {
+    const provider = DEFAULT_WEB_FETCH_PROVIDER;
+    return {
+      status: 'assigned',
+      slot,
+      resolvedAt: slot,
+      capability,
+      providerId: defaultWebFetchProviderId(layers),
+      providerSource: 'deployment',
+      presetId: provider.id,
+      registryId: provider.id,
+      source: lockingNode(deployment?.config, slot) !== undefined ? 'locked' : 'default',
+      locked: lockingNode(deployment?.config, slot) !== undefined,
+      requirements: [],
+    };
+  }
   return {
     status: 'unassigned',
     slot,
     ...(lockingNode(deployment?.config, slot) !== undefined ? { locked: true as const } : {}),
   };
+}
+
+/** Stable display id for the implicit keyless reader, without shadowing configured providers. */
+export function defaultWebFetchProviderId(layers: readonly ModelConfigLayer[]): string {
+  let id = DEFAULT_WEB_FETCH_PROVIDER.id;
+  const deployment = layers.find((layer) => layer.source === 'deployment');
+  while (Object.hasOwn(deployment?.config.providers ?? {}, id)) id += '-default';
+  return id;
 }
