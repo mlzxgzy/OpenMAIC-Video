@@ -10,13 +10,33 @@
  *    没有目时显示一块虚线占位「＋ 新建目」，而不是让这一节从看板上消失。
  *
  * 砖块颜色四种（已出片 / 有阻塞 / 进行中 / 没开始），理由见 `toneOf`。
+ *
+ * 三层都有「编辑 / 删除」菜单：看板是用户核对大纲的地方，改错一个标题不该迫使他
+ * 去别处找入口。菜单只负责把"要改哪一行"交给驾驶舱（`series-cockpit.tsx`）——
+ * 删除的后果文案、保存时只发改过的字段，都在 `lib/curriculum/outline-actions.ts`
+ * 里，由那里钉测试。看板自己不发请求。
  */
 'use client';
 
 import Link from 'next/link';
-import { AlertTriangle, CheckCircle2, CircleDashed, Film, PencilLine, Plus } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  CircleDashed,
+  Film,
+  MoreHorizontal,
+  PencilLine,
+  Plus,
+  Trash2,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import type {
   BoardChapter,
   BoardItem,
@@ -75,28 +95,101 @@ function itemStatusText(item: BoardItem): string {
   return TONE_LABEL.skeleton;
 }
 
-function Tile({ item, recommended }: { item: BoardItem; recommended: boolean }) {
+/**
+ * 一行右侧的「⋯」菜单。
+ *
+ * 用下拉菜单而不是把两个按钮平铺出来：看板一屏要装 54 目，每行两个常驻按钮会
+ * 把注意力从"现在做哪一目"上拉走；删除是低频且危险的操作，藏一层是好事。
+ * `data-testid` 用 id 而不是行号：e2e 播种时手里就有 id，断言不依赖排序。
+ */
+function RowActions({
+  testId,
+  ariaLabel,
+  editLabel,
+  deleteLabel,
+  onEdit,
+  onDelete,
+}: {
+  testId: string;
+  ariaLabel: string;
+  editLabel: string;
+  deleteLabel: string;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          data-testid={testId}
+          aria-label={ariaLabel}
+          className="text-muted-foreground/70 hover:text-foreground shrink-0"
+        >
+          <MoreHorizontal />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[9rem]">
+        <DropdownMenuItem onSelect={onEdit}>
+          <PencilLine />
+          {editLabel}
+        </DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+          <Trash2 />
+          {deleteLabel}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function Tile({
+  item,
+  recommended,
+  onEdit,
+  onDelete,
+}: {
+  item: BoardItem;
+  recommended: boolean;
+  onEdit: (item: BoardItem) => void;
+  onDelete: (item: BoardItem) => void;
+}) {
   const tone = toneOf(item);
   return (
-    <Link
-      href={`/curriculum/design/${item.taskId}`}
-      title={`${item.code ? `${item.code} ` : ''}${item.title} —— ${itemStatusText(item)}`}
-      className={`relative flex min-h-[72px] flex-col gap-0.5 rounded-md border p-1.5 text-left transition-colors hover:ring-2 hover:ring-primary/40 ${TONE_CLASS[tone]}`}
-    >
-      {recommended ? (
-        <span className="bg-primary text-primary-foreground absolute -top-1.5 -right-1.5 rounded-full px-1.5 py-0.5 text-[10px] font-medium">
-          现在做这目
-        </span>
-      ) : null}
-      <span className="flex items-baseline justify-between gap-1">
-        <span className="truncate text-[10px] opacity-70 tabular-nums">{item.code || '—'}</span>
-        {item.kind ? (
-          <span className="shrink-0 text-[10px] opacity-70">{ITEM_KIND_LABEL[item.kind]}</span>
+    <div className="relative">
+      <Link
+        href={`/curriculum/design/${item.taskId}`}
+        title={`${item.code ? `${item.code} ` : ''}${item.title} —— ${itemStatusText(item)}`}
+        className={`relative flex min-h-[72px] flex-col gap-0.5 rounded-md border p-1.5 pr-7 text-left transition-colors hover:ring-2 hover:ring-primary/40 ${TONE_CLASS[tone]}`}
+      >
+        {recommended ? (
+          // 挂在砖块上边线的正中，而不是某个角："现在做这目"是给整块砖贴的标签，
+          // 贴角上会压住编号或类型，而这两样正是用户核对大纲时要看的东西。
+          <span className="bg-primary text-primary-foreground absolute -top-2 left-1/2 -translate-x-1/2 rounded-full px-1.5 py-0.5 text-[10px] font-medium whitespace-nowrap">
+            现在做这目
+          </span>
         ) : null}
-      </span>
-      <span className="line-clamp-2 text-[11px] leading-tight font-medium">{item.title}</span>
-      {item.stale ? <StaleBadge /> : null}
-    </Link>
+        <span className="flex items-baseline justify-between gap-1">
+          <span className="truncate text-[10px] opacity-70 tabular-nums">{item.code || '—'}</span>
+          {item.kind ? (
+            <span className="shrink-0 text-[10px] opacity-70">{ITEM_KIND_LABEL[item.kind]}</span>
+          ) : null}
+        </span>
+        <span className="line-clamp-2 text-[11px] leading-tight font-medium">{item.title}</span>
+        {item.stale ? <StaleBadge /> : null}
+      </Link>
+      <div className="absolute top-0.5 right-0.5">
+        <RowActions
+          testId={`item-actions-${item.taskId}`}
+          ariaLabel={`目「${item.code ? `${item.code} ` : ''}${item.title}」的操作`}
+          editLabel="编辑目"
+          deleteLabel="删除目"
+          onEdit={() => onEdit(item)}
+          onDelete={() => onDelete(item)}
+        />
+      </div>
+    </div>
   );
 }
 
@@ -143,15 +236,32 @@ function EmptySection({
   );
 }
 
+interface EntryHandlers {
+  onAddSection: (chapter: BoardChapter) => void;
+  onAddItem: (section: BoardSection) => void;
+  onEditChapter: (chapter: BoardChapter) => void;
+  onDeleteChapter: (chapter: BoardChapter) => void;
+  onEditSection: (section: BoardSection) => void;
+  onDeleteSection: (section: BoardSection) => void;
+  onEditItem: (item: BoardItem) => void;
+  onDeleteItem: (item: BoardItem) => void;
+}
+
 function SectionBlock({
   section,
   recommendedTaskId,
   onAddItem,
+  onEditSection,
+  onDeleteSection,
+  onEditItem,
+  onDeleteItem,
 }: {
   section: BoardSection;
   recommendedTaskId: string | null;
-  onAddItem: (section: BoardSection) => void;
-}) {
+} & Pick<
+  EntryHandlers,
+  'onAddItem' | 'onEditSection' | 'onDeleteSection' | 'onEditItem' | 'onDeleteItem'
+>) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -161,15 +271,25 @@ function SectionBlock({
           <ProgressText produced={section.produced} total={section.total} />
           {section.stale ? <StaleBadge /> : null}
         </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-6 px-1.5 text-xs"
-          onClick={() => onAddItem(section)}
-        >
-          <Plus className="size-3" />
-          新建目
-        </Button>
+        <span className="flex items-center gap-0.5">
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-6 px-1.5 text-xs"
+            onClick={() => onAddItem(section)}
+          >
+            <Plus className="size-3" />
+            新建目
+          </Button>
+          <RowActions
+            testId={`section-actions-${section.id}`}
+            ariaLabel={`节「${section.code ? `${section.code} ` : ''}${section.title}」的操作`}
+            editLabel="编辑节"
+            deleteLabel="删除节"
+            onEdit={() => onEditSection(section)}
+            onDelete={() => onDeleteSection(section)}
+          />
+        </span>
       </div>
       <HandoffNote note={section.note} />
       {section.items.length === 0 ? (
@@ -177,7 +297,13 @@ function SectionBlock({
       ) : (
         <div className="grid grid-cols-3 gap-1.5 sm:grid-cols-4 lg:grid-cols-5">
           {section.items.map((item) => (
-            <Tile key={item.taskId} item={item} recommended={item.taskId === recommendedTaskId} />
+            <Tile
+              key={item.taskId}
+              item={item}
+              recommended={item.taskId === recommendedTaskId}
+              onEdit={onEditItem}
+              onDelete={onDeleteItem}
+            />
           ))}
         </div>
       )}
@@ -190,12 +316,16 @@ function ChapterBlock({
   recommendedTaskId,
   onAddSection,
   onAddItem,
+  onEditChapter,
+  onDeleteChapter,
+  onEditSection,
+  onDeleteSection,
+  onEditItem,
+  onDeleteItem,
 }: {
   chapter: BoardChapter;
   recommendedTaskId: string | null;
-  onAddSection: (chapter: BoardChapter) => void;
-  onAddItem: (section: BoardSection) => void;
-}) {
+} & EntryHandlers) {
   return (
     <div className="border-border/70 flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
@@ -207,15 +337,25 @@ function ChapterBlock({
           <ProgressText produced={chapter.produced} total={chapter.total} />
           {chapter.stale ? <StaleBadge /> : null}
         </span>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="h-6 px-1.5 text-xs"
-          onClick={() => onAddSection(chapter)}
-        >
-          <Plus className="size-3" />
-          新建节
-        </Button>
+        <span className="flex items-center gap-0.5">
+          <Button
+            size="xs"
+            variant="ghost"
+            className="h-6 px-1.5 text-xs"
+            onClick={() => onAddSection(chapter)}
+          >
+            <Plus className="size-3" />
+            新建节
+          </Button>
+          <RowActions
+            testId={`chapter-actions-${chapter.id}`}
+            ariaLabel={`章「${chapter.code ? `第 ${chapter.code} 章 ` : ''}${chapter.title}」的操作`}
+            editLabel="编辑章"
+            deleteLabel="删除章"
+            onEdit={() => onEditChapter(chapter)}
+            onDelete={() => onDeleteChapter(chapter)}
+          />
+        </span>
       </div>
       <HandoffNote note={chapter.note} />
       {chapter.sections.length === 0 ? (
@@ -235,6 +375,10 @@ function ChapterBlock({
               section={section}
               recommendedTaskId={recommendedTaskId}
               onAddItem={onAddItem}
+              onEditSection={onEditSection}
+              onDeleteSection={onDeleteSection}
+              onEditItem={onEditItem}
+              onDeleteItem={onDeleteItem}
             />
           ))}
         </div>
@@ -248,12 +392,16 @@ export function SeriesBoardView({
   recommendedTaskId,
   onAddSection,
   onAddItem,
+  onEditChapter,
+  onDeleteChapter,
+  onEditSection,
+  onDeleteSection,
+  onEditItem,
+  onDeleteItem,
 }: {
   board: SeriesBoard;
   recommendedTaskId: string | null;
-  onAddSection: (chapter: BoardChapter) => void;
-  onAddItem: (section: BoardSection) => void;
-}) {
+} & EntryHandlers) {
   return (
     <section aria-label="系列大纲与出片" className="flex flex-col gap-3">
       <header className="flex flex-wrap items-baseline justify-between gap-2">
@@ -291,6 +439,12 @@ export function SeriesBoardView({
               recommendedTaskId={recommendedTaskId}
               onAddSection={onAddSection}
               onAddItem={onAddItem}
+              onEditChapter={onEditChapter}
+              onDeleteChapter={onDeleteChapter}
+              onEditSection={onEditSection}
+              onDeleteSection={onDeleteSection}
+              onEditItem={onEditItem}
+              onDeleteItem={onDeleteItem}
             />
           ))}
           {board.chapters.length === 0 ? (
@@ -320,6 +474,8 @@ export function SeriesBoardView({
                     key={item.taskId}
                     item={item}
                     recommended={item.taskId === recommendedTaskId}
+                    onEdit={onEditItem}
+                    onDelete={onDeleteItem}
                   />
                 ))}
               </div>

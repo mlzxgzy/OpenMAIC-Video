@@ -1026,6 +1026,76 @@ id 按数组下标发，重排或删除会让目里已经承接的行（`series_
 | 真实模型（全新实例） | 一次给出 **69 个**候选（知识 34 / 技能 35；入门 15 / 基础 25 / 进阶 24 / 高级 5，61 个带先修），用时约 **48 秒**；勾选 3 个采用后刷新仍在，技能的先修落成 `sn_2`；临时系列已删除 |
 | 数据 | 验证系列在用例结束时删除；隔离实例已停、副本已删 |
 
+### 8.17 章、节、目都能改名和删除
+
+看板一直是"只能建、不能改"：接口其实早就有（章 / 节 `PATCH / DELETE
+/api/curriculum/series/[id]/outline/[nodeId]`，目 `PATCH / DELETE
+/api/curriculum/design/tasks/[id]`），缺的是入口。写错一个字、多建一节、少建一目，
+用户只能去数据库里改。§8.6 的"先出章、再出节、最后出目"于是成了**单行道**：能建，
+建错了没有退路。这一节把退路补上。
+
+**1）每层一个「⋯」菜单，不铺常驻按钮。** 看板一屏要装 54 目，每行两个常驻按钮会把
+注意力从"现在做哪一目"上拉走；删除是低频且危险的操作，藏一层是好事。菜单项：
+编辑章 / 删除章、编辑节 / 删除节、编辑目 / 删除目。看板只负责把"哪一行"交给驾驶舱，
+自己不调接口。
+
+**2）编辑只发改过的字段。** 章 / 节的接口把"标题或说明被写过"当成一次**人改过的
+表态**（清掉 `design_fingerprint`，这一行不再算"照旧版设计生成"）。原样保存一遍等于
+替用户宣布"这一行我核过了"，会把一个真正过期的章节从 §8.12 的提示里洗白。所以补丁
+按差异构造（`lib/curriculum/outline-actions.ts` 的 `nodeEditPatch` / `taskEditPatch`），
+没有差异就不发请求、直接关框。
+
+**3）编号不在编辑范围内。** 章 / 节的 `code` 是目编号（`1-1-1`）的前缀，PATCH 接口
+根本不接受它；改了会让已经建好的目编号说谎。编辑框把它画成一行只读文本并写清"要换
+编号就删掉重建"，而不是给一个能填、保存后什么也不发生的输入框。
+
+**4）删除的后果逐层说清。** 三层的牵连面完全不同，文案由
+`describeOutlineDelete` 生成（纯函数，`tests/curriculum/outline-actions.test.ts` 钉住
+它与库行为一致）：
+
+| 删什么 | 会删掉 | 不会删、但会被牵连 |
+| --- | --- | --- |
+| 章 | 这一章和它下面的节（`parent_id ON DELETE CASCADE`） | 章下的目退回「未归类」（`curriculum_task.section_id ON DELETE SET NULL`），可再挂到别的节下 |
+| 节 | 这一节 | 节下的目退回「未归类」 |
+| 目 | 这一目的设计全部（目标 / 知识点 / 本目大纲 / 题目 / 实操） | 已生成的课堂与导出视频不挂在目下面，不会被删 |
+
+用 `AlertDialog` 而不是 `window.confirm`：三句话要能分行读、能被 e2e 定位；请求在飞
+的时候不许关框（失败了要留在框里看到原因），确认按钮点完也不让 Radix 自动关闭。
+
+**5）目编辑的两个边界。** 目编辑框只改大纲上看得见的四样：标题、编号、类型、学时
+（受众 / 基础 / 场景 / 范围属于目工作台第 1 步，两个入口改同一批字段迟早会漂移）。
+其中两条必须在框里写明，而不是让用户在保存之后才发现：
+
+- **改标题或学时会让第 1 步的确认重新打开**——`withdrawCurriculumDesignStep` 在方向
+  字段真的变了时撤确认，确认属于它当时确认过的内容；编号和类型不在方向字段里，不受影响。
+- **类型不能"改回未标注"**——接口的 `oneOf` 不接受 `null`，所以从"未标注"选一个类型
+  可以，反向不行；下拉把"未标注"画成占位符而不是可选项。
+- 编号可以为空但不能重复：留空就是"没编号"，不替用户编一个；重复由库上的唯一索引拒绝，
+  接口回 400「该值已被占用」。
+
+**6）没做的：排序。** 上移 / 下移需要一个事务内把兄弟节点的 `order_index` 整体重编号
+（`order_index` 没有唯一约束，单发 PATCH 交换两个值在并列或并发时会得到半成品顺序），
+接口目前没有这个能力，所以这一轮只做改名与删除。
+
+**验证**（全部实跑）：
+
+| 项 | 结果 |
+| --- | --- |
+| `tsc --noEmit` / `eslint`（改动文件） / `prettier --check` | 0 / 0 / 通过 |
+| `tests/curriculum/outline-actions.test.ts` | 新增 **39 例全绿**：删除文案 8（章 4 / 节 2 / 目 2，整对象比对 title / consequence / keep / confirmLabel）、`nodeEditPatch` 9、`parseTaskEditDraft` 12、`taskEditPatch` 10 |
+| 浏览器 e2e（真实 Chrome、隔离实例） | `curriculum-series-outline-edit.spec.ts` **6/6**；回归 `curriculum-series-cockpit.spec.ts` **8/8** |
+| 数据 | 每个用例自建系列、finally 删除；无残留 |
+
+实拍（隔离实例，真实 Chrome）：
+
+![每一层都有编辑 / 删除菜单](artifacts/regression/outline-actions/01-board-menu.png)
+
+![编辑节：编号只读，说明会进下一层的提示词](artifacts/regression/outline-actions/02-edit-node.png)
+
+![编辑目：标题、编号、类型、学时](artifacts/regression/outline-actions/03-edit-item.png)
+
+![删除目：说清删什么、不删什么](artifacts/regression/outline-actions/04-delete-item.png)
+
 ---
 
 ## 九、验收标准
@@ -1051,6 +1121,7 @@ id 按数组下标发，重排或删除会让目里已经承接的行（`series_
 | 15 | 七步都在、序号是 1..7、当前步唯一 | 单测 `step-labels.test.ts`（序号与阶段机同序、每张标签表恰好七键、`STEP_LABEL` 由 `STEP_NAME` 拼出）；e2e 三个 Tab 上七格、唯一 `current`、卡片带序号角标 | ✅（B5，`curriculum-step-copilot.spec.ts` / `curriculum-series-cockpit.spec.ts`） |
 | 16 | 方向 AI 填写：采用前可改、取消不写、AI 未给的槽位保留当前值 | e2e `curriculum-series-direction-ai.spec.ts`：改一格后采用 → 刷新读库；取消 → 库内不变；`draft.x ?? current.x` 预填 | ✅ |
 | 17 | 第 2 步 AI 生成候选：按类型分组、勾选采用、已有目标不动 | e2e `curriculum-series-objectives-ai.spec.ts`：重复候选不出现、分组全选 / 取消、采用后追加并刷新读库；路由测试：只回候选不写库、候选太少 502 | ✅ |
+| 18 | 章 / 节 / 目能改名与删除，且删除后果与库行为一致 | 单测 `outline-actions.test.ts` 整对象钉住三层文案；e2e `curriculum-series-outline-edit.spec.ts`：改名落库、删节 / 章后目回「未归类」且 task 仍存在、删目后 404 | ✅ |
 
 ---
 

@@ -38,16 +38,20 @@ import {
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { CreateItemDialog } from '@/components/curriculum/create-item-dialog';
+import { EditItemDialog } from '@/components/curriculum/edit-item-dialog';
 import { OutlineAiDialog } from '@/components/curriculum/outline-ai-dialog';
+import { OutlineDeleteDialog } from '@/components/curriculum/outline-delete-dialog';
 import { OutlineImportDialog } from '@/components/curriculum/outline-import-dialog';
 import {
   OutlineNodeDialog,
+  type OutlineNodeEditing,
   type OutlineNodeTarget,
 } from '@/components/curriculum/outline-node-dialog';
 import { SeriesBoardView } from '@/components/curriculum/series-board';
 import { SeriesSettingsDialog } from '@/components/curriculum/series-settings-dialog';
 import { StepBadge, StepRail } from '@/components/curriculum/step-rail';
 import { chooseNextItem, pendingItems, type NextItemRow } from '@/lib/curriculum/next-item';
+import { describeOutlineDelete, type OutlineDeleteSpec } from '@/lib/curriculum/outline-actions';
 import {
   seriesDesignComplete,
   type OutlineDesignDrift,
@@ -57,7 +61,13 @@ import type {
   SeriesOutlineAiDesignSummary,
   SeriesOutlineAiLevel,
 } from '@/lib/curriculum/series-outline-ai';
-import { buildSeriesBoard, type BoardRow } from '@/lib/curriculum/series-board';
+import {
+  buildSeriesBoard,
+  type BoardChapter,
+  type BoardItem,
+  type BoardRow,
+  type BoardSection,
+} from '@/lib/curriculum/series-board';
 import type {
   CurriculumSeriesOutlineNodeRecord,
   CurriculumSeriesRecord,
@@ -127,6 +137,7 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
   const [showAllTodos, setShowAllTodos] = useState(false);
 
   const [nodeTarget, setNodeTarget] = useState<OutlineNodeTarget | null>(null);
+  const [nodeEditing, setNodeEditing] = useState<OutlineNodeEditing | null>(null);
   const [nodeOpen, setNodeOpen] = useState(false);
   const [itemSection, setItemSection] = useState<{
     id: string;
@@ -134,6 +145,10 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
     title: string;
   } | null>(null);
   const [itemOpen, setItemOpen] = useState(false);
+  const [itemEditTaskId, setItemEditTaskId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<{ spec: OutlineDeleteSpec; url: string } | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aiLevel, setAiLevel] = useState<SeriesOutlineAiLevel | null>(null);
@@ -255,16 +270,107 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
   }, [board]);
 
   const openAddChapter = () => {
+    setNodeEditing(null);
     setNodeTarget({ nodeType: 'chapter', parentId: null });
     setNodeOpen(true);
   };
   const openAddSection = (chapter: { id: string; title: string }) => {
+    setNodeEditing(null);
     setNodeTarget({ nodeType: 'section', parentId: chapter.id, parentTitle: chapter.title });
     setNodeOpen(true);
   };
   const openAddItem = (section: { id: string; code: string | null; title: string }) => {
     setItemSection(section);
     setItemOpen(true);
+  };
+
+  // ── 改名与删除：看板只把"哪一行"交过来，请求和后果文案都在这里 ──────────────
+
+  const openEditChapter = (chapter: BoardChapter) => {
+    setNodeTarget(null);
+    setNodeEditing({
+      id: chapter.id,
+      nodeType: 'chapter',
+      code: chapter.code,
+      title: chapter.title,
+      note: chapter.note,
+    });
+    setNodeOpen(true);
+  };
+  const openEditSection = (section: BoardSection) => {
+    setNodeTarget(null);
+    setNodeEditing({
+      id: section.id,
+      nodeType: 'section',
+      code: section.code,
+      title: section.title,
+      note: section.note,
+    });
+    setNodeOpen(true);
+  };
+  const requestDeleteChapter = (chapter: BoardChapter) => {
+    setDeleteError(null);
+    setDeleting({
+      spec: describeOutlineDelete({
+        level: 'chapter',
+        code: chapter.code,
+        title: chapter.title,
+        sectionCount: chapter.sections.length,
+        itemCount: chapter.total,
+        producedCount: 0,
+      }),
+      url: `/api/curriculum/series/${seriesId}/outline/${encodeURIComponent(chapter.id)}`,
+    });
+  };
+  const requestDeleteSection = (section: BoardSection) => {
+    setDeleteError(null);
+    setDeleting({
+      spec: describeOutlineDelete({
+        level: 'section',
+        code: section.code,
+        title: section.title,
+        sectionCount: 0,
+        itemCount: section.total,
+        producedCount: 0,
+      }),
+      url: `/api/curriculum/series/${seriesId}/outline/${encodeURIComponent(section.id)}`,
+    });
+  };
+  const requestDeleteItem = (item: BoardItem) => {
+    setDeleteError(null);
+    setDeleting({
+      spec: describeOutlineDelete({
+        level: 'item',
+        code: item.code,
+        title: item.title,
+        sectionCount: 0,
+        itemCount: 0,
+        producedCount: item.produced ? 1 : 0,
+      }),
+      url: `/api/curriculum/design/tasks/${encodeURIComponent(item.taskId)}`,
+    });
+  };
+
+  const confirmDelete = async () => {
+    if (!deleting) return;
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const response = await fetch(deleting.url, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+      });
+      const payload = (await response.json().catch(() => null)) as {
+        error?: { message?: string };
+      } | null;
+      if (!response.ok) throw new Error(payload?.error?.message ?? `失败：HTTP ${response.status}`);
+      setDeleting(null);
+      await load();
+    } catch (caught) {
+      setDeleteError(caught instanceof Error ? caught.message : '删除失败');
+    } finally {
+      setDeleteBusy(false);
+    }
   };
 
   if (!loaded) {
@@ -604,12 +710,18 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           recommendedTaskId={decision?.taskId ?? null}
           onAddSection={(chapter) => openAddSection(chapter)}
           onAddItem={(section) => openAddItem(section)}
+          onEditChapter={openEditChapter}
+          onDeleteChapter={requestDeleteChapter}
+          onEditSection={openEditSection}
+          onDeleteSection={requestDeleteSection}
+          onEditItem={(item) => setItemEditTaskId(item.taskId)}
+          onDeleteItem={requestDeleteItem}
         />
       </div>
 
       <p className="text-muted-foreground text-xs">
-        每一目的生成与导出在那一目的工作台里（打开任意一目的「生成与导出」Tab）。节的每个目
-        没有建时，看板上会留一块「新建目」的空位；删掉一节不会删目，那些目会回到「未归类」。
+        每一目的生成与导出在那一目的工作台里（打开任意一目的「生成与导出」Tab）。章、节、目
+        都可以在看板这一行右侧的「⋯」里改名或删除；删掉一节不会删目，那些目会回到「未归类」。
         跨系列的课程台账、知识体系、培养方案与批量队列在
         <Link href="/curriculum/legacy" className="mx-1 underline">
           课程台账（存档）
@@ -627,10 +739,36 @@ export function SeriesCockpit({ seriesId }: { seriesId: string }) {
           />
           <OutlineNodeDialog
             open={nodeOpen}
-            onOpenChange={setNodeOpen}
+            onOpenChange={(open) => {
+              setNodeOpen(open);
+              // 关框时清掉待编辑的行：下一次从"新建"入口打开时不能还带着上一行。
+              if (!open) setNodeEditing(null);
+            }}
             seriesId={seriesId}
-            target={nodeTarget}
-            onCreated={() => void load()}
+            target={nodeEditing ? null : nodeTarget}
+            editing={nodeEditing}
+            onSaved={() => void load()}
+          />
+          <EditItemDialog
+            open={itemEditTaskId !== null}
+            onOpenChange={(open) => {
+              if (!open) setItemEditTaskId(null);
+            }}
+            taskId={itemEditTaskId}
+            onSaved={() => void load()}
+          />
+          <OutlineDeleteDialog
+            open={deleting !== null}
+            onOpenChange={(open) => {
+              if (!open) {
+                setDeleting(null);
+                setDeleteError(null);
+              }
+            }}
+            spec={deleting?.spec ?? null}
+            busy={deleteBusy}
+            error={deleteError}
+            onConfirm={() => void confirmDelete()}
           />
           <CreateItemDialog
             open={itemOpen}
