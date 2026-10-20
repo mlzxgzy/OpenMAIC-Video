@@ -12,11 +12,11 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | 上游 `d725f191`（`v1.2.0-rc.2`，`2026-10-13` 经 `cc41a9b3` 同步；更早一次同步是 `ccdc88a5`，见 `[1.2.0-video.2]`） |
-| 本 fork 版本 | `1.2.0-video.N` 版本线（已发布 `1.2.0-video.1`、`1.2.0-video.2`、`1.2.0-video.3`、`1.2.0-video.4`、`1.2.0-video.5`，tag `v1.2.0-video.5`） |
+| 当前基线 | 上游 `6e20534f`（`v1.2.1` tag 之后 9 个提交，`2026-10-20` 经 `047175e3` 同步；更早两次同步是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`，见 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)「上游同步」） |
+| 本 fork 版本 | `X.Y.Z-video.N` 版本线，**基座跟随上游稳定版**（已发布 `1.2.0-video.1`–`1.2.0-video.5` 与 `1.2.1-video.1`，tag `v1.2.1-video.1`；规则见 §1.1 末条） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**（视频导出 / 渲染服务 / 视频生成能力）+ **课程产品层**（系列 → 课程 → 成果导向设计 → 讲/练/考闭环 → 生成 → 导出） |
-| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 5.3 万行（含界面组件、不含测试）/ 82 个 API 路由文件 / 29 张 `curriculum_*` 表，见 **§9**） |
+| 代码状态 | 二开已开始：AGENT.md（二开上下文）、CHANGELOG.fork.md（二开变更记录）、首页「场景类型」筛选（L4）、大纲 AI 修改（L4）、课堂讲稿逐句编辑 + 独立重新生成语音面板（L4）、千问 TTS 指令控制（L4）；**课程产品层与成果导向课程设计**（L4，约 7.2 万行（含界面组件、不含测试）/ 89 个 API 路由文件 / 29 张 `curriculum_*` 表，见 **§9**） |
 | 变更记录 | 二开自己的改动写 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)；上游变更仍看 `CHANGELOG.md` |
 
 ### 1.1 与上游的关系（重要）
@@ -26,8 +26,8 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 75 个提交并发布了 `v1.2.0-video.1`、
-    `v1.2.0-video.2`、`v1.2.0-video.3`、`v1.2.0-video.4`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+  - **用 merge，不要用 rebase**：二开已有 83 个提交并发布了 `v1.2.0-video.1`–
+    `1.2.0-video.5`、`v1.2.1-video.1`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
   - **已有例外**：首页「场景类型」筛选是课程生成功能（非视频链路），落在 L4
@@ -52,7 +52,7 @@
     `docker-compose.db.yml`（新增 render-service 服务与 `render:up/down` 脚本，`9b8d9b40`）。
     读 §4 那些代码时别默认是本仓库写的。
 - **v1.2.0 是破坏性大版本**（"server-first"）。课程生成从浏览器驱动改为服务端常驻进程，模型配置统一到 `openmaic.yml`，**不再支持 Vercel 等 Serverless 部署**，必须 PostgreSQL + 常驻 Node。追上游时不要把 1.1.x 的部署写法照搬过来。
-- **版本号空间是分开的**：本 fork 用 `1.2.0-video.N`，**不复用上游的版本号**。它按 semver 排在 `1.2.0-rc.1` 之后，但仍是预发布，上游发正式版 `1.2.0` 也不会与它冲突。二开发版只在根 `package.json` 改这一个字段（`@openmaic/*` 六个包的版本由 `check-package-version-bumps.mjs` 单独管，本 fork 未改动 `packages/@openmaic/`）。
+- **版本号空间是分开的，基座跟随上游稳定版**（`1.2.1-video.1` 起的规则）：本 fork 用 `X.Y.Z-video.N`——`X.Y.Z` = 已完整合并的最近一个上游**稳定版**（rc 不算，rc 是上游自身状态号），`N` 在该基座上从 1 重新计数。合并上游稳定版后发版 → `X.Y.Z-video.1`；同一基座上继续二开 → `video.N+1`；上游只有 rc → 基座不动。**为什么**：`-video.N` 是 semver 预发布段，钉死基座会在上游发出正式版后排到自己实际包含的代码之下（`1.2.0-video.5 < 1.2.0 < 1.2.1`，这正是切换规则的原因）。上游不会用 `-video` 后缀，tag 永不冲突。二开发版只在根 `package.json` 改这一个字段（`@openmaic/*` 包的版本由 `check-package-version-bumps.mjs` 单独管，二开自己的提交未改动 `packages/@openmaic/`）。
 
 ---
 
@@ -287,8 +287,8 @@ readonly writesOutsideRegistryDatabase?: true              // 见上文红线
 
 ## 9. 课程产品层与成果导向课程设计（第二个主战场）
 
-这是本 fork 在视频链路之外**最大的自研子系统**（约 **5.3 万行**（含界面组件、不含测试）、
-**82 个 API 路由文件**、**29 张 `curriculum_*` 表**、**45 个测试文件**），`1.2.0-video.3` 起成形。
+这是本 fork 在视频链路之外**最大的自研子系统**（约 **7.2 万行**（含界面组件、不含测试）、
+**89 个 API 路由文件**、**29 张 `curriculum_*` 表**、**51 个测试文件**），`1.2.0-video.3` 起成形。
 它回答的不是「怎么把课导出成视频」（那是 §4），而是「**一门课该教什么、怎么算教会了**」。
 
 ### 9.1 一条课的完整链路

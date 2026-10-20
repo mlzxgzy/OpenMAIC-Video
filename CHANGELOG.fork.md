@@ -26,7 +26,59 @@
 
 ## [Unreleased]
 
+## [1.2.1-video.1] - 2026-10-20
+
+基线是上游 `6e20534f`（`v1.2.1` tag 之后 9 个提交，`v1.2.1` 是其祖先）。本版由
+**三件独立的事**组成：
+
+- **一次上游同步**：`047175e3` 合并 `upstream/main`（36 个提交、420 个文件、
+  `+21,290 / −8,486`）。三处冲突记在 merge 提交里，其中一处是**有意偏离**：
+  `package.json` 保留二开版本号而不是采用上游的 `1.2.1`（发版时按新规则对齐为
+  `1.2.1-video.1`，见下）。另两处：`lib/prompts/types.ts` 取上游删除的
+  director-graph 聊天 PromptId、保留本 fork 的课程设计 PromptId（全仓交叉验证无
+  悬空引用）；`playwright.config.ts` 保留本 fork 的 `E2E_BASE_URL` 条件化
+  webServer。合并后续修复两处：`tests/settings/tts-instruct-control-field.test.ts`
+  补 `webFetch: null` 夹具（上游给 `ModelCapabilities` 新增了字段）、
+  `eslint.config.mjs` 忽略 `artifacts/**`（233 个 lint 误报全部来自该目录下未
+  跟踪的 vendored mermaid.min.js）。上游本批要点：**v1.2.1 web 研究套件**
+  （Kimi / DeepSeek / Firecrawl 搜索 + `webFetch` 槽位与 provider registry）、
+  **移除 legacy director-graph 课堂聊天**（`POST /api/chat` 变 404，课堂聊天只走
+  Pi）、移除 Veo provider（Google 关停 3.1 preview）、新增 `@openmaic/geometry`
+  包、行内公式渲染 / 导出修复、课程问题派生与缩略图标记、agent 语音性别匹配。
+  **升级注意**：上游删除了 `NEXT_PUBLIC_PI_CHAT_ENABLED` 回退开关，部署环境若还
+  设着这个变量，生产构建会因校验失败拒绝启动（只接受未设 / 空 / `true` / `1`）。
+- **二开自己的 6 个提交**（`--first-parent` 口径，不含本次发布提交）：系列设计层
+  与七步归属（§8.9–§8.11）、设计指纹过期提示（§8.12）、设计先行（§8.13）、
+  三步 AI 填写（§8.14–§8.16）、章 / 节 / 目改名与删除（§8.17）。
+- **版本线切换**：`1.2.0-video.N` → `1.2.1-video.1`，规则见下。
+
+**版本号说明（规则变更）**：本版起版本线从钉死基座的 `1.2.0-video.N` 切换为
+**基座跟随上游稳定版**：`X.Y.Z-video.N` 中 `X.Y.Z` = 已完整合并的最近一个上游
+**稳定版**（rc 不算——rc 是上游自身状态号），`N` 在该基座上从 1 重新计数。
+变更原因：`-video.N` 是 semver 预发布段，`1.2.0-video.5` 按 semver 排在 `1.2.0`
+与 `1.2.1` 之下——上游发出正式版之后，本 fork 的版本号排在自己实际包含的上游
+代码之下，基座段也无法再反映真实内容（本版代码已含上游 `v1.2.1` 全部内容）。
+版本空间仍然分离：上游不会用 `-video` 后缀，tag 不冲突。后续规则：合并上游
+稳定版 `X.Y.Z` 后发版 → `X.Y.Z-video.1`；同一基座上继续二开发版 → `video.2`、
+`video.3` 递增；上游只有 rc → 基座不动、继续递增。
+
+**`packages/@openmaic/` 的变化全部来自上游同步**：`dsl 0.11.3 → 0.12.0`、
+`generation 0.3.18 → 0.3.22`、`renderer 0.1.13 → 0.1.16`、`editor 0.0.11 →
+0.0.12`、新增 `geometry 0.1.0`（`storage 0.37.3`、`importer 0.3.1` 未变），
+`node scripts/check-package-version-bumps.mjs v1.2.0-video.5` 通过；二开自己
+没有改这些包。因此本版**会**命中 `publish-packages.yml` 的 `push: main` +
+`packages/*/package.json` 路径条件。
+
+**读法**：本版二开部分的主题是**系列设计层的成形**——设计从"每一目各写一份"
+上移到系列（§8.9–§8.11），AI 从"整份重写"变成"候选勾选"（§8.14–§8.16），
+设计改了之后大纲哪里过期有了如实提示（§8.12），大纲本身终于可编辑（§8.17）。
+
+本版共 **512 个文件、+38,036 / −8,735 行**（`git diff --shortstat
+v1.2.0-video.5..HEAD`，含上游同步的 420 个文件；不含本次发布提交自身）。
+
 ### Added
+
+> 下列条目原样来自本次的 `[Unreleased]`，未作改写。
 
 - **系列大纲的章 / 节 / 目都能改名和删除**：看板（`/curriculum/series/[id]` 的「系列大纲
   与出片」）原来只有新建入口，写错字、多建一节、少建一目都只能改数据库——接口其实早就有
@@ -178,6 +230,32 @@
   「未归类」的目，驾驶舱根本不会进入那 6 条用例要断言的状态（改版后红了一轮）。
   跑法注意事项写进了 spec 头注释：用 `localhost` 而非 `127.0.0.1`（Next dev 会 403 静态
   chunk），并且要起新的 dev server（长跑实例里旧 route 模块不会被替换）。
+
+### `1.2.1-video.1` 的验证状态
+
+**通过**（本机，本次发布提交之前）：
+
+| 命令 | 结果 |
+| --- | --- |
+| `tsc --noEmit` | exit 0（含本次收编的章 / 节 / 目改名删除改动） |
+| `npx eslint`（本次改动文件） | 0 error（e2e spec 按仓库 ignore 规则跳过） |
+| `npx prettier --check AGENT.md CHANGELOG.fork.md package.json` | All matched files use Prettier code style |
+| `node scripts/check-package-version-bumps.mjs v1.2.0-video.5` | 通过（`dsl / generation / renderer / editor` 由上游 bump、`geometry` 新增） |
+| `vitest run tests/curriculum` | **51 文件 920 例全绿**（含新增 `outline-actions` 39 例） |
+
+上游同步部分（`047175e3`）在合并当轮已单独验证：`pnpm install` +
+`build:packages` 通过、`tsc --noEmit` exit 0、`eslint .` 0 error / 20 warning、
+全量 vitest 13293 例（12852 passed / 132 failed / 309 skipped）——失败集合与
+合并前基线（`2de2bc22` 独立 worktree 实跑）逐文件一致，属本机 `openmaic.yml`
+与测试的既有耦合及 pg / 浏览器环境既有问题，非合并回归。
+
+**未做 / 未跑**：
+
+- **E2E 未跑**：新增的 `curriculum-series-outline-edit.spec.ts`（章 / 节 / 目改名
+  删除的浏览器用例）与既有 e2e 套件都需要另起 dev server 整套环境，本版未执行。
+- **未跑 `pnpm build`** 与 `scripts/verification/` 活体脚本。
+- **未验证真实课程生成与 MP4 渲染**；视频链路本版一行未动（上游同步触及的
+  renderer 修复属上游内容，见上游 `CHANGELOG.md`）。
 
 ## [1.2.0-video.5] - 2026-10-18
 
@@ -1970,6 +2048,8 @@ hooks 测试（`tests/server/generation-run-hooks*`、`outline-host-failure`、
 它按 semver 排在 `1.2.0-rc.1` 之后（`semver.gt('1.2.0-video.1', '1.2.0-rc.1') === true`），
 但仍是**预发布**：上游若发布正式版 `1.2.0`，本 fork 的版本号不会与之冲突。
 后续同步上游时以 `1.2.0-video.2` 递增，不要跳到 `1.2.1`。
+（该规则自 `[1.2.1-video.1]` 起调整为基座跟随上游稳定版，见该节「版本号说明
+（规则变更）」；此处保留当时的原始记录。）
 
 ### Added
 
@@ -2343,9 +2423,10 @@ instrumentation.ts                     generation-run 钩子 + 批量 runner + s
 
 ### 上游同步
 
-`upstream` 远端已配置（`2026-10-06`），共两次同步：`ccdc88a5`（见
-`[1.2.0-video.2]` 发布节）与 `d725f191` / `v1.2.0-rc.2`（`cc41a9b3`，见
-`[1.2.0-video.5]` 发布节）；`1.2.0-video.3` 与 `1.2.0-video.4` **未同步上游**。日后同步：
+`upstream` 远端已配置（`2026-10-06`），共三次同步：`ccdc88a5`（见
+`[1.2.0-video.2]` 发布节）、`d725f191` / `v1.2.0-rc.2`（`cc41a9b3`，见
+`[1.2.0-video.5]` 发布节）与 `6e20534f` / `v1.2.1` 之后（`047175e3`，见
+`[1.2.1-video.1]` 发布节）；`1.2.0-video.3` 与 `1.2.0-video.4` **未同步上游**。日后同步：
 
 ```bash
 git fetch upstream
@@ -2354,8 +2435,8 @@ git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
 git merge upstream/main
 ```
 
-**不要用 `rebase` 同步**：二开已有 75 个提交、已发布 `v1.2.0-video.1`、
-`v1.2.0-video.2`、`v1.2.0-video.3`、`v1.2.0-video.4`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
+**不要用 `rebase` 同步**：二开已有 83 个提交、已发布 `v1.2.0-video.1`–
+`1.2.0-video.5` 与 `v1.2.1-video.1`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 `merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
 
 同步后至少要跑：`tsc`、`lint`、`vitest`。若上游改过 `packages/@openmaic`，
@@ -2367,8 +2448,8 @@ git merge upstream/main
 
 | 项 | 值 |
 | --- | --- |
-| 上游基线 | `d725f191`（`v1.2.0-rc.2`，`2026-10-13` 经 `cc41a9b3` 同步；更早一次是 `ccdc88a5`） |
-| 本 fork 版本线 | `1.2.0-video.N`（首个发布：`1.2.0-video.1`，见上方版本号说明） |
+| 上游基线 | `6e20534f`（`v1.2.1` tag 之后 9 个提交，`2026-10-20` 经 `047175e3` 同步；更早两次是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`） |
+| 本 fork 版本线 | `X.Y.Z-video.N`，基座跟随上游稳定版（首个：`1.2.1-video.1`；旧线 `1.2.0-video.1`–`.5` 见各自发布节） |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |
 
@@ -2392,8 +2473,9 @@ git log --oneline --first-parent ccdc88a5..HEAD   # 只看主干（上游 sync �
 | `v1.2.0-video.1` → `v1.2.0-video.2`（`57a35712`，含一次上游 `git merge upstream/main`） | 7 |
 | `v1.2.0-video.2` → `v1.2.0-video.3`（`b62c71f0`） | 37 |
 | `v1.2.0-video.3` → `v1.2.0-video.4`（`19a83d8c`） | 12 |
-| `v1.2.0-video.4` → `v1.2.0-video.5`（本提交） | 10 |
-| **合计** | **75** |
+| `v1.2.0-video.4` → `v1.2.0-video.5`（`60db8937`） | 10 |
+| `v1.2.0-video.5` → `v1.2.1-video.1`（本提交） | 8 |
+| **合计** | **83** |
 
 > 这张表在 `1.2.0-video.5` 发布时**重算过**：旧表后两行各少 1（36/11 实为 37/12），
 > 合计写 64，而它自己的四行加总只有 63。现在每一行都是
