@@ -41,6 +41,7 @@
  * owner-bound document store); a worker executing it loses its lease.
  */
 import { ModelAuthorizationError } from '@/lib/server/model-config/model-authorization';
+import { audioFailureKind } from '@/lib/audio/provider-error';
 import { isAbortError } from '@openmaic/generation';
 import type { Queryable } from '@openmaic/storage/document/pg';
 
@@ -88,12 +89,13 @@ import {
 } from './document';
 import {
   advertisedVoices,
+  attachProviderInstructions,
   clipProviderConfig,
   clipVoice,
   clipVoiceAfterMissingClone,
   narratorVoiceForGeneration,
-  runNarrationPromptSection,
-  runQwenInstructions,
+  runRequestedNarrationInstructions,
+  runRequestedNarrationPromptSection,
   slotVoice,
 } from './narration-voice';
 import {
@@ -440,6 +442,7 @@ async function executeClaimedRun(
     refusalStatus,
     sleep: services.sleep,
     signal: retrySignal,
+    rethrow: (error) => audioFailureKind(error) === 'voice-incompatible',
     onRetry: async (event) => {
       log.warn(
         `run ${run.id}: retrying ${stepId} (${event.attempt}/${event.maxAttempts}): ${event.cause}`,
@@ -727,9 +730,9 @@ async function executeClaimedRun(
         // the guidance is resolved from the model that will narrate it — and is
         // empty for every provider without the feature, leaving the prompts
         // byte-identical to before.
-        const narrationPromptSection = runNarrationPromptSection(
+        const narrationPromptSection = runRequestedNarrationPromptSection(
           await services.narrationTarget(owner),
-          input.qwenInstructControl,
+          input,
         );
         const result = await withRouteRetry(
           () =>
@@ -1015,11 +1018,7 @@ async function executeClaimedRun(
     const bound = teacher?.voiceConfig;
     const { speed } = slotVoice(target, input.voice);
     // What this run's instruction-control switch means for the model narrating.
-    const qwenInstructions = runQwenInstructions(
-      target,
-      input.qwenInstructControl,
-      input.qwenInstructText,
-    );
+    const narrationInstructions = runRequestedNarrationInstructions(target, input);
     const stageId = agents().stage.id;
     const { languageDirective } = outline();
     const allocated: string[] = [];
@@ -1048,11 +1047,9 @@ async function executeClaimedRun(
         voiceId: voice.voiceId,
         language: languageDirective,
       });
-      // Qwen's instruction control rides with the voice's own provider options,
+      // Instruction control rides with the voice's own provider options,
       // already gated on the model this run narrates with.
-      if (qwenInstructions && (providerOptions as Record<string, unknown> | undefined)) {
-        (providerOptions as Record<string, unknown>).qwenInstructions = qwenInstructions;
-      }
+      attachProviderInstructions(providerOptions, narrationInstructions);
       try {
         return await withRouteRetry(
           () =>

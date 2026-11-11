@@ -51,6 +51,7 @@
  */
 import {
   AudioLines,
+  Clapperboard,
   BookOpen,
   Copy,
   FileSearch,
@@ -222,10 +223,12 @@ function materialStatusFailed(value: unknown): boolean {
   });
 }
 
-/** Runtime success can still carry a terminal material-extraction failure. */
+/**
+ * Only the call itself failing is an error (#1880): a call that succeeded and
+ * reports a file that failed to parse is a result, said as a quiet chip.
+ */
 export function isWorkbenchToolFailed(node: ChatNode): boolean {
-  if (node.toolState === 'failed') return true;
-  return MATERIAL_TOOLS.has(node.toolName ?? '') && materialStatusFailed(node.toolDetails);
+  return node.toolState === 'failed';
 }
 
 /**
@@ -268,6 +271,19 @@ function salientArg(args: Record<string, unknown>): string | undefined {
  * label with the title arriving four minutes later is exactly the "nothing is
  * happening" feeling the traces were added for.
  */
+const teachingToolLabels = {
+  read_file: 'workbench.tool.label.readFile',
+  write_file: 'workbench.tool.label.writeFile',
+  list_files: 'workbench.tool.label.listFiles',
+  manage_file: 'workbench.tool.label.manageFile',
+  run_build: 'workbench.tool.label.runBuild',
+  collect_build: 'workbench.tool.label.collectBuild',
+  read_next_skill: 'workbench.tool.label.readTeachingSkill',
+  request_skill_review: 'workbench.tool.label.requestReview',
+  respond_to_learner: 'workbench.tool.label.respondToLearner',
+  complete_stage: 'workbench.tool.label.completeTeachingStage',
+} as const;
+
 export function presentTool(
   node: ChatNode,
   plan: PlannedPage[] = [],
@@ -277,11 +293,27 @@ export function presentTool(
   const args = node.toolArgs ?? {};
   const d = asRecord(node.toolDetails);
   const failed = isWorkbenchToolFailed(node);
-  const extractionFailed = materialStatusFailed(d);
+  const extractionFailed = MATERIAL_TOOLS.has(name) && materialStatusFailed(d);
   const chips: ToolChip[] = [];
   const localizedResult = node.toolResultCopyKey ? t(node.toolResultCopyKey) : node.toolResultText;
   const errorLine = (subject: string, _raw?: string) =>
     formatErrorLine(subject, localizedResult, t('workbench.tool.errorSeparator'));
+
+  const teachingLabel = teachingToolLabels[name as keyof typeof teachingToolLabels];
+  if (teachingLabel)
+    return {
+      icon: Wrench,
+      label: t(teachingLabel),
+      subject: str(args.path),
+      chips,
+      ...(failed
+        ? {
+            errorText: t(
+              d.interrupted ? 'workbench.tool.error.interrupted' : 'workbench.tool.error.generic',
+            ),
+          }
+        : {}),
+    };
 
   switch (name) {
     // Material operations are intentionally one quiet, non-expandable row.
@@ -293,18 +325,24 @@ export function presentTool(
         label: t('workbench.tool.label.listMaterials'),
         chips,
         hidePayload: true,
-        ...(failed
-          ? {
-              errorText: t(
-                extractionFailed
-                  ? 'workbench.tool.error.materialExtraction'
-                  : 'workbench.tool.error.listMaterials',
-              ),
-            }
-          : {}),
+        ...(failed ? { errorText: t('workbench.tool.error.listMaterials') } : {}),
       };
 
-    case 'extract_material':
+    case 'extract_material': {
+      // Whether THIS call started it, from the tool's own `started`: a source
+      // already extracting or already extracted is not started again.
+      if (!failed) {
+        const status = str(d.status);
+        if (status === 'failed') {
+          chips.push({ label: t('workbench.tool.chip.parseFailed'), tone: 'neutral' });
+        } else if (d.started === true) {
+          chips.push({ label: t('workbench.tool.chip.extractionStarted'), tone: 'accent' });
+        } else if (status === 'pending' || status === 'running') {
+          chips.push({ label: t('workbench.tool.chip.extractionInProgress'), tone: 'neutral' });
+        } else if (status === 'done') {
+          chips.push({ label: t('workbench.tool.chip.extractionDone'), tone: 'neutral' });
+        }
+      }
       return {
         icon: FileSearch,
         label: t('workbench.tool.label.extractMaterial'),
@@ -312,14 +350,111 @@ export function presentTool(
         hidePayload: true,
         ...(failed ? { errorText: t('workbench.tool.error.materialExtraction') } : {}),
       };
+    }
 
     case 'wait_for_materials':
+      if (!failed && extractionFailed) {
+        chips.push({ label: t('workbench.tool.chip.parseFailed'), tone: 'neutral' });
+      } else if (!failed) {
+        if (d.complete === true) {
+          chips.push({ label: t('workbench.tool.chip.extractionComplete'), tone: 'accent' });
+        } else if (d.timedOut === true) {
+          chips.push({ label: t('workbench.tool.chip.extractionStillRunning'), tone: 'neutral' });
+        }
+      }
       return {
         icon: FileSearch,
         label: t('workbench.tool.label.waitMaterials'),
         chips,
         hidePayload: true,
         ...(failed ? { errorText: t('workbench.tool.error.materialExtraction') } : {}),
+      };
+
+    // Organizing the knowledge base: one quiet row each, from the tool's own
+    // `status`. No result card, no undo, no link to a folder (RFC #1716 §6).
+    case 'list_material_folders': {
+      const folders = Array.isArray(d.folders) ? d.folders.length : undefined;
+      if (folders !== undefined && !failed) {
+        chips.push({ label: t('workbench.tool.chip.materialFolders', { count: folders }) });
+      }
+      return {
+        icon: FolderTree,
+        label: t('workbench.tool.label.listMaterialFolders'),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.listMaterialFolders') } : {}),
+      };
+    }
+
+    case 'create_material_folder':
+      if (!failed && d.created === false) {
+        chips.push({ label: t('workbench.tool.chip.folderExisted'), tone: 'neutral' });
+      }
+      return {
+        icon: FolderPlus,
+        label: t('workbench.tool.label.createMaterialFolder'),
+        subject: str(d.name) ?? str(args.name),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.createMaterialFolder') } : {}),
+      };
+
+    case 'rename_material_folder':
+      if (!failed && d.status === 'unchanged') {
+        chips.push({ label: t('workbench.tool.chip.unchanged'), tone: 'neutral' });
+      }
+      return {
+        icon: Pencil,
+        label: t('workbench.tool.label.renameMaterialFolder'),
+        subject: str(d.name) ?? str(args.name),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.renameMaterialFolder') } : {}),
+      };
+
+    case 'move_materials': {
+      if (!failed) {
+        // What actually moved, not what was asked for: a source already in
+        // the folder is named but not moved.
+        const moved =
+          num(d.movedCount) ?? (Array.isArray(d.materialIds) ? d.materialIds.length : undefined);
+        if (d.status === 'unchanged') {
+          chips.push({ label: t('workbench.tool.chip.unchanged'), tone: 'neutral' });
+        } else {
+          if (moved !== undefined) {
+            chips.push({
+              label: t(
+                moved === 1 ? 'workbench.tool.chip.material' : 'workbench.tool.chip.materials',
+                { count: moved },
+              ),
+            });
+          }
+          // The action, not a state; the result names no source folder.
+          if (d.folderId === null) {
+            chips.push({ label: t('workbench.tool.chip.movedOutOfFolder'), tone: 'neutral' });
+          }
+        }
+      }
+      return {
+        icon: FolderInput,
+        label: t('workbench.tool.label.moveMaterials'),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.moveMaterials') } : {}),
+      };
+    }
+
+    case 'rename_material':
+      if (!failed && d.status === 'unchanged') {
+        chips.push({ label: t('workbench.tool.chip.unchanged'), tone: 'neutral' });
+      }
+      return {
+        icon: Pencil,
+        label: t('workbench.tool.label.renameMaterial'),
+        subject: str(d.name) ?? str(args.name),
+        chips,
+        hidePayload: true,
+        ...(failed ? { errorText: t('workbench.tool.error.renameMaterial') } : {}),
       };
 
     case 'read_material':
@@ -400,6 +535,42 @@ export function presentTool(
         hidePayload: true,
         ...(failed
           ? { errorText: errorLine(t('workbench.tool.error.listVoices'), node.toolResultText) }
+          : {}),
+      };
+
+    // ── Page media ───────────────────────────────────────────────────────────
+    // The subject is the agent's own prompt: what is being drawn or filmed.
+    case 'generate_image':
+      return {
+        icon: ImageIcon,
+        label: t('workbench.tool.label.generateImage'),
+        subject: str(args.prompt),
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.generateImage'), node.toolResultText) }
+          : {}),
+      };
+
+    case 'generate_video':
+      return {
+        icon: Clapperboard,
+        label: t('workbench.tool.label.generateVideo'),
+        subject: str(args.prompt),
+        chips,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.generateVideo'), node.toolResultText) }
+          : {}),
+      };
+
+    // Its one argument is a material id, nothing a person reads.
+    case 'import_pptx':
+      return {
+        icon: Presentation,
+        label: t('workbench.tool.label.importPptx'),
+        chips,
+        hidePayload: true,
+        ...(failed
+          ? { errorText: errorLine(t('workbench.tool.error.importPptx'), node.toolResultText) }
           : {}),
       };
 
@@ -703,29 +874,46 @@ export function presentTool(
       };
     }
 
-    case 'render_scene_preview':
-      // `args.sceneId` is a persisted scene id, and the plan is keyed by order,
-      // so there is no title to resolve here — the verb stands alone.
+    case 'render_scene_preview': {
+      // The result names the page's order; the argument may be an id the plan
+      // cannot resolve, so a running row shows the verb alone.
+      const order = num(d.order);
+      if (order !== undefined) {
+        chips.push({ label: t('workbench.tool.chip.pageOrder', { order }) });
+      }
       return {
         icon: ImageIcon,
         label: t('workbench.tool.label.previewScene'),
+        subject: order !== undefined ? plan.find((p) => p.order === order)?.title : undefined,
         chips,
         ...(failed
           ? { errorText: errorLine(t('workbench.tool.error.previewScene'), node.toolResultText) }
           : {}),
       };
+    }
 
     // ── Stage-document tools ──────────────────────────────────────────────────
     // The subject is what the agent actually
     // aimed at: the document path it read, the intent it wrote for, the query it
     // searched — never the wire stageId.
     case 'read_stage': {
+      // A JSON path is the wire address, not something a reader names: a page
+      // order reads as "Page N" (with its planned title), the outline as the
+      // outline, and any other selector — the whole stage, a scene id — as the
+      // verb alone.
       const path = str(d.path) ?? str(args.path);
+      const order = path ? /^\/scenes\/([1-9]\d*)(?:\/|$)/.exec(path)?.[1] : undefined;
+      let subject: string | undefined;
+      if (order !== undefined) {
+        chips.push({ label: t('workbench.tool.chip.pageOrder', { order: Number(order) }) });
+        subject = plan.find((p) => p.order === Number(order))?.title;
+      } else if (path === '/outline') {
+        subject = t('workbench.tool.section.outline');
+      }
       return {
         icon: BookOpen,
         label: t('workbench.tool.label.readCourse'),
-        // path "" is the whole stage — the verb alone is the honest row.
-        subject: path && path !== '' ? path : undefined,
+        subject,
         chips,
         ...(failed
           ? { errorText: errorLine(t('workbench.tool.error.readCourse'), node.toolResultText) }

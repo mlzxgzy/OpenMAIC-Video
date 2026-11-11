@@ -9,6 +9,11 @@
  *   /workspace?session=<id>                     → nav + conversation
  *   /workspace?course=<stageId>                 → nav + classroom
  *   /workspace?session=<id>&course=<stageId>    → all three
+ *   /workspace?…&view=<page>                    → a page in the main area (the
+ *                                                 knowledge base, the course
+ *                                                 library, or a host page); the
+ *                                                 panes it covers stay as they
+ *                                                 were
  *
  * The two params are INDEPENDENT, which is the whole point: an agent session
  * and a course are many-to-many in the UI. A session carries its own stage on
@@ -23,6 +28,20 @@
 
 export const WORKSPACE_SESSION_PARAM = 'session';
 export const WORKSPACE_COURSE_PARAM = 'course';
+export const WORKSPACE_VIEW_PARAM = 'view';
+/** The knowledge base page (RFC #1716 §7). */
+export const WORKSPACE_LIBRARY_VIEW = 'library';
+/** The owner's course library ("My courses"). */
+export const WORKSPACE_COURSES_VIEW = 'courses';
+
+/**
+ * Whether a string can name a main-area page. Built-in pages and the pages a
+ * host adds through the shell extensions share one namespace of short,
+ * URL-safe ids; anything else in `?view=` is ignored rather than trusted.
+ */
+export function isWorkspaceViewId(value: string): boolean {
+  return /^[a-z][a-z0-9-]{0,39}$/.test(value);
+}
 export const WORKSPACE_PATH = '/workspace';
 
 export interface WorkspacePanes {
@@ -30,6 +49,13 @@ export interface WorkspacePanes {
   readonly sessionId: string | null;
   /** The course open in the classroom pane, or null. */
   readonly courseId: string | null;
+  /**
+   * A page fills the main area: the knowledge base (`library`), the course
+   * library (`courses`), or a page a host registered. The session and course
+   * stay in the snapshot underneath it (their panes stay mounted, hidden), so
+   * leaving the page puts the workspace back as it was. Absent means none.
+   */
+  readonly view?: string;
 }
 
 /**
@@ -71,15 +97,17 @@ function readParam(search: ParamReader, name: string): string | null {
 }
 
 export function readWorkspacePanes(search: ParamReader): WorkspacePanes {
+  const view = readParam(search, WORKSPACE_VIEW_PARAM);
   return {
     sessionId: readParam(search, WORKSPACE_SESSION_PARAM),
     courseId: readParam(search, WORKSPACE_COURSE_PARAM),
+    ...(view && isWorkspaceViewId(view) ? { view } : {}),
   };
 }
 
 /**
  * The canonical URL for a pane state. Param order is fixed (session, then
- * course) so the same layout always produces the same string — a `router`
+ * course, then view) so the same layout always produces the same string — a `router`
  * comparison against `window.location` never sees two spellings of one state.
  */
 export function workspaceHref(panes: WorkspacePanes): string {
@@ -90,6 +118,7 @@ export function workspaceHref(panes: WorkspacePanes): string {
   if (panes.courseId) {
     parts.push(`${WORKSPACE_COURSE_PARAM}=${encodeURIComponent(panes.courseId)}`);
   }
+  if (panes.view) parts.push(`${WORKSPACE_VIEW_PARAM}=${encodeURIComponent(panes.view)}`);
   return parts.length === 0 ? WORKSPACE_PATH : `${WORKSPACE_PATH}?${parts.join('&')}`;
 }
 
@@ -103,7 +132,11 @@ export function workspaceLayout(panes: WorkspacePanes): WorkspaceLayout {
 }
 
 export function samePanes(a: WorkspacePanes, b: WorkspacePanes): boolean {
-  return a.sessionId === b.sessionId && a.courseId === b.courseId;
+  return (
+    a.sessionId === b.sessionId &&
+    a.courseId === b.courseId &&
+    (a.view ?? null) === (b.view ?? null)
+  );
 }
 
 /**
@@ -113,7 +146,7 @@ export function samePanes(a: WorkspacePanes, b: WorkspacePanes): boolean {
  * the panes one object again.
  */
 export function withCourse(panes: WorkspacePanes, courseId: string | null): WorkspacePanes {
-  return { sessionId: panes.sessionId, courseId: courseId || null };
+  return { ...panes, courseId: courseId || null };
 }
 
 /** Open (or activate) one course without duplicating an existing tab. */
@@ -163,6 +196,22 @@ export function closeCourseTab(tabs: WorkspaceCourseTabs, courseId: string): Wor
       ? courseIds[Math.min(at, courseIds.length - 1)]
       : tabs.activeCourseId;
   return { courseIds, activeCourseId, closedCourseIds };
+}
+
+/**
+ * The URL dropped the classroom (browser Back, a history snapshot): every tab
+ * it held now counts as closed. Forgetting them instead would let a live
+ * `stage_link` that already opened one of them read as new and reopen it,
+ * pushing a fresh entry over the one Back just restored. Opening a course
+ * again, by URL or by click, takes it off the closed list (`openCourseTab`).
+ */
+export function closeAllCourseTabs(tabs: WorkspaceCourseTabs): WorkspaceCourseTabs {
+  if (tabs.courseIds.length === 0 && tabs.activeCourseId === null) return tabs;
+  return {
+    courseIds: [],
+    activeCourseId: null,
+    closedCourseIds: [...new Set([...(tabs.closedCourseIds ?? []), ...tabs.courseIds])],
+  };
 }
 
 /** Make a remembered tab active; unknown ids are deliberately ignored. */
@@ -224,7 +273,19 @@ function withClosedCourseIds(
  */
 export function withSession(panes: WorkspacePanes, sessionId: string | null): WorkspacePanes {
   if (sessionId === panes.sessionId) return panes;
-  return { sessionId: sessionId || null, courseId: panes.courseId };
+  return { ...panes, sessionId: sessionId || null };
+}
+
+/**
+ * Open a main-area page, or leave it with `null`. `withCourse` and
+ * `withSession` keep whichever is open, so a background change to the panes
+ * underneath (an agent-created course, say) never takes the teacher off the
+ * page; only the teacher's own navigation passes `null` here.
+ */
+export function withView(panes: WorkspacePanes, view: string | null): WorkspacePanes {
+  if ((panes.view ?? null) === view) return panes;
+  const { view: _closed, ...underneath } = panes;
+  return view ? { ...underneath, view } : underneath;
 }
 
 /** The attached job owns only the active course, never a background tab. */
@@ -319,9 +380,24 @@ export function parseChatWidth(stored: string | null): number {
   return clampChatWidth(Number.parseFloat(stored));
 }
 
-/** A persisted boolean flag. Only the exact string `'1'` means collapsed. */
-export function parseCollapsed(stored: string | null): boolean {
+/**
+ * A persisted boolean flag. Only the exact string `'1'` means collapsed; with
+ * nothing stored, the caller's default applies.
+ */
+export function parseCollapsed(stored: string | null, fallback = false): boolean {
+  if (stored === null) return fallback;
   return stored === '1';
+}
+
+/**
+ * Whether the navigation rail starts folded when the teacher has never set it.
+ * Folded on the home surface (#1957: the home page is the workspace with its
+ * sidebar collapsed by default); every deep link keeps the expanded default.
+ * Decided once, from the panes the workspace was entered with — the rail does
+ * not fold or unfold by itself as panes open afterwards.
+ */
+export function defaultNavCollapsed(entry: WorkspacePanes): boolean {
+  return workspaceLayout(entry) === 'home' && !entry.view;
 }
 
 export interface PaneCollapse {
@@ -345,6 +421,11 @@ export interface WorkspaceRender {
   readonly classroomTab: boolean;
   /** The home surface (hero + composer + discover) fills the main column. */
   readonly home: boolean;
+  /**
+   * The main-area page on screen, or null. Every pane under it is off screen
+   * (mounted ones stay mounted, hidden) and no reopen tab shows.
+   */
+  readonly view: string | null;
 }
 
 /**
@@ -368,6 +449,21 @@ export function resolveWorkspaceRender(input: {
   readonly draftConversation?: boolean;
 }): WorkspaceRender {
   const { panes, collapse } = input;
+
+  // Before playback: full-screen playback belongs to a classroom on screen,
+  // and the page covers the classroom.
+  if (panes.view) {
+    return {
+      navRail: collapse.nav,
+      chat: false,
+      chatTab: false,
+      classroom: false,
+      classroomTab: false,
+      home: false,
+      view: panes.view,
+    };
+  }
+
   const layout = workspaceLayout(panes);
   const playback = input.playback && layout !== 'home' && panes.courseId !== null;
 
@@ -379,6 +475,7 @@ export function resolveWorkspaceRender(input: {
       classroom: true,
       classroomTab: false,
       home: false,
+      view: null,
     };
   }
 
@@ -402,5 +499,6 @@ export function resolveWorkspaceRender(input: {
     classroom,
     classroomTab: courseOpen && collapse.classroom,
     home,
+    view: null,
   };
 }

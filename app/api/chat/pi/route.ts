@@ -17,11 +17,9 @@ import {
   isPiNativeChildSpotlightEnabled,
 } from '@/lib/config/feature-flags';
 import { createLogger } from '@/lib/logger';
-import {
-  getPiMaxActionsPerAgent,
-  getPiMaxAgentTurns,
-  resolveAgentConfigs,
-} from '@/lib/chat/pi/config';
+import { resolveAgentConfigs } from '@/lib/chat/pi/config';
+import { createWhiteboardPreview } from '@/lib/chat/pi/whiteboard-preview';
+import { getRenderServiceCapability } from '@/lib/server/render-service';
 import { runPiDirectorLoop } from '@/lib/chat/pi/director-loop';
 import type { SendEvent } from '@/lib/chat/pi/types';
 import { requestWorkspaceId } from '@/lib/server/model-config/runtime';
@@ -198,8 +196,6 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
     }
 
     const signal = req.signal;
-    const abortController = new AbortController();
-    signal.addEventListener('abort', () => abortController.abort(), { once: true });
 
     const { readable, writable } = new TransformStream();
     const writer = writable.getWriter();
@@ -213,8 +209,7 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
       enabled: false,
     };
 
-    const maxAgentTurns = getPiMaxAgentTurns(body);
-    const maxActionsPerAgent = getPiMaxActionsPerAgent(body);
+    const supportsToolImages = modelInfo?.capabilities?.vision === true;
     const enableWhiteboardTools = body.config.piEnableWhiteboardTools === true;
     const childRuntimeMode = isPiNativeChildRuntimeEnabled() ? 'native' : 'legacy';
     const enableNativeChildSpotlight = isPiNativeChildSpotlightEnabled();
@@ -273,7 +268,7 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
     }
 
     log.info(
-      `Pi request agents=${body.config.agentIds.join(', ')} messages=${body.messages.length} maxAgentTurns=${maxAgentTurns}`,
+      `Pi request agents=${body.config.agentIds.join(', ')} messages=${body.messages.length}`,
     );
 
     (async () => {
@@ -293,6 +288,18 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
       try {
         startHeartbeat();
 
+        // A configured RENDER_SERVICE_URL is not enough for board images: the
+        // service must pass the same /health probe as render_scene_preview
+        // (#2108). Probed only when an image could otherwise be sent; an unset
+        // URL resolves disabled without a request.
+        const whiteboardPreview =
+          supportsToolImages &&
+          nativeWhiteboardService &&
+          validRequestStartStageId &&
+          (await getRenderServiceCapability()).enabled
+            ? createWhiteboardPreview(principal.ownerId, validRequestStartStageId)
+            : undefined;
+
         await runPiDirectorLoop({
           body,
           elementReference,
@@ -300,13 +307,13 @@ async function chat(req: NextRequest, principal: OwnerPrincipal): Promise<Respon
           agentConfigs,
           send,
           languageModel,
+          supportsToolImages,
+          whiteboardPreview,
           thinkingConfig,
           maxOutputTokens: modelInfo?.outputWindow,
           contextWindow: modelInfo?.contextWindow,
-          abortSignal: abortController.signal,
+          abortSignal: signal,
           signal,
-          maxAgentTurns,
-          maxActionsPerAgent,
           enableWhiteboardTools,
           childRuntimeMode,
           enableNativeChildSpotlight,

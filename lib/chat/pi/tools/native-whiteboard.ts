@@ -16,6 +16,7 @@ import { Value } from 'typebox/value';
 import { createHash } from 'node:crypto';
 import katex from 'katex';
 import { safeKatexOptions } from '@openmaic/dsl';
+import { INPUT_PATH_LIMITS, validateShapeGeometry } from '@openmaic/geometry';
 
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
 import {
@@ -35,6 +36,7 @@ import {
   type WhiteboardRuntimeOperationV1,
   type WhiteboardRuntimePayloadV1,
 } from '@/lib/whiteboard/runtime/types';
+import { decodeHtmlEntities } from '@/lib/export/pptx-rich-text';
 import { queryWhiteboardVisibility } from '../whiteboard-visibility';
 import type { SendEvent } from '../types';
 
@@ -43,12 +45,16 @@ const ExpectedLastSeq = Type.Unsafe<number | null>({
   type: ['integer', 'null'],
   minimum: 0,
   description:
-    'Copy nextMutation.expectedLastSeq exactly from the latest wb_read result. Use null only when that value is null.',
+    'Copy nextMutation.expectedLastSeq exactly from the latest successful wb_read or mutation result. Use null only when that value is null.',
 });
 const NativeWhiteboardDrawTextParams = Type.Object(
   {
     expectedLastSeq: ExpectedLastSeq,
-    content: Type.String({ minLength: 1, pattern: '\\S' }),
+    content: Type.String({
+      minLength: 1,
+      pattern: '\\S',
+      description: 'Plain text, not HTML markup or HTML entities.',
+    }),
     x: Type.Number(),
     y: Type.Number(),
     width: Type.Optional(Type.Number({ exclusiveMinimum: 0 })),
@@ -61,16 +67,46 @@ const NativeWhiteboardDrawTextParams = Type.Object(
 const NativeWhiteboardDrawShapeParams = Type.Object(
   {
     expectedLastSeq: ExpectedLastSeq,
-    shape: Type.Union([
-      Type.Literal('rectangle'),
-      Type.Literal('circle'),
-      Type.Literal('triangle'),
-    ]),
     x: Type.Number(),
     y: Type.Number(),
     width: Type.Number({ exclusiveMinimum: 0 }),
     height: Type.Number({ exclusiveMinimum: 0 }),
-    fillColor: Type.Optional(Type.String({ minLength: 1 })),
+    rotate: Type.Optional(
+      Type.Number({
+        description:
+          'Finite angle in degrees around the box center; defaults to 0. Positive is clockwise.',
+      }),
+    ),
+    fillColor: Type.Optional(
+      Type.String({ minLength: 1, description: 'Use transparent for unfilled paths.' }),
+    ),
+    stroke: Type.Optional(
+      Type.Object(
+        {
+          color: Type.String({ minLength: 1 }),
+          width: Type.Number({ exclusiveMinimum: 0, maximum: INPUT_PATH_LIMITS.maxCoordinate }),
+          style: Type.Optional(
+            Type.Union([Type.Literal('solid'), Type.Literal('dashed'), Type.Literal('dotted')]),
+          ),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    path: Type.String({
+      minLength: 1,
+      maxLength: INPUT_PATH_LIMITS.maxLength,
+      pattern: '\\S',
+      description: 'SVG path d data only, beginning with M or m; never a complete SVG document.',
+    }),
+    // Homogeneous items works with providers that reject the older tuple items array.
+    viewBox: Type.Unsafe<[number, number]>({
+      type: 'array',
+      items: Type.Number({ exclusiveMinimum: 0 }),
+      minItems: 2,
+      maxItems: 2,
+      description:
+        'Positive [width, height] in path coordinates. The element width/height scale these coordinates independently.',
+    }),
   },
   { additionalProperties: false },
 );
@@ -265,12 +301,15 @@ const DRAW_TEXT_KEYS = new Set([
 ]);
 const DRAW_SHAPE_KEYS = new Set([
   'expectedLastSeq',
-  'shape',
   'x',
   'y',
   'width',
   'height',
   'fillColor',
+  'rotate',
+  'path',
+  'viewBox',
+  'stroke',
 ]);
 const DRAW_CHART_KEYS = new Set([
   'expectedLastSeq',
@@ -325,11 +364,52 @@ const EDIT_CODE_KEYS = new Set([
   'content',
 ]);
 
-const SHAPE_PATHS = {
-  rectangle: 'M 0 0 L 1000 0 L 1000 1000 L 0 1000 Z',
-  circle: 'M 500 0 A 500 500 0 1 1 499 0 Z',
-  triangle: 'M 500 0 L 1000 1000 L 0 1000 Z',
-} as const;
+class WhiteboardShapeInputError extends Error {
+  constructor(
+    readonly geometryError: { code: string; field: string; message: string; position?: number },
+  ) {
+    super(`wb_draw_shape ${geometryError.field}: ${geometryError.message} (${geometryError.code})`);
+  }
+}
+
+function prepareShapeArguments(args: unknown): NativeWhiteboardDrawShapeParams {
+  let params: NativeWhiteboardDrawShapeParams;
+  try {
+    params = strictArguments<NativeWhiteboardDrawShapeParams>(
+      NativeWhiteboardDrawShapeParams,
+      args,
+      DRAW_SHAPE_KEYS,
+    );
+  } catch {
+    if (
+      typeof args === 'object' &&
+      args !== null &&
+      'path' in args &&
+      typeof args.path === 'string' &&
+      args.path.length > INPUT_PATH_LIMITS.maxLength
+    ) {
+      throw new WhiteboardShapeInputError({
+        code: 'resource_limit',
+        field: 'path',
+        message: `Path exceeds ${INPUT_PATH_LIMITS.maxLength} code units; shorten the path.`,
+      });
+    }
+    throw new WhiteboardShapeInputError({
+      code: 'invalid_arguments',
+      field: 'params',
+      message:
+        'Native whiteboard arguments must match the strict schema. Every shape requires a non-empty SVG path and positive [width, height] viewBox; omit the removed shape field. Copy nextMutation.expectedLastSeq from the latest successful wb_read or mutation result; x/y/rotate must be finite, width/height positive, and stroke requires color and positive width. No extra fields are allowed.',
+    });
+  }
+  const geometry = validateShapeGeometry({
+    path: params.path,
+    viewBox: params.viewBox,
+    width: params.width,
+    height: params.height,
+  });
+  if (!geometry.ok) throw new WhiteboardShapeInputError(geometry.error);
+  return params;
+}
 
 const DEFAULT_CHART_THEME = ['#5b9bd5', '#ed7d31', '#a5a5a5', '#ffc000', '#4472c4'];
 
@@ -389,7 +469,12 @@ function escapeText(value: string): string {
 }
 
 function paragraphHtml(content: string, fontSize: number): string {
-  return `<p style="font-size: ${fontSize}px;">${escapeText(content).replace(/\r\n|\r|\n/gu, '<br>')}</p>`;
+  // Drop C0 controls except tab/newlines, plus DEL, after decoding numeric entities.
+  const plain = decodeHtmlEntities(content).replace(
+    /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/gu,
+    '',
+  );
+  return `<p style="font-size: ${fontSize}px;">${escapeText(plain).replace(/\r\n|\r|\n/gu, '<br>')}</p>`;
 }
 
 function logicalInvocationDigest(messageId: string, toolCallId: string): string {
@@ -482,6 +567,7 @@ async function settleWhiteboardMutation(
     }
     const result = {
       committedSeq,
+      nextMutation: { expectedLastSeq: state.lastSeq },
       lastSeq: state.lastSeq,
       replayed,
       affected,
@@ -542,9 +628,11 @@ async function settleWhiteboardMutation(
       });
     }
     if (error instanceof WhiteboardRuntimeNoChangeError) {
+      const lastSeq = error.state ? error.state.lastSeq : expectedLastSeq;
       const result = {
         noOp: true,
-        lastSeq: error.state?.lastSeq ?? expectedLastSeq,
+        lastSeq,
+        nextMutation: { expectedLastSeq: lastSeq },
         affected: { cleared: false },
       };
       return textResult(JSON.stringify(result), result);
@@ -631,7 +719,12 @@ function elementMutationTool<TParams extends ElementMutationParams>(
       let element: PPTElement;
       try {
         element = config.createElement(params, invocationDigest);
-      } catch {
+      } catch (error) {
+        if (error instanceof WhiteboardShapeInputError) {
+          return failedResult('INVALID_WHITEBOARD_SHAPE', error.message, {
+            error: error.geometryError,
+          });
+        }
         return failedResult(
           'WHITEBOARD_ELEMENT_BUILD_FAILED',
           'Whiteboard element construction failed; no mutation was accepted.',
@@ -747,7 +840,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_text',
         label: 'Draw whiteboard text',
         description:
-          'Append one text element to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one plain-text element to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result. Supply plain text, not HTML markup or HTML entities.',
         parameters: NativeWhiteboardDrawTextParams,
         prepare: (args) =>
           strictArguments<NativeWhiteboardDrawTextParams>(
@@ -777,27 +870,29 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_shape',
         label: 'Draw whiteboard shape',
         description:
-          'Append one rectangle, circle, or triangle to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append an SVG path to the authoritative learner whiteboard. Copy nextMutation.expectedLastSeq from the latest successful wb_read or mutation result. rotate is a finite angle in degrees about the box center (default 0); x/y locate the unrotated upper-left corner. Every shape requires path d data and positive viewBox [w,h]; width/height scale path coordinates. Default fill is #5b9bd5 with no stroke; use fillColor:"transparent" and stroke:{color,width,style?} for open curves. Close filled polygons with Z. Invalid paths return a field, code and optional character position; correct the input and retry.',
         parameters: NativeWhiteboardDrawShapeParams,
-        prepare: (args) =>
-          strictArguments<NativeWhiteboardDrawShapeParams>(
-            NativeWhiteboardDrawShapeParams,
-            args,
-            DRAW_SHAPE_KEYS,
-          ),
-        createElement: (params, invocationDigest): PPTShapeElement => ({
-          id: `native-wb-element:${invocationDigest}`,
-          type: 'shape',
-          viewBox: [1000, 1000],
-          path: SHAPE_PATHS[params.shape],
-          left: params.x,
-          top: params.y,
-          width: params.width,
-          height: params.height,
-          rotate: 0,
-          fill: params.fillColor ?? '#5b9bd5',
-          fixedRatio: false,
-        }),
+        prepare: prepareShapeArguments,
+        createElement: (args, invocationDigest): PPTShapeElement => {
+          // Also validate direct executor calls before append or session creation.
+          const params = prepareShapeArguments(args);
+          return {
+            id: `native-wb-element:${invocationDigest}`,
+            type: 'shape',
+            viewBox: params.viewBox,
+            path: params.path,
+            left: params.x,
+            top: params.y,
+            width: params.width,
+            height: params.height,
+            rotate: params.rotate ?? 0,
+            fill: params.fillColor ?? '#5b9bd5',
+            ...(params.stroke
+              ? { outline: { ...params.stroke, style: params.stroke.style ?? 'solid' } }
+              : {}),
+            fixedRatio: false,
+          };
+        },
       }),
     );
   }
@@ -808,7 +903,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_chart',
         label: 'Draw whiteboard chart',
         description:
-          'Append one chart to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one chart to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result.',
         parameters: NativeWhiteboardDrawChartParams,
         prepare: (args) => {
           const params = strictArguments<NativeWhiteboardDrawChartParams>(
@@ -843,7 +938,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_latex',
         label: 'Draw whiteboard LaTeX',
         description:
-          'Append one rendered LaTeX formula to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one rendered LaTeX formula to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result.',
         parameters: NativeWhiteboardDrawLatexParams,
         prepare: (args) =>
           strictArguments<NativeWhiteboardDrawLatexParams>(
@@ -881,7 +976,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_table',
         label: 'Draw whiteboard table',
         description:
-          'Append one non-empty rectangular table to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one non-empty rectangular table to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result.',
         parameters: NativeWhiteboardDrawTableParams,
         prepare: (args) => {
           const params = strictArguments<NativeWhiteboardDrawTableParams>(
@@ -938,7 +1033,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_line',
         label: 'Draw whiteboard line',
         description:
-          'Append one line or arrow to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one line or arrow to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result.',
         parameters: NativeWhiteboardDrawLineParams,
         prepare: (args) => {
           const params = strictArguments<NativeWhiteboardDrawLineParams>(
@@ -977,7 +1072,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
         name: 'wb_draw_code',
         label: 'Draw whiteboard code',
         description:
-          'Append one syntax-highlighted code block to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest wb_read result.',
+          'Append one syntax-highlighted code block to the authoritative learner whiteboard using nextMutation.expectedLastSeq from the latest successful wb_read or mutation result.',
         parameters: NativeWhiteboardDrawCodeParams,
         prepare: (args) =>
           strictArguments<NativeWhiteboardDrawCodeParams>(
@@ -1011,7 +1106,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
       name: 'wb_delete',
       label: 'Delete whiteboard element',
       description:
-        'Delete exactly one element selected by elementId from the latest wb_read result. Copy nextMutation.expectedLastSeq exactly. This durable mutation works while the whiteboard is closed and never changes visibility.',
+        'Delete exactly one element selected by elementId from the latest wb_read or fresh whiteboard tail state. Copy nextMutation.expectedLastSeq exactly. This durable mutation works while the whiteboard is closed and never changes visibility.',
       parameters: NativeWhiteboardDeleteParams,
       executionMode: 'sequential',
       prepareArguments: (args) =>
@@ -1068,7 +1163,7 @@ export function buildNativeWhiteboardTools(opts: NativeWhiteboardToolOptions): A
       name: 'wb_edit_code',
       label: 'Edit whiteboard code lines',
       description:
-        'Insert, delete, or replace lines in one code element using element and line IDs from the latest wb_read result. Copy nextMutation.expectedLastSeq exactly. Content may contain blank lines. This durable mutation works while closed and never changes visibility.',
+        'Insert, delete, or replace lines in one code element using element and line IDs from the latest wb_read or fresh whiteboard tail state. Copy nextMutation.expectedLastSeq exactly. Content may contain blank lines. This durable mutation works while closed and never changes visibility.',
       parameters: NativeWhiteboardEditCodeParams,
       executionMode: 'sequential',
       prepareArguments: (args) =>

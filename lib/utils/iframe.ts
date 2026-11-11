@@ -1,9 +1,12 @@
+import { mediaBridgeScript } from '@/lib/interactive/media-bridge';
+import { postProcessInteractiveHtml } from '@openmaic/generation/browser';
 import { injectIntoDocumentHead } from './html-document';
 import {
   withObservationResponder,
   type ObservationIdentity,
 } from '@/lib/interactive/observation-bridge';
 import { INTERACTIVE_REFERENCE_EXCLUDED_TAG_NAMES } from '@/lib/interactive/element-reference-policy';
+import { CONTENT_FIT_BASE_CSS, CONTENT_FIT_SHIM } from '@/lib/interactive/content-fit-shim';
 
 const INTERACTIVE_REFERENCE_EXCLUDED_TAG_LOOKUP = Object.fromEntries(
   INTERACTIVE_REFERENCE_EXCLUDED_TAG_NAMES.map((tagName) => [tagName, 1]),
@@ -387,7 +390,12 @@ const ELEMENT_PICKER_SHIM = `<script data-iframe-element-picker-shim>
  * Omitted by consumers that produce standalone documents (video export), where
  * no parent ever asks and the bytes count against an export size cap.
  */
-export function patchHtmlForIframe(html: string, observation?: ObservationIdentity): string {
+export function patchHtmlForIframe(
+  html: string,
+  observation?: ObservationIdentity,
+  options?: { processed?: boolean; mediaId?: string },
+): string {
+  if (!options?.processed) html = postProcessInteractiveHtml(html);
   const iframeCss = `<style data-iframe-patch>
   html, body {
     width: 100%;
@@ -400,10 +408,23 @@ export function patchHtmlForIframe(html: string, observation?: ObservationIdenti
   /* Fix min-h-screen: in iframes 100vh is the iframe height, which is correct,
      but ensure body actually fills it */
   body { min-height: 100vh; }
+  /* Zero-specificity media defaults; authored rules still win. */
+  ${CONTENT_FIT_BASE_CSS}
 </style>`;
 
   const injection =
-    '\n' + ERROR_CAPTURE_SHIM + '\n' + ELEMENT_PICKER_SHIM + '\n' + STORAGE_SHIM + '\n' + iframeCss;
+    '\n' +
+    ERROR_CAPTURE_SHIM +
+    '\n' +
+    ELEMENT_PICKER_SHIM +
+    '\n' +
+    CONTENT_FIT_SHIM +
+    '\n' +
+    STORAGE_SHIM +
+    '\n' +
+    (options?.mediaId ? mediaBridgeScript(options.mediaId) : '') +
+    '\n' +
+    iframeCss;
 
   const patched = injectIntoDocumentHead(html, injection);
   // Body end, not head: the reader captures the scope element as it installs.

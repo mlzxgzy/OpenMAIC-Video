@@ -5,6 +5,8 @@
  * its leases and event log, the owner-bound document store, the asset pool
  * and the run API routes.
  */
+import { AudioProviderError } from '@/lib/audio/provider-error';
+import { QwenVoiceCloneError } from '@/lib/audio/qwen-voice-clone';
 import { createOpenAI } from '@ai-sdk/openai';
 import { NextRequest } from 'next/server';
 import { Pool } from 'pg';
@@ -67,7 +69,10 @@ import { StepRefusal } from '@/lib/server/generation/steps/context';
 import { generateOutlines } from '@/lib/server/generation/steps/outline';
 import { generateSceneContent } from '@/lib/server/generation/steps/scene-content';
 import { generateSceneActions } from '@/lib/server/generation/steps/scene-actions';
-import type { ConnectableQueryable } from '@openmaic/storage/server/reference';
+import {
+  nodePostgresTransaction,
+  type ConnectableQueryable,
+} from '@openmaic/storage/server/reference';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene } from '@/lib/types/stage';
 
@@ -271,6 +276,23 @@ function runInput(overrides: Partial<GenerationRunInput> = {}): GenerationRunInp
 
 async function claim(runId: string, workerId = 'worker-a', leaseTtlMs = 60_000) {
   return claimNextGenerationRun(workerId, { leaseTtlMs, maxTakeovers: 3, runId });
+}
+
+/**
+ * Take a run over once its lease is stale (`leaseTtlMs` 1). The claim skips a
+ * row another transaction has locked at that instant (`FOR UPDATE SKIP
+ * LOCKED`), and the dead worker can still hold it: a step call it abandoned
+ * when it stopped (a narration clip, an image) keeps running and writes
+ * through the lease fence, which locks the run row. Its lease stays stale, so
+ * a later claim takes the run over, as the runner's next scan would.
+ */
+async function takeOver(runId: string, workerId = 'worker-b') {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const claimed = await claim(runId, workerId, 1);
+    if (claimed) return claimed;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  return null;
 }
 
 async function drive(runId: string, services: RunStepServices, workerId = 'worker-a') {
@@ -805,7 +827,7 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
       ).rows[0]?.deleted_at ?? null;
     const { services } = fakeServices({ research: async () => null });
 
-    // Completed: its own uploads go; another owner's material it named stays.
+    // Even persisted releaseMaterials=true cannot delete any successful upload.
     const mine = [await material(OWNER), await material(OWNER)];
     const theirs = await material(OTHER);
     const unrelated = await material(OWNER);
@@ -817,11 +839,11 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
       }),
     );
     expect(await drive(completed.id, services)).toBe('completed');
-    for (const id of mine) expect(await deletedAt(id)).not.toBeNull();
+    for (const id of mine) expect(await deletedAt(id)).toBeNull();
     expect(await deletedAt(theirs)).toBeNull();
     expect(await deletedAt(unrelated)).toBeNull();
 
-    // Waiting for its outline (Retry and confirmation need them): kept; discarded: released.
+    // Waiting and discarded runs both retain their uploaded sources.
     const waitingMaterial = await material(OWNER);
     const waiting = await start(
       runInput({ materialIds: [waitingMaterial], releaseMaterials: true }),
@@ -829,7 +851,7 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
     expect(await drive(waiting.id, services)).toBe('waiting');
     expect(await deletedAt(waitingMaterial)).toBeNull();
     await discardGenerationRun(waiting.id, OWNER);
-    expect(await deletedAt(waitingMaterial)).not.toBeNull();
+    expect(await deletedAt(waitingMaterial)).toBeNull();
 
     // A material another run still works from is kept until that run is over.
     const shared = await material(OWNER);
@@ -1042,7 +1064,7 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
 
     // Worker A stops heartbeating; once its lease is stale, B takes over.
     await new Promise((resolve) => setTimeout(resolve, 10));
-    const takeover = await claim(run.id, 'worker-b', 1);
+    const takeover = await takeOver(run.id);
     expect(takeover).toMatchObject({ takeover: true });
     expect(takeover!.lease.generation).toBe(claimA.lease.generation + 1);
     expect(takeover!.run.takeovers).toBe(1);
@@ -1547,6 +1569,25 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
     // The clone failed once; that clip and every later one used the slot voice.
     expect(voices).toEqual([clone, 'Cherry', 'Cherry', 'Cherry']);
   });
+
+  it.each([
+    [new AudioProviderError('EXAMPLE_RECREATE', 409, 'voice-incompatible'), 1, 'EXAMPLE_RECREATE'],
+    [new QwenVoiceCloneError('QWEN_VC_RECLONE_REQUIRED', 409), 1, 'QWEN_VC_RECLONE_REQUIRED'],
+    [new QwenVoiceCloneError('QWEN_VC_TIMEOUT', 504), 3, 'INTERNAL_ERROR'],
+    [new QwenVoiceCloneError('QWEN_VC_HTTP_ERROR', 503), 3, 'INTERNAL_ERROR'],
+  ] as const)(
+    'preserves narration retry and public failure for $0.code',
+    async (error, attempts, errorCode) => {
+      const narrateClip = vi.fn().mockRejectedValue(error);
+      const { services } = fakeServices({ research: async () => null, narrateClip });
+      const run = await start(runInput({ outlineReview: 'auto' }));
+      expect(await drive(run.id, services)).toBe('paused');
+      expect(narrateClip).toHaveBeenCalledTimes(attempts);
+      const stored = (await readGenerationRun(run.id, OWNER))!;
+      expect(stored.error?.errorCode).toBe(errorCode);
+      expect(stored.progress.scenesCompleted).toBe(0);
+    },
+  );
 
   it('releases the clips of a narration attempt that failed', async () => {
     const base = fakeServices({ research: async () => null });
@@ -2568,12 +2609,12 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
       abortA.abort();
       expect(await executionA).toBe('interrupted');
       await new Promise((resolve) => setTimeout(resolve, 10));
-      const takeover = (await claim(run.id, 'worker-b', 1))!;
+      const takeover = (await takeOver(run.id))!;
       expect(takeover).toMatchObject({ takeover: true });
 
       const resumed = mediaServices();
       expect(
-        await executeGenerationRun(takeover, {
+        await executeGenerationRun(takeover!, {
           services: resumed.services,
           signal: new AbortController().signal,
         }),
@@ -2636,7 +2677,7 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
         },
       });
       await new Promise((resolve) => setTimeout(resolve, 10));
-      const takeover = (await claim(run.id, 'worker-b', 1))!;
+      const takeover = (await takeOver(run.id))!;
       const resumed = mediaServices({
         mediaConnections: async () => ({ image: ready('seedream'), video: OFF }),
       });
@@ -2894,7 +2935,7 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
       return built;
     }
 
-    it('generates from materials extracted at upload without an analysis, and a released material leaves the course image', async () => {
+    it('generates from materials extracted at upload without an analysis, and retains both the source and the course image', async () => {
       const materials = await uploadedMaterials();
       try {
         const material = await materials.upload('notes.txt');
@@ -2923,14 +2964,18 @@ describe.skipIf(!contractUrl)('generation runs on PostgreSQL', () => {
           elementsOf(document.scenes[0]).find((element) => element.id === 'el-material')!.src,
         ).toBe(assetId);
 
-        // The run released its material; its objects go with the next reclaim,
-        // and the course keeps the image it copied.
-        await materials.owner.reclaimStaleOwnerMaterialUploads(pool, OWNER, (key) =>
-          materials.bytesModule.deleteMaterialObjects(materials.byteStore, key),
+        // The run retains its source; cleanup also keeps it and the course image.
+        await materials.owner.reclaimStaleOwnerMaterialUploads(
+          {
+            pool,
+            withTransaction: nodePostgresTransaction(pool as unknown as ConnectableQueryable),
+          },
+          OWNER,
+          (key) => materials.bytesModule.deleteMaterialObjects(materials.byteStore, key),
         );
-        expect([...materials.objects.keys()].filter((key) => key.includes(material.id))).toEqual(
-          [],
-        );
+        expect(
+          [...materials.objects.keys()].filter((key) => key.includes(material.id)).length,
+        ).toBeGreaterThan(0);
         expect(await committedAt(assetId)).not.toBeNull();
       } finally {
         materials.bytesModule.setMaterialByteStoreForTests(null);

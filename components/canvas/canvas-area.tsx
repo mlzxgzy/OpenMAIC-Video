@@ -11,7 +11,6 @@ import { CanvasToolbar } from '@/components/canvas/canvas-toolbar';
 import type { CanvasToolbarProps } from '@/components/canvas/canvas-toolbar';
 import type { Scene, StageMode } from '@/lib/types/stage';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import { ClassroomCompletePageConnected } from '@/components/scene-renderers/classroom-complete';
 import { ContainBox } from '@/components/edit/ContainBox';
 import { useInWorkbenchPanel } from '@/lib/workbench/panel-context';
 import type { PPTElement } from '@openmaic/dsl';
@@ -23,7 +22,6 @@ interface CanvasAreaProps extends CanvasToolbarProps {
   readonly mode: StageMode;
   readonly hideToolbar?: boolean;
   readonly isPendingScene?: boolean;
-  readonly isCourseComplete?: boolean;
   readonly isGenerationFailed?: boolean;
   readonly generationFailureMessage?: string;
   /** The pending scene will never be produced (its generation was interrupted). */
@@ -61,7 +59,6 @@ export function CanvasArea({
   onContinueDiscussion,
   hideToolbar,
   isPendingScene,
-  isCourseComplete,
   isGenerationFailed,
   generationFailureMessage,
   isGenerationInterrupted,
@@ -119,9 +116,14 @@ export function CanvasArea({
       >
         <StageViewport
           workbench={inWorkbenchPanel}
-          interactive={currentScene?.type === 'interactive'}
+          fillContainer={
+            currentScene?.type === 'interactive' ||
+            (currentScene?.content.type === 'pbl' && !!currentScene.content.projectV3)
+          }
           className={cn(
-            'bg-white dark:bg-gray-800 shadow-2xl rounded-lg overflow-hidden relative transition-all duration-700',
+            // Only its colours ease, between scene types. Its size must not: a box
+            // measured on mount would otherwise visibly shrink to 16:9 every time.
+            'bg-white dark:bg-gray-800 shadow-2xl rounded-lg overflow-hidden relative transition-[background-color,box-shadow] duration-700',
             showControls && !isLiveSession && currentScene?.type === 'slide' && 'cursor-pointer',
             currentScene?.type === 'interactive'
               ? 'shadow-blue-200/50 dark:shadow-blue-900/50 ring-1 ring-blue-900/5 dark:ring-blue-500/10'
@@ -165,21 +167,9 @@ export function CanvasArea({
               />
             )}
 
-          {/* Pending Scene Loading / Completion Overlay */}
+          {/* Pending Scene Loading Overlay */}
           <AnimatePresence>
-            {isPendingScene && !currentScene && isCourseComplete && (
-              <motion.div
-                key="course-complete"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                transition={{ duration: 0.3, ease: 'easeOut' }}
-                className="absolute inset-0"
-              >
-                <ClassroomCompletePageConnected />
-              </motion.div>
-            )}
-            {isPendingScene && !currentScene && !isCourseComplete && (
+            {isPendingScene && !currentScene && (
               <motion.div
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
@@ -326,18 +316,18 @@ export function CanvasArea({
 
 function StageViewport({
   workbench,
-  interactive,
+  fillContainer,
   className,
   onClick,
   children,
 }: {
   readonly workbench: boolean;
-  readonly interactive: boolean;
+  readonly fillContainer: boolean;
   readonly className?: string;
   readonly onClick?: (event: React.MouseEvent) => void;
   readonly children: ReactNode;
 }) {
-  if (interactive) {
+  if (fillContainer) {
     return (
       <div className={cn('h-full w-full', className)} onClick={onClick}>
         {children}

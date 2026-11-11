@@ -7,7 +7,9 @@ import {
   agentOwnsActiveCourse,
   agentOwnsPaneCourse,
   clampChatWidth,
+  closeAllCourseTabs,
   closeCourseTab,
+  defaultNavCollapsed,
   legacyWorkspaceHref,
   NO_PANES,
   parseChatWidth,
@@ -20,6 +22,8 @@ import {
   restoreCourseTabs,
   samePanes,
   withCourse,
+  withView,
+  isWorkspaceViewId,
   withSession,
   workspaceHref,
   workspaceLayout,
@@ -425,6 +429,7 @@ describe('what the shell renders', () => {
       classroom: true,
       classroomTab: false,
       home: false,
+      view: null,
     });
   });
 
@@ -460,5 +465,96 @@ describe('persisted pane preferences', () => {
     expect(parseCollapsed('0')).toBe(false);
     expect(parseCollapsed(null)).toBe(false);
     expect(parseCollapsed('true')).toBe(false);
+  });
+
+  it('applies the caller default only when nothing is stored', () => {
+    expect(parseCollapsed(null, true)).toBe(true);
+    expect(parseCollapsed('0', true)).toBe(false);
+    expect(parseCollapsed('1', false)).toBe(true);
+    expect(parseCollapsed('true', true)).toBe(false);
+  });
+
+  it('folds the rail by default on the home surface only', () => {
+    expect(defaultNavCollapsed(readWorkspacePanes(search('')))).toBe(true);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('session=')))).toBe(true);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('session=s1')))).toBe(false);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('course=c1')))).toBe(false);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('session=s1&course=c1')))).toBe(false);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('view=library')))).toBe(false);
+    expect(defaultNavCollapsed(readWorkspacePanes(search('view=courses')))).toBe(false);
+  });
+});
+
+describe('main-area pages', () => {
+  it('reads, writes and compares `view=<page>` beside the panes it covers', () => {
+    const panes = { sessionId: 's', courseId: 'c', view: 'library' };
+    const href = workspaceHref(panes);
+    expect(href).toBe('/workspace?session=s&course=c&view=library');
+    expect(readWorkspacePanes(new URL(`http://x${href}`).searchParams)).toEqual(panes);
+    expect(workspaceHref({ ...NO_PANES, view: 'library' })).toBe('/workspace?view=library');
+    expect(workspaceHref({ ...NO_PANES, view: 'courses' })).toBe('/workspace?view=courses');
+    expect(samePanes({ ...NO_PANES, view: 'library' }, NO_PANES)).toBe(false);
+    expect(samePanes({ ...NO_PANES, view: 'library' }, { ...NO_PANES, view: 'courses' })).toBe(
+      false,
+    );
+    expect(samePanes({ ...NO_PANES, view: 'courses' }, { ...NO_PANES, view: 'courses' })).toBe(
+      true,
+    );
+  });
+
+  it('accepts host page ids and ignores anything that is not a plain id', () => {
+    expect(readWorkspacePanes(search('?view=gallery'))).toEqual({ ...NO_PANES, view: 'gallery' });
+    expect(readWorkspacePanes(search('?view=Gallery'))).toEqual(NO_PANES);
+    expect(readWorkspacePanes(search('?view=../x'))).toEqual(NO_PANES);
+    expect(readWorkspacePanes(search('?view='))).toEqual(NO_PANES);
+    expect(isWorkspaceViewId('my-page-2')).toBe(true);
+    expect(isWorkspaceViewId('2page')).toBe(false);
+    expect(isWorkspaceViewId('x'.repeat(41))).toBe(false);
+  });
+
+  it('stays open while the panes underneath change, and closes only on request', () => {
+    const open = { sessionId: 's', courseId: null, view: 'library' };
+    expect(withCourse(open, 'c')).toEqual({ sessionId: 's', courseId: 'c', view: 'library' });
+    expect(withSession(open, null)).toEqual({ sessionId: null, courseId: null, view: 'library' });
+    expect(withView(open, null)).toEqual({ sessionId: 's', courseId: null });
+    expect(withView(NO_PANES, 'courses')).toEqual({ ...NO_PANES, view: 'courses' });
+    expect(withView(open, 'library')).toBe(open);
+    expect(withView(open, 'courses')).toEqual({ sessionId: 's', courseId: null, view: 'courses' });
+  });
+
+  it('covers the whole main area, ahead of full-screen playback', () => {
+    const render = resolveWorkspaceRender({
+      panes: { sessionId: 's', courseId: 'c', view: 'courses' },
+      collapse: { nav: true, chat: true, classroom: true },
+      playback: true,
+      draftConversation: true,
+    });
+    expect(render).toEqual({
+      navRail: true,
+      chat: false,
+      chatTab: false,
+      classroom: false,
+      classroomTab: false,
+      home: false,
+      view: 'courses',
+    });
+  });
+});
+
+describe('the URL dropping the classroom', () => {
+  it('counts every open tab as closed, and opening one again un-closes it', () => {
+    const tabs = { courseIds: ['a', 'b'], activeCourseId: 'b', closedCourseIds: ['z'] };
+    const closed = closeAllCourseTabs(tabs);
+    expect(closed).toEqual({
+      courseIds: [],
+      activeCourseId: null,
+      closedCourseIds: ['z', 'a', 'b'],
+    });
+    expect(closeAllCourseTabs(closed)).toBe(closed);
+    expect(restoreCourseTabs(closed, 'b')).toEqual({
+      courseIds: ['b'],
+      activeCourseId: 'b',
+      closedCourseIds: ['z', 'a'],
+    });
   });
 });

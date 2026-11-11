@@ -12,7 +12,7 @@
 | --- | --- |
 | 上游项目 | [THU-MAIC/OpenMAIC](https://github.com/THU-MAIC/OpenMAIC) — 清华 MAIC 团队的 AI 互动课堂平台 |
 | 本仓库 | `git@github.com:mlzxgzy/OpenMAIC-Video.git`（fork） |
-| 当前基线 | 上游 `6e20534f`（`v1.2.1` tag 之后 9 个提交，`2026-10-20` 经 `047175e3` 同步；更早两次同步是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`，见 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)「上游同步」） |
+| 当前基线 | 上游 `6e51916f`（`v1.5.0-rc.1` 之后 6 个提交，`2026-11-11` 同步；上一基线 `6e20534f`（`v1.2.1` 之后 9 个提交，`2026-10-20` 经 `047175e3` 同步），更早两次是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`，见 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md)「上游同步」） |
 | 本 fork 版本 | `X.Y.Z-video.N` 版本线，**基座跟随上游稳定版**（已发布 `1.2.0-video.1`–`1.2.0-video.5` 与 `1.2.1-video.1`，tag `v1.2.1-video.1`；规则见 §1.1 末条） |
 | 许可证 | MIT（可自由商用）。例外：`packages/mathml2omml` 为 LGPL-3.0-or-later |
 | 二开方向 | **视频化**（视频导出 / 渲染服务 / 视频生成能力）+ **课程产品层**（系列 → 课程 → 成果导向设计 → 讲/练/考闭环 → 生成 → 导出） |
@@ -26,7 +26,7 @@
   git fetch upstream
   git merge upstream/main
   ```
-  - **用 merge，不要用 rebase**：二开已有 83 个提交并发布了 `v1.2.0-video.1`–
+  - **用 merge，不要用 rebase**：二开已有 84 个提交并发布了 `v1.2.0-video.1`–
     `1.2.0-video.5`、`v1.2.1-video.1`，rebase 会改写已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 - 跟上游的差异**原则上只集中在视频相关目录**，便于日后 rebase：
   `lib/video-export/`、`lib/video-export-app/`、`lib/store/video-render.ts`、`app/api/export-video/`、`render-service/`、`components/stage/video-export-dialog.tsx`
@@ -46,6 +46,10 @@
     偏离说明与后续动作见
     [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#第四处非视频偏离课程产品层与成果导向课程设计)。
   - 后续再有非视频方向的功能，照此先在 `CHANGELOG.fork.md` 记录偏离理由再动手。
+  - **上游工作台化后的首页**：上游 `#2094` 把工作台做成首页、经典首页下沉为
+    `app/classic-home.tsx`，`app/page.tsx` 只剩 server gate。本 fork 的首页二开
+    （场景类型筛选、课程序列入口、`ContinueLastCard`、职教测试 UI）已并入
+    `app/classic-home.tsx`；日后再改首页改这里，不要改 `app/page.tsx`。
   - **注意：视频链路的源码是上游的**。上列目录在基线 `636fab0d` 就已存在
     （`git ls-tree 636fab0d -- lib/video-export lib/video-export-app render-service`
     全部有输出），本 fork **未改动其中任何一个文件**。视频方向二开实际只动了
@@ -347,3 +351,25 @@ readonly writesOutsideRegistryDatabase?: true              // 见上文红线
 `lib/persistence/schema-stores.ts`（`APP_SCHEMA_STORES`）——上游也常改这两处。
 偏离说明与后续动作见
 [`CHANGELOG.fork.md`](./CHANGELOG.fork.md#第四处非视频偏离课程产品层与成果导向课程设计)。
+
+`2026-11-11` 同步（基线 `6e51916f`）新增的热点：
+
+- `app/page.tsx` / `app/classic-home.tsx`：上游把工作台做成首页、经典首页下沉；
+  fork 的首页二开现在落在 `app/classic-home.tsx`。
+- `lib/server/agent-runtime/runner.ts` + `lib/server/agent-runtime/course-tools.ts`：
+  上游 capability 化工具注册（`assembleCapabilityRuntime`）。fork 的课程设计工具
+  （`buildCurriculumDesignTools` 进 `candidateTools`、`CURRICULUM_DESIGN_TOOLS_PROMPT`
+  进 `basePromptBlocks`）必须重新注入，否则设计 skill 静默消失。
+- `components/stage.tsx` / `components/stage/header-controls.tsx` /
+  `components/edit/PlaybackChromeRoot.tsx`：上游删除 workbench 回退控件
+  （`WorkbenchReturnControl` 等）并改动播放参数；fork 的 `canEditScript`、
+  Settings 按钮与旁白语音面板入口要保留。
+- `lib/audio/tts-providers.ts`（上游新增 provider 级 `voices` 参数）与
+  `lib/store/settings.ts` / `lib/i18n/locales/*.json`（fork 的 qwen instruct 键）。
+- `lib/server/generation-run-hooks/` + `instrumentation.ts`：curriculum 钩子注册必须
+  经过 `generationRunHooksConfigured()` 判断——`register()` 可能在同一进程被调用
+  多次（dev 重载、上游 boot 测试），registry 是单次注册否则抛错。
+- `lib/server/generation/run/engine.ts` 已被上游列入 provider-neutral 文件：千问
+  指令控制的厂商知识只能留在 `narration-voice.ts`（`attachProviderInstructions` 等
+  中性入口），不要在 engine 里直接写 `qwen*` 符号，否则
+  `tests/providers/provider-neutrality-guard.test.ts` 会红。

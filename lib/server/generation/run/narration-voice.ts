@@ -1,3 +1,4 @@
+import { configuredDefaultVoice } from '@/lib/audio/provider-default-voice';
 /**
  * Which voice a run narrates with, decided as the browser decides it for the
  * `tts` slot (`lib/audio/tts-selection.ts`, `generateAndStoreTTS`): the slot
@@ -11,8 +12,9 @@ import {
   isQwenCloneVoice,
   resolveTTSModelForVoice,
   voiceServesModel,
+  voiceAllowedByConfiguredCatalogue,
 } from '@/lib/audio/constants';
-import type { BuiltInTTSProviderId, TTSProviderId } from '@/lib/audio/types';
+import type { BuiltInTTSProviderId, TTSProviderId, ConfiguredTTSVoice } from '@/lib/audio/types';
 import { isTTSProviderEnabled } from '@/lib/audio/provider-enablement';
 import { voiceBindingKey } from '@/lib/audio/unavailable-voice-bindings';
 import {
@@ -51,6 +53,7 @@ function providersConfig(target: RunNarrationTarget): Record<
     enabled: boolean;
     isServerConfigured: boolean;
     modelId?: string;
+    voices?: ConfiguredTTSVoice[];
     providerOptions?: Record<string, string | number | boolean>;
   }
 > {
@@ -60,6 +63,7 @@ function providersConfig(target: RunNarrationTarget): Record<
       baseUrl: '',
       enabled: true,
       isServerConfigured: true,
+      ...(target.connection.voices ? { voices: target.connection.voices } : {}),
       ...(target.modelId ? { modelId: target.modelId } : {}),
       ...(target.connection.options ? { providerOptions: { ...target.connection.options } } : {}),
     },
@@ -67,7 +71,14 @@ function providersConfig(target: RunNarrationTarget): Record<
 }
 
 /** A provider's default voice, or the first catalogue voice its model can speak. */
-function defaultVoiceFor(providerId: string, modelId?: string): string {
+function defaultVoiceFor(
+  providerId: string,
+  modelId?: string,
+  options?: Record<string, unknown>,
+  configuredVoices?: readonly { id: string }[],
+): string {
+  const configured = configuredDefaultVoice(options, configuredVoices);
+  if (configured) return configured;
   const preferred = DEFAULT_TTS_VOICES[providerId as BuiltInTTSProviderId] || 'default';
   if (voiceServesModel(providerId, preferred, modelId)) return preferred;
   const voices = TTS_PROVIDERS[providerId as BuiltInTTSProviderId]?.voices ?? [];
@@ -82,9 +93,26 @@ export function slotVoice(
   const usable =
     preference?.providerId === target.providerId &&
     !!preference.voiceId &&
-    voiceServesModel(target.providerId, preference.voiceId, target.modelId);
+    voiceAllowedByConfiguredCatalogue(
+      target.providerId,
+      preference.voiceId,
+      target.connection.voices,
+    ) &&
+    voiceServesModel(
+      target.providerId,
+      preference.voiceId,
+      target.modelId,
+      target.connection.voices,
+    );
   return {
-    voice: usable ? preference!.voiceId : defaultVoiceFor(target.providerId, target.modelId),
+    voice: usable
+      ? preference!.voiceId
+      : defaultVoiceFor(
+          target.providerId,
+          target.modelId,
+          target.connection.options,
+          target.connection.voices,
+        ),
     speed: preference?.speed ?? 1,
   };
 }
@@ -105,7 +133,7 @@ export function advertisedVoices(target: RunNarrationTarget) {
   return getEnabledProvidersWithVoices(providersConfig(target)).flatMap((provider) =>
     provider.voices.map((voice) => {
       const cloneModelGroup =
-        provider.providerId === 'qwen-tts' && isQwenCloneVoice(voice.id)
+        provider.providerId === 'qwen-tts' && isQwenCloneVoice(voice.id, target.connection.voices)
           ? provider.modelGroups.find((group) =>
               group.voices.some((groupVoice) => groupVoice.id === voice.id),
             )
@@ -113,7 +141,9 @@ export function advertisedVoices(target: RunNarrationTarget) {
       const modelId = cloneModelGroup
         ? resolveTTSModelForVoice(provider.providerId, voice.id, cloneModelGroup.modelId)
         : undefined;
-      const gender = catalogVoiceGender(provider.providerId, voice.id);
+      const gender = provider.configuredVoiceList
+        ? voice.gender
+        : (voice.gender ?? catalogVoiceGender(provider.providerId, voice.id));
       return {
         providerId: provider.providerId,
         ...(modelId ? { modelId } : {}),
@@ -207,6 +237,7 @@ export function clipProviderConfig(target: RunNarrationTarget, voice: ResolvedVo
       voice.providerId,
       voice.voiceId,
       voice.modelId ?? config?.modelId,
+      config?.voices,
     ),
   };
 }
@@ -251,4 +282,40 @@ export function runNarrationPromptSection(
   requested: GenerationRunInput['qwenInstructControl'],
 ): string {
   return qwenInstructPromptSection(runQwenInstructControl(target, requested));
+}
+
+/**
+ * The narration text this run's input asks for, resolved against the slot that
+ * will narrate it. The neutral entry point the generation engine calls: which
+ * input fields carry an instruction and which provider honours it stay here,
+ * with the rest of the provider knowledge.
+ */
+export function runRequestedNarrationInstructions(
+  target: RunNarrationTarget | null,
+  input: Pick<GenerationRunInput, 'qwenInstructControl' | 'qwenInstructText'>,
+): string | undefined {
+  return runQwenInstructions(target, input.qwenInstructControl, input.qwenInstructText);
+}
+
+/** {@link runNarrationPromptSection} for a run's own input. */
+export function runRequestedNarrationPromptSection(
+  target: RunNarrationTarget | null,
+  input: Pick<GenerationRunInput, 'qwenInstructControl'>,
+): string {
+  return runNarrationPromptSection(target, input.qwenInstructControl);
+}
+
+/**
+ * Attach the resolved narration instructions to a voice's provider options.
+ * A no-op without instructions or without options; the parameter name belongs
+ * to the provider that defines it, so it is set here rather than in the engine.
+ */
+export function attachProviderInstructions(
+  providerOptions: unknown,
+  instructions: string | undefined,
+): void {
+  if (!instructions) return;
+  const options = providerOptions as Record<string, unknown> | undefined;
+  if (!options) return;
+  options.qwenInstructions = instructions;
 }

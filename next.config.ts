@@ -2,12 +2,19 @@ import type { NextConfig } from 'next';
 import { PHASE_PRODUCTION_BUILD } from 'next/constants';
 
 const nextConfig: NextConfig = {
+  // Keep Next dev from creating or rewriting repository agent instructions.
+  agentRules: false,
   output: 'standalone',
+  env: {
+    INTERACTIVE_ASSET_BASE_URL:
+      process.env.INTERACTIVE_ASSET_BASE_URL?.trim() || '/vendor/interactive',
+  },
   outputFileTracingIncludes: {
     '/*': [
       'lib/server/agent-runtime/import-pptx-worker.mjs',
       'skills/openmaic/**',
       'skills/agent-runtime/**',
+      'skills/classroom/**',
       // Loaded through a runtime-only `import('undici')` (see the LLM
       // dispatcher in lib/ai/providers.ts and the Google proxy transport), so
       // the output tracer never sees it and standalone builds ship without it.
@@ -91,6 +98,13 @@ const nextConfig: NextConfig = {
     const frameAncestors = extraAncestors ? `'self' ${extraAncestors}` : "'self'";
 
     return [
+      {
+        source: '/vendor/interactive/:path*',
+        headers: [
+          { key: 'Access-Control-Allow-Origin', value: '*' },
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
+        ],
+      },
       {
         source: '/(.*)',
         headers: [

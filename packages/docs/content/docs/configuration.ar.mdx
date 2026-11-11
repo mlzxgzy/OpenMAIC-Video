@@ -101,6 +101,8 @@ allowUserKeys: false               # يختار المستخدمون من بين
 | `proxy` | لا | عنوان وكيل HTTP لطلبات هذا المزود. |
 | `credentials` | لبعض الإعدادات المسبقة | أزواج مفاتيح للخدمات التي لا تستخدم مفتاحًا واحدًا. يستخدم AliDocMind الحقلين `accessKeyId` و`accessKeySecret`. |
 | `options` | لا | إعدادات غير سرية خاصة بالمزود، مثل `backend` لـ `voxcpm-tts`. الأسماء أحرف وأرقام و`_` و`-`؛ والقيم سلاسل نصية أو أرقام أو قيم منطقية (بلا خرائط أو قوائم متداخلة)، ويعمل `${VAR}`. تعرض إعدادات النماذج الخيارات، لذا لا تضع فيها مفتاحًا أبدًا. للنشر فقط: لا تستطيع إعدادات النماذج ضبطها. |
+| `voices` | لا | لإعدادات TTS المسبقة فقط. يستبدل الكتالوج المدمج بقائمة غير فارغة؛ يتطلب كل عنصر `id` و`name`، مع `language` و`gender` (`male` أو `female` أو `neutral`) اختياريين. يجب ألا تتكرر المعرّفات وألا تحتوي على فاصل الربط المحجوز `::`. تبقى أصوات المستخدم متاحة، وتستخدم أصوات Qwen المستنسخة نموذج الاستنساخ. عند الإغفال يبقى الكتالوج الأصلي. |
+| `options.defaultVoice` | لا | معرّف الصوت الافتراضي لهذا المزود؛ يجب أن يكون نصًا غير فارغ ولا يتكون من مسافات فقط. يتطلب قائمة `voices` غير فارغة تحتوي على هذا المعرّف. عند ضبط `voices` وحدها يُستخدم أول عنصر. للاختيار الصريح الصالح الأولوية. عند إغفال كلا الخيارين يبقى السلوك الأصلي. |
 
 تغطي معظم الإعدادات المسبقة قدرة واحدة وفق السجلات المدمجة: الإعداد `openai` للمحادثة فقط، أما صور OpenAI وتحويل النص إلى كلام والتفريغ الصوتي فهي الإعدادات `openai-image` و`openai-tts` و`openai-whisper`. أعلن مزودًا واحدًا لكل قدرة، وأشر إلى `${VAR}` نفسه عندما يغطي مفتاح واحد عدة قدرات. **إعدادات Token Plan المسبقة** (`minimax` و`tokendance` و`volcengine-ark` و`kimi-coding-plan`) تغطي عدة قدرات بمفتاح واحد، كل منها على عنوان الخطة الخاص. يستبدل `baseUrl` على المزود العنوان لكل القدرات التي يغطيها، لذا لا تضع `baseUrl` لـ Token Plan إلا إذا انتقلت كل قدراته معه.
 
@@ -121,8 +123,8 @@ allowUserKeys: false               # يختار المستخدمون من بين
 | `course.content.pbl` | chat | `course.content` | مشاهد التعلم القائم على المشاريع (PBL) |
 | `course.actions` | chat | `llm` | إجراءات المشاهد (ما يقوله الوكلاء ويفعلونه في كل مشهد) |
 | `classroom` | chat | `llm` | محادثة الصف وتصحيح الاختبارات وبيئة تشغيل PBL |
-| `agent` | chat | `llm` | وكيل Pro workbench. **يتطلب استدعاء الأدوات.** ويقبل أيضًا `api` و`contextWindow` |
-| `agent.title` | chat | `agent` | عناوين جلسات Pro. تُضبط في `openmaic.yml` فقط ولا تظهر في إعدادات النماذج |
+| `agent` | chat | `llm` | وكيل workbench. **يتطلب استدعاء الأدوات.** ويقبل أيضًا `api` و`contextWindow` |
+| `agent.title` | chat | `agent` | عناوين جلسات workbench. تُضبط في `openmaic.yml` فقط ولا تظهر في إعدادات النماذج |
 | `tts` | tts | — | تحويل النص إلى كلام |
 | `asr` | asr | — | التعرف على الكلام (الإدخال الصوتي وتفريغ الصوت والفيديو) |
 | `image` | image | — | توليد الصور |
@@ -311,7 +313,7 @@ slots:
   webSearch: tavily
 ```
 
-احذف بعد ذلك `DEFAULT_MODEL` و`MODEL_FALLBACK`. يمكن إبقاء متغيرات المزودين مصدرًا لإشارات `${VAR}`. يصبح `<PREFIX>_BASE_URL` قيمة `baseUrl` للمزود (`OPENAI_BASE_URL` ← `baseUrl` تحت `openai`؛ اكتب العنوان، أو `${OPENAI_BASE_URL}` ما دام المتغير مضبوطًا)، ويصبح `<PREFIX>_MODELS` قائمة `models` الخاصة به. ومثل `DEFAULT_MODEL` المحوَّل، فإن `llm` المكتوب هنا قيمة افتراضية للخادم يمكن لمساحات العمل تغييرها؛ أضف `lock: [llm]` لتثبيته للجميع. وعلى خلاف التحويل، أصبحت `agent` تتبع `llm`: اكتب `agent: null` لإبقاء وكيل Pro موقوفًا.
+احذف بعد ذلك `DEFAULT_MODEL` و`MODEL_FALLBACK`. يمكن إبقاء متغيرات المزودين مصدرًا لإشارات `${VAR}`. يصبح `<PREFIX>_BASE_URL` قيمة `baseUrl` للمزود (`OPENAI_BASE_URL` ← `baseUrl` تحت `openai`؛ اكتب العنوان، أو `${OPENAI_BASE_URL}` ما دام المتغير مضبوطًا)، ويصبح `<PREFIX>_MODELS` قائمة `models` الخاصة به. ومثل `DEFAULT_MODEL` المحوَّل، فإن `llm` المكتوب هنا قيمة افتراضية للخادم يمكن لمساحات العمل تغييرها؛ أضف `lock: [llm]` لتثبيته للجميع. وعلى خلاف التحويل، أصبحت `agent` تتبع `llm`: اكتب `agent: null` لإبقاء وكيل workbench موقوفًا.
 
 **server-providers.yml.** قبل:
 
@@ -435,7 +437,7 @@ ACCESS_CODE=your-secret-code
 تُعتبر القيم `true` أو `1` مفعلة، وما لم يُذكر خلاف ذلك تُعد أي قيمة أخرى معطلة. تُحقن متغيرات `NEXT_PUBLIC_*` في وقت البناء للعميل، ويجب إعادة البناء بعد تعديلها:
 
 ```bash
-# محرر MAIC (وضع Pro)
+# محرر MAIC (محرر الدرس)
 NEXT_PUBLIC_MAIC_EDITOR_ENABLED=true
 
 # مراجع مواد PPT والمشاهد التفاعلية أثناء تشغيل Pi (علامة وقت البناء؛ لا تؤثر في مراجع وضع التحرير)
@@ -452,6 +454,9 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 
 # عرض مدخل استيراد PPTX التجريبي
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
+
+# موقع التوثيق الذي يفتحه عنصر «التوثيق» في قائمة الحساب (الافتراضي /docs على النطاق نفسه)
+NEXT_PUBLIC_DOCS_URL=https://docs.example.com
 ```
 
 تعمل محادثة الصف دائمًا على Pi، وتتطلب نموذجًا يدعم استدعاء الأدوات/الدوال: اختر نموذجًا كهذا لـ **الصف** في **إعداد نماذج المقرر**، أو اضبط الخانة `classroom` (أو الخانة `llm` التي ترث منها) في `openmaic.yml`. مع Gemini استخدم الإعداد المسبق الأصلي `google` بدلًا من عنوان Google المتوافق مع OpenAI. يُرفض النموذج الذي يذكر الكتالوج المدمج أنه لا يدعم استدعاء الأدوات قبل الاستدلال، مع `400 MODEL_CONFIG_INVALID` (`reason: tool_calling_required`)، ويشير **إعداد نماذج المقرر** إلى هذا الشرط عند خانة الصف.
@@ -554,6 +559,10 @@ TTS_DOUBAO_BASE_URL=       # تجاوز اختياري
 TTS_QWEN_API_KEY=
 TTS_QWEN_BASE_URL=         # تجاوز اختياري
 
+# Xiaomi MiMo TTS
+TTS_XIAOMI_API_KEY=
+TTS_XIAOMI_BASE_URL=https://api.xiaomimimo.com/v1
+
 # أي نقطة نهاية متوافقة مع OpenAI TTS
 TTS_OPENAI_API_KEY=
 TTS_OPENAI_BASE_URL=
@@ -562,7 +571,7 @@ TTS_OPENAI_BASE_URL=
 TTS_VOXCPM_BASE_URL=http://localhost:8000
 ```
 
-بادئات TTS المدعومة تشمل `TTS_OPENAI_`، `TTS_AZURE_`، `TTS_GLM_`، `TTS_QWEN_`، `TTS_MINIMAX_`، `TTS_DOUBAO_`، `TTS_ELEVENLABS_`، `TTS_GOOGLE_`، `TTS_VOXCPM_` و `TTS_LEMONADE_`. TTS المحلي لـ Lemonade وVoxCPM2 لا يحتاجان إلى مفتاح API. TTS المدمج في المتصفح لا يحتاج إلى إعدادات خادم.
+بادئات TTS المدعومة تشمل `TTS_OPENAI_`، `TTS_AZURE_`، `TTS_GLM_`، `TTS_QWEN_`، `TTS_MINIMAX_`، `TTS_DOUBAO_`، `TTS_ELEVENLABS_`، `TTS_GOOGLE_`، `TTS_VOXCPM_`، `TTS_XIAOMI_` و `TTS_LEMONADE_`. TTS المحلي لـ Lemonade وVoxCPM2 لا يحتاجان إلى مفتاح API. TTS المدمج في المتصفح لا يحتاج إلى إعدادات خادم.
 
 يمكن للمسؤولين تعطيل موفر TTS معين على الخادم باستخدام `TTS_<PROVIDER>_ENABLED=false`. لمزيد من التفاصيل عن VoxCPM2 (TTS ذاتي الاستضافة واستنساخ الصوت)، راجع الفصل الخاص بـ [VoxCPM2](./voxcpm.mdx).
 
@@ -578,6 +587,10 @@ ASR_OPENAI_BASE_URL=       # تجاوز اختياري
 # Qwen ASR
 ASR_QWEN_API_KEY=
 ASR_QWEN_BASE_URL=         # تجاوز اختياري
+
+# Xiaomi MiMo ASR
+ASR_XIAOMI_API_KEY=
+ASR_XIAOMI_BASE_URL=https://api.xiaomimimo.com/v1
 
 # Azure ASR
 ASR_AZURE_API_KEY=
@@ -861,3 +874,11 @@ slots:
 يخدم مزوّد `firecrawl` نفسه البحث على الويب أيضًا (`POST /v2/search`): مفتاح واحد وعنوان أساسي واحد يكفيان للأمرين، لذا يمكن تعيين مزوّد واحد في `slots.webSearch` و`slots.webFetch` معًا. تضبط المتغيرات القديمة `FIRECRAWL_API_KEY` و`FIRECRAWL_BASE_URL` هذا المزوّد نفسه، ويبقى جلب صفحات الويب على `builtin` إلى أن يُعيَّن `webFetch` له.
 
 قبل إرسال رابط إلى خدمة مستضافة، تُطبق بوابة روابط الجلسة والتطبيع الصارم للرابط وفحص جميع عناوين DNS المحلية. تُطبق الفحوص نفسها على الرابط النهائي الذي تعيده الخدمة قبل قبول المحتوى. تتحكم الخدمات المستضافة في DNS والتحويلات الوسيطة الخاصة بها، لذلك لا تستطيع الفحوص المحلية تثبيت اتصالاتها الشبكية. يظل النص بيانات غير موثوقة، ويخضع لاكتشاف صفحات التحقق وحدود الحجم بالبايت وعلامة الاقتطاع، مع حفظ مواد الويب وصيغة النتيجة `{trusted, untrusted}` كما في السابق.
+
+## مكتبات المشاهد التفاعلية
+
+تحمّل المشاهد التفاعلية KaTeX وThree.js (مع addons) وChart.js وبيئة تشغيل Tailwind v4 للمتصفح من النشر نفسه بدلًا من شبكة CDN عامة. تنسخ الأوامر `pnpm install` و`pnpm dev` و`pnpm build` الإصدارات المثبّتة من الحزم المثبَّتة إلى `public/vendor/interactive`، وتُقدَّم من المسار `/vendor/interactive`. لا يُحمَّل KaTeX إلا في الصفحات التي تحتوي على صيغ رياضية.
+
+`INTERACTIVE_ASSET_BASE_URL` إعداد عام يُحدَّد وقت البناء. لتقديم هذه الملفات من شبكة CDN خاصة بك أو من تخزين كائنات، انسخ `public/vendor/interactive` مع الحفاظ على مسارات الحزمة/الإصدار، واضبط المتغير على عنوان URL الأساسي الجديد (مثل `https://assets.example.com/interactive`) ثم أعد البناء؛ وفي Docker مرّره عبر `--build-arg`. ولأن المشاهد التفاعلية تعمل داخل إطارات iframe معزولة، يجب أن يقدّم المضيف ملفات JavaScript وCSS والخطوط بأنواع MIME الصحيحة وأن يرسل `Access-Control-Allow-Origin: *`.
+
+يُعاد معالجة HTML التفاعلي المحفوظ عند فتحه في الصف وقبل التصدير إلى HTML مستقل أو فيديو، لذا تُعاد كتابة مراجع CDN العامة المتوافقة إلى هذه المكتبات دون إعادة توليد المقرر. أما المراجع إلى مكتبات أخرى أو إصدارات غير متوافقة أو Tailwind v3 Play CDN القديم (`cdn.tailwindcss.com`) أو Google Fonts فتبقى كما هي، وما زالت تتطلب الوصول إلى تلك المضيفات.

@@ -25,7 +25,10 @@
  * same session. No persistence, no per-owner quota, no billing.
  */
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import {
+  voiceRegistrationConfigKey,
+  voiceRegistrationKey,
+} from '@/lib/audio/voice-registration-cache';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { extname, join } from 'node:path';
@@ -37,7 +40,7 @@ import {
   type AgentSessionMaterial,
   type CreateAgentSessionMaterialInput,
 } from '@openmaic/storage';
-import { Type } from 'typebox';
+import { Type, type Static } from 'typebox';
 
 import type { RegisteredVoiceInfo } from '@/lib/audio/voice-catalog';
 import {
@@ -45,7 +48,7 @@ import {
   type VoiceRegistrationConfig,
 } from '@/lib/audio/voice-registration';
 import { TTS_PROVIDERS } from '@/lib/audio/constants';
-import { validateReferenceAudio } from '@/lib/audio/wav-validate';
+import { MIN_REFERENCE_DURATION_SECONDS, validateReferenceAudio } from '@/lib/audio/wav-validate';
 import { adapterOptions } from '@/lib/server/model-config/adapter-options';
 import { authorizeMediaModel, type MediaConnection } from '@/lib/server/model-config/media';
 import {
@@ -55,9 +58,14 @@ import {
   resolveSessionMaterialRawAsset,
   storeSessionMaterialRawAsset,
 } from './session-materials';
+import {
+  resolveRawMaterial,
+  sessionRowRawLookup,
+  type RawMaterialHandle,
+} from './material-resolver';
 
 const execFileAsync = promisify(execFile);
-const MIN_CLIP_SECONDS = 1;
+const MIN_CLIP_SECONDS = MIN_REFERENCE_DURATION_SECONDS;
 const MAX_CLIP_SECONDS = 60;
 const OUTPUT_SAMPLE_RATE = 24_000;
 const OUTPUT_CHANNELS = 1;
@@ -86,15 +94,19 @@ const REGISTER_VOICE_SCHEMA = Type.Object({
   clipId: Type.String({
     description: 'The clipId returned by clip_audio.',
   }),
-  refText: Type.String({
-    minLength: 1,
-    maxLength: 2_000,
-    description: 'Accurate verbatim transcript of the reference clip.',
-  }),
+  refText: Type.Optional(
+    Type.String({
+      maxLength: 2_000,
+      description:
+        'Optional transcript metadata. Current registration providers use the audio sample alone.',
+    }),
+  ),
 });
 
 export interface VoiceCloneToolDependencies {
   sessionId: string;
+  /** Resolve a clip_audio source; defaults to the shared resolver (links and session rows). */
+  resolveSource?: (sessionId: string, materialId: string) => Promise<RawMaterialHandle | null>;
   /** Test seam; defaults to the session-scoped material read (foreign ids read as absent). */
   getMaterial?: (sessionId: string, materialId: string) => Promise<AgentSessionMaterial | null>;
   /** Test seam; defaults to the asset-registry raw-byte read scoped to the session. */
@@ -152,13 +164,14 @@ export function hasConfiguredVoiceRegistrationCapability(
 ): boolean {
   return registrationCapableProviderIds(tts).length > 0;
 }
+export const hasConfiguredVoiceRegistration = hasConfiguredVoiceRegistrationCapability;
 
 /** The registration provider the tool registers on: the tts slot's. */
 function resolveRegistrationProviderId(tts?: MediaConnection | 'off' | null): string | undefined {
   return registrationCapableProviderIds(tts)[0];
 }
 
-function sourceExtension(record: AgentSessionMaterial): string {
+function sourceExtension(record: { title: string | null }): string {
   const fromName = extname(record.title ?? '');
   if (fromName && fromName.length <= 10) return fromName;
   return '';
@@ -180,14 +193,18 @@ function extensionForMime(mime: string): string {
   return extensions[mime.toLowerCase()] ?? '.media';
 }
 
-export function validateClipRange(startSec: number, endSec: number): number {
+export function validateClipRange(
+  startSec: number,
+  endSec: number,
+  minDurationSeconds = MIN_CLIP_SECONDS,
+): number {
   if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || startSec < 0) {
     throw new Error('clip_audio requires finite, non-negative startSec and endSec values');
   }
   const durationSeconds = endSec - startSec;
-  if (durationSeconds < MIN_CLIP_SECONDS || durationSeconds > MAX_CLIP_SECONDS) {
+  if (durationSeconds < minDurationSeconds || durationSeconds > MAX_CLIP_SECONDS) {
     throw new Error(
-      `clip_audio duration must be between ${MIN_CLIP_SECONDS} and ${MAX_CLIP_SECONDS} seconds`,
+      `clip_audio duration must be between ${minDurationSeconds} and ${MAX_CLIP_SECONDS} seconds`,
     );
   }
   return durationSeconds;
@@ -243,6 +260,16 @@ function throwIfAborted(signal?: AbortSignal): void {
 export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentTool<never, never>[] {
   const getMaterial = deps.getMaterial ?? getSessionMaterial;
   const readRawAsset = deps.readRawAsset ?? resolveSessionMaterialRawAsset;
+  // A clip source is any audio or video the session reaches: a linked library
+  // source or a session row (RFC #1716 §4). The clip itself stays a session
+  // audio-track, and register_voice reads only those.
+  const resolveSource =
+    deps.resolveSource ??
+    (deps.getMaterial || deps.readRawAsset
+      ? sessionRowRawLookup(getMaterial, async (record) =>
+          record.rawAssetId ? readRawAsset(deps.sessionId, record.rawAssetId) : null,
+        )
+      : resolveRawMaterial);
   const storeRawAsset = deps.storeRawAsset ?? storeSessionMaterialRawAsset;
   const removeRawAsset = deps.removeRawAsset ?? removeSessionMaterialRawAsset;
   const createMaterial =
@@ -252,6 +279,11 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
       return store.createMaterial(sessionId, input);
     });
   const clipAudio = deps.clipAudio ?? clipAudioToVoiceWav;
+  const registrationProviderId = resolveRegistrationProviderId(deps.ttsConnection);
+  const minDurationSeconds =
+    (registrationProviderId
+      ? getVoiceRegistrationAdapter(registrationProviderId)?.minReferenceDurationSeconds
+      : undefined) ?? MIN_CLIP_SECONDS;
   // Session-scoped registered voices: appended on successful register_voice so
   // list_voices / set_roster (roster-tools) can enumerate and validate them.
   const registeredVoices = deps.registeredVoices;
@@ -266,8 +298,9 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
       registeredVoices.push(voice);
     }
   };
-  // Keep retries within one run idempotent: the same clip + name + transcript
-  // resolves to the same provider voice and is registered once.
+  // Current Qwen/VoxCPM enrollment does not send the transcript. Cache the
+  // connection, name, and audio identity; a transcript-aware adapter would need
+  // an explicit identity contract before sharing this cache.
   const registrationCache = new Map<string, Promise<string>>();
 
   const clipAudioTool: AgentTool<typeof CLIP_AUDIO_SCHEMA> = {
@@ -275,21 +308,26 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
     label: 'Clip reference audio',
     description:
       'Clip a clean single-speaker monologue from an audio or video material for voice cloning. ' +
+      `The clip must be between ${minDurationSeconds} and ${MAX_CLIP_SECONDS} seconds. ` +
       'Read the material transcript first and choose the interval yourself. Prefer 10–20 seconds ' +
       'with no background music, other speakers, or noise. Returns a 24 kHz mono PCM WAV clip.',
     parameters: CLIP_AUDIO_SCHEMA,
-    execute: async (_callId, params, signal) => {
-      validateClipRange(params.startSec, params.endSec);
+    execute: async (
+      _callId: string,
+      params: Static<typeof CLIP_AUDIO_SCHEMA>,
+      signal?: AbortSignal,
+    ) => {
+      validateClipRange(params.startSec, params.endSec, minDurationSeconds);
       throwIfAborted(signal);
-      const source = await getMaterial(deps.sessionId, params.materialId);
+      const source = await resolveSource(deps.sessionId, params.materialId);
       throwIfAborted(signal);
       if (!source) {
         throw new Error('material does not exist or does not belong to this session owner');
       }
-      if (!source.rawAssetId) {
+      if (!source.hasBytes) {
         throw new Error('clip_audio requires an audio or video material');
       }
-      const raw = await readRawAsset(deps.sessionId, source.rawAssetId);
+      const raw = await source.read();
       throwIfAborted(signal);
       if (!raw) throw new Error('material bytes are unavailable');
       if (!isAudioOrVideo(raw.mime)) {
@@ -298,8 +336,8 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
 
       const sourceName = `${source.id}${sourceExtension(source) || extensionForMime(raw.mime)}`;
       const wav = await clipAudio(raw.bytes, sourceName, params.startSec, params.endSec);
-      // Enforces the exact 24 kHz mono PCM WAV contract and the 1–60 s bounds.
-      const validated = validateReferenceAudio(wav);
+      // Enforces the PCM WAV contract and provider duration bounds, including truncated output.
+      const validated = validateReferenceAudio(wav, minDurationSeconds);
       throwIfAborted(signal);
 
       const clipId = createMaterialId();
@@ -328,14 +366,18 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
     },
   };
 
-  const registerVoiceTool: AgentTool<typeof REGISTER_VOICE_SCHEMA> = {
+  const registerVoiceTool = {
     name: 'register_voice',
     label: 'Register cloned voice',
     description:
       'Register a reference audio clip as a named cloned voice on this deployment. Returns the ' +
       'provider and voice id that can be bound to a teacher with set_roster.',
     parameters: REGISTER_VOICE_SCHEMA,
-    execute: async (_callId, params, signal) => {
+    execute: async (
+      _callId: string,
+      params: Static<typeof REGISTER_VOICE_SCHEMA>,
+      signal?: AbortSignal,
+    ) => {
       const providerId = resolveRegistrationProviderId(deps.ttsConnection);
       const adapter = providerId ? getVoiceRegistrationAdapter(providerId) : undefined;
       const connection =
@@ -361,7 +403,7 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
         throw new Error('voice-cloning reference must be a 24 kHz mono PCM WAV clip');
       }
       // Enforces the 24 kHz mono PCM WAV contract (the clip_audio output shape).
-      validateReferenceAudio(raw.bytes);
+      validateReferenceAudio(raw.bytes, adapter.minReferenceDurationSeconds);
       throwIfAborted(signal);
 
       const cfg: VoiceRegistrationConfig = {
@@ -384,13 +426,11 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
             : false,
         model,
       };
-      const registrationKey = createHash('sha256')
-        .update(clip.rawAssetId)
-        .update('\0')
-        .update(params.name.trim())
-        .update('\0')
-        .update(params.refText.trim())
-        .digest('hex');
+      const registrationKey = voiceRegistrationKey(
+        `${providerId}\0${voiceRegistrationConfigKey(cfg)}`,
+        adapter.normalizeRegistrationName?.(params.name.trim()) ?? params.name.trim(),
+        raw.bytes,
+      );
       let pending = registrationCache.get(registrationKey);
       if (!pending) {
         pending = adapter.registerVoice(
@@ -409,7 +449,6 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
       try {
         voiceId = await pending;
       } catch (error) {
-        // A failed enrollment must not poison the cache: a retry re-registers.
         registrationCache.delete(registrationKey);
         throw error;
       }
@@ -432,6 +471,8 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
         details: result,
       };
     },
+    capability: 'voice_registration',
+    promptBlock: voiceRegistrationPromptBlock,
   };
 
   // register_voice is only offered when the deployment has a registration
@@ -439,7 +480,10 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
   // "deployment has no voice registration backend configured". The internal
   // guard above stays as defense in depth for direct calls.
   const tools: AgentTool<never, never>[] = [clipAudioTool] as unknown as AgentTool<never, never>[];
-  if (hasConfiguredVoiceRegistrationCapability(deps.ttsConnection)) {
+  if (
+    deps.ttsConnection === undefined ||
+    hasConfiguredVoiceRegistrationCapability(deps.ttsConnection)
+  ) {
     tools.push(registerVoiceTool as unknown as AgentTool<never, never>);
   }
   return tools;
@@ -447,16 +491,19 @@ export function buildVoiceCloneTools(deps: VoiceCloneToolDependencies): AgentToo
 
 export const VOICE_CLONE_TOOL_NAMES = ['clip_audio', 'register_voice'] as const;
 
+export function voiceRegistrationPromptBlock(): string {
+  return 'After clipping, register_voice the returned clipId with a display name. A transcript is optional metadata and is not needed for registration. The returned `providerId::voiceId` pair can be bound with set_roster.';
+}
+
 /** Voice-cloning guidance layered into every runner prompt. */
-export function voiceCloneToolsPrompt(registrationEnabled: boolean): string {
-  return [
-    'To clone a voice, clip_audio a clean 10–20 second single-speaker monologue from an audio or video material (read its transcript first and choose the interval yourself); it returns a 24 kHz mono PCM WAV clip stored as a session material.',
-    ...(registrationEnabled
-      ? [
-          'After clipping, register_voice the returned clipId with an accurate verbatim transcript. The returned `providerId::voiceId` pair can be bound with set_roster.',
-        ]
-      : [
-          'This deployment has no voice registration backend, so cloned voices cannot be registered; do not attempt register_voice.',
-        ]),
-  ].join(' ');
+export function voiceCloneToolsPrompt(registrationEnabled?: boolean): string {
+  const base =
+    'To clone a voice, clip_audio a clean 10–20 second single-speaker monologue from an audio or video material (read its transcript first and choose the interval yourself); it returns a 24 kHz mono PCM WAV clip stored as a session material.';
+  if (registrationEnabled === true) {
+    return `${base} ${voiceRegistrationPromptBlock()}`;
+  }
+  if (registrationEnabled === false) {
+    return `${base} This deployment has no voice registration backend, so cloned voices cannot be registered; do not attempt register_voice.`;
+  }
+  return base;
 }

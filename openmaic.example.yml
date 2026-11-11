@@ -57,6 +57,24 @@ providers:
   #   preset: openai-image
   #   apiKey: ${OPENAI_API_KEY}
 
+  # An OpenAI-compatible TTS service can override its displayed voice list.
+  # Without voices/options.defaultVoice the built-in behavior is unchanged.
+  # With voices alone, the first entry becomes the default voice.
+  # A saved global preference outside a replacement list falls back to this default;
+  # existing explicit course voice bindings are not rewritten.
+  # custom-tts:
+  #   preset: openai-tts
+  #   baseUrl: https://your-provider.example/v1
+  #   apiKey: ${CUSTOM_TTS_API_KEY}
+  #   models: [your-tts-model]
+  #   options:
+  #     defaultVoice: vivian # Requires a voices list containing this ID.
+  #   voices:
+  #     - id: vivian
+  #       name: Vivian
+  #     - id: serena
+  #       name: Serena
+
   # Zhipu GLM CogView image generation:
   # glm-image:
   #   preset: glm-image
@@ -96,7 +114,7 @@ slots:
   #   model: anthropic:claude-sonnet-4-6
   #   fallback: openai:gpt-5.4-mini
 
-  # The Pro workbench agent needs a model with tool calling. It may set
+  # The workbench agent needs a model with tool calling. It may set
   # thinking.mode but not thinking.effort; an effort set on llm is dropped
   # for the agent.
   # agent:
@@ -120,3 +138,22 @@ slots:
 # false: users cannot add providers, keys or token plans; they only choose
 # among the providers declared above, for the slots lock leaves open.
 # allowUserKeys: true
+
+# Shared sandbox execution (installation-scoped, disabled unless enabled below).
+# The key selects the provider account. Do not commit literal credentials.
+# sandbox:
+#   enabled: true
+#   provider: e2b-compatible
+#   connectionId: my-installation
+#   apiUrl: https://api.e2b.dev
+#   domain: e2b.app
+#   apiKey: ${SANDBOX_API_KEY}
+#   template: your-code-template
+#   desktopTemplate: your-desktop-template  # optional
+#   lifetimeMs: 300000
+#   maxActive: 5
+#   maxActivePerOwner: 1
+# Installation administrators may override these in Settings → Sandbox.
+# Add sandbox to the existing lock list (or use lock: all) to make it read-only:
+# lock: [sandbox]
+# A locked, absent sandbox section stays disabled.

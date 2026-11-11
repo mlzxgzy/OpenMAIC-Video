@@ -21,7 +21,8 @@
     "stop": "Detener esta construcción",
     "waiting": "Procesando",
     "emptyTitle": "Empieza una conversación",
-    "emptyHint": "Describe el cambio que quieres, o usa @ para indicar un aula"
+    "emptyHint": "Describe el cambio que quieres, o usa @ para indicar un aula",
+    "copyReply": "Copy Agent reply"
   },
   "question": {
     "waiting": "Esperando tu respuesta",
@@ -35,6 +36,7 @@
     "submit": "Enviar",
     "dismiss": "Descartar",
     "inFormBelow": "Responde en el formulario de abajo",
+    "inPreview": "Responde en la vista previa",
     "multiAnswerSeparator": ", "
   },
   "material": {
@@ -45,7 +47,10 @@
     "fileTooLarge": "El archivo es demasiado grande. Comprímelo o divídelo e inténtalo de nuevo.",
     "fileTooLargeWithLimit": "El archivo es demasiado grande. Selecciona uno de {{limit}} MB como máximo.",
     "unsupportedType": "Tipo de archivo no compatible. Elige un archivo compatible.",
-    "quotaExceeded": "Se alcanzó el límite de carga de materiales."
+    "quotaExceeded": "Se alcanzó el límite de carga de materiales.",
+    "storageFull": "El almacenamiento está lleno. No se pudo subir este material.",
+    "uploadFailedShort": "Error al subir",
+    "retryFailed": "No se pudo volver a analizar. Inténtalo de nuevo."
   },
   "skill": {
     "listFailed": "No se pudo cargar la lista de skills",
@@ -98,6 +103,21 @@
       "workshop-style": "Taller interactivo"
     }
   },
+  "preview": {
+    "eyebrow": "En curso",
+    "understanding": "Entendiendo tu solicitud",
+    "understandingDesc": "Leyendo lo que pediste y lo que necesita…",
+    "asking": "Una pregunta rápida",
+    "askingDesc": "El agente continúa cuando respondas.",
+    "assembling": "Preparando el aula",
+    "assemblingDesc": "Creando el curso y eligiendo a su docente y compañeros…",
+    "opening": "Abriendo el aula",
+    "page": "Página {{order}}",
+    "pageCaption": "Página {{order}} · {{title}}",
+    "skills": "Habilidades equipadas",
+    "resting": "Tu curso aparecerá aquí",
+    "restingDesc": "Sigue en la conversación; cuando se cree un curso, se abrirá en esta pestaña."
+  },
   "thinking": {
     "active": "Pensando…",
     "done": "Pensó",
@@ -121,9 +141,7 @@
     "listSeparator": ", ",
     "group": {
       "tools": "{{count}} llamadas a tools",
-      "skills": "{{count}} skills",
-      "running": "En curso",
-      "error": "Con errores",
+      "failed": "{{count}} con error",
       "done": "Completado"
     },
     "section": {
@@ -188,7 +206,21 @@
       "listFolderCourses": "Ver la biblioteca de aulas",
       "createStage": "Crear aula",
       "renameStage": "Renombrar aula",
-      "readStageOutline": "Leer el esquema del aula"
+      "readStageOutline": "Leer el esquema del aula",
+      "writeFile": "Write file",
+      "listFiles": "List project files",
+      "manageFile": "Manage project file",
+      "runBuild": "Run build",
+      "collectBuild": "Collect build result",
+      "readTeachingSkill": "Read teaching section",
+      "requestReview": "Ask for review",
+      "completeTeachingStage": "Complete teaching step",
+      "respondToLearner": "Answer your question",
+      "listMaterialFolders": "Revisar carpetas de la base de conocimientos",
+      "createMaterialFolder": "Crear carpeta en la base de conocimientos",
+      "renameMaterialFolder": "Renombrar carpeta de la base de conocimientos",
+      "moveMaterials": "Mover materiales",
+      "renameMaterial": "Renombrar material"
     },
     "chip": {
       "seconds": "{{count}} s",
@@ -222,7 +254,19 @@
       "allCourses": "Todas las aulas",
       "folderCourses": "Aulas de una carpeta",
       "reusedCourse": "Se reutilizó un aula existente",
-      "movedToFolder": "Movido a la carpeta"
+      "movedToFolder": "Movido a la carpeta",
+      "materialFolders": "{{count}} carpetas",
+      "materials": "{{count}} materiales",
+      "extractionStarted": "Iniciado",
+      "extractionInProgress": "Ya está en curso",
+      "extractionDone": "Ya se había procesado",
+      "extractionComplete": "Terminado",
+      "extractionStillRunning": "Aún en procesamiento",
+      "parseFailed": "Error al analizar",
+      "folderExisted": "La carpeta ya existía",
+      "unchanged": "Sin cambios",
+      "movedOutOfFolder": "Sacado de la carpeta",
+      "material": "{{count}} material"
     },
     "error": {
       "materialExtraction": "Falló el procesamiento del material",
@@ -263,7 +307,13 @@
       "createStage": "No se pudo crear el aula",
       "renameStage": "No se pudo renombrar el aula",
       "readStageOutline": "No se pudo leer el esquema del aula",
-      "generic": "La llamada al tool falló"
+      "generic": "La llamada al tool falló",
+      "interrupted": "Tool call interrupted",
+      "listMaterialFolders": "No se pudieron revisar las carpetas de la base de conocimientos",
+      "createMaterialFolder": "No se pudo crear la carpeta de la base de conocimientos",
+      "renameMaterialFolder": "No se pudo renombrar la carpeta de la base de conocimientos",
+      "moveMaterials": "No se pudieron mover los materiales",
+      "renameMaterial": "No se pudo renombrar el material"
     },
     "progress": {
       "scene": {

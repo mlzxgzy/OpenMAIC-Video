@@ -3,12 +3,14 @@ import { Value } from 'typebox/value';
 import type { AgentTool } from '@earendil-works/pi-agent-core';
 
 import type { CourseDocument, CourseStore } from '@/lib/server/agent-runtime/course-tools';
-import { buildDslCourseToolset } from '@/lib/server/agent-runtime/course-tools';
+import { buildDslCourseToolset, DSL_TOOLS_PROMPT } from '@/lib/server/agent-runtime/course-tools';
 import {
   buildGenerationTools,
+  SLIDE_DESIGN_DESCRIPTION,
   collectUnresolvedMediaPlaceholders,
   filterKnownActions,
 } from '@/lib/server/agent-runtime/generation-tools';
+import { generateImagePromptBlock } from '@/lib/server/agent-runtime/generate-image';
 import type { Scene } from '@/lib/types/stage';
 
 function slide(id: string, order: number, title = id): Scene {
@@ -487,6 +489,156 @@ describe('generation and deck tools', () => {
     expect(prompts[2]).toContain('Entropy of mixing');
   });
 
+  it('declares design as an optional slide-only look brief, apart from the content fields', () => {
+    const generate = find(buildGenerationTools(deps(state(document([])).store)), 'generate_scene');
+    const schema = generate.parameters as unknown as {
+      required?: string[];
+      properties: Record<string, { type?: string; description?: string }>;
+    };
+    expect(schema.required ?? []).not.toContain('design');
+    expect(schema.properties.design).toMatchObject({
+      type: 'string',
+      description: SLIDE_DESIGN_DESCRIPTION,
+    });
+    const design = schema.properties.design.description ?? '';
+    expect(design).toMatch(/^Slide pages only/);
+    for (const part of ['at a glance', 'visual style', 'palette', 'layout', 'proportions']) {
+      expect(design).toContain(part);
+    }
+    expect(design).toContain('never written onto the page');
+    // Content stays in brief/materialFacts, and both say the look goes elsewhere.
+    expect(schema.properties.brief.description).toContain('content intent only');
+    expect(schema.properties.brief.description).toContain('design');
+    expect(schema.properties.materialFacts.description).toContain('style and layout go in design');
+    expect(generate.description).toContain('design says how it looks');
+    const base = { stageId: 'stage-test', order: 1, title: 'T', type: 'slide', brief: 'B' };
+    expect(Value.Check(generate.parameters, { ...base, design: 'Navy title band' })).toBe(true);
+    expect(Value.Check(generate.parameters, { ...base, design: 42 })).toBe(false);
+  });
+
+  it('threads a slide design into the content prompt as its own section', async () => {
+    const current = state(document([]));
+    const users: string[] = [];
+    let calls = 0;
+    const aiCall = vi.fn(async (_system: string, user: string) => {
+      calls += 1;
+      users.push(user);
+      return calls === 1 ? JSON.stringify({ elements: [], background: null }) : '[]';
+    });
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    const response = await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Special angles',
+      type: 'slide',
+      brief: 'Find the trig values of the special angles at a glance',
+      materialFacts: ['sin 30 = 1/2'],
+      design: '  DESIGN-SENTINEL: white page, navy title band, table left 60%  ',
+    } as never);
+    expect(response).not.toMatchObject({ isError: true });
+    const prompt = users[0] ?? '';
+    expect(prompt).toContain('## Design Brief');
+    expect(prompt).toContain('DESIGN-SENTINEL: white page, navy title band, table left 60%\n');
+    expect(prompt).toContain(
+      '- **Description**: Find the trig values of the special angles at a glance',
+    );
+    expect(prompt).toContain('1. sin 30 = 1/2');
+  });
+
+  it('generates a slide without the design section when no design is given', async () => {
+    const current = state(document([]));
+    const users: string[] = [];
+    let calls = 0;
+    const aiCall = vi.fn(async (_system: string, user: string) => {
+      calls += 1;
+      users.push(user);
+      return calls === 1 ? JSON.stringify({ elements: [], background: null }) : '[]';
+    });
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Plain',
+      type: 'slide',
+      brief: 'A plain slide',
+    } as never);
+    expect(users[0]).toBeDefined();
+    expect(users[0]).not.toContain('Design Brief');
+  });
+
+  it('rejects design on non-slide pages without writing anything', async () => {
+    const current = state(document([]));
+    const aiCall = vi.fn();
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    const response = await generate.execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Check',
+      type: 'quiz',
+      brief: 'Check understanding',
+      design: 'Two columns',
+    } as never);
+    expect(response).toMatchObject({ isError: true, details: { error: 'design-requires-slide' } });
+    expect(aiCall).not.toHaveBeenCalled();
+    expect(current.get()?.scenes).toHaveLength(0);
+  });
+
+  it('tells the agent to keep one course-wide design style across slide designs', () => {
+    const guidance = DSL_TOOLS_PROMPT;
+    expect(guidance).toContain('pass design (how the page looks)');
+    expect(guidance).toContain('settle one design style for the whole course');
+    for (const part of ['palette', 'type scale', 'title placement', 'layout grammar']) {
+      expect(guidance).toContain(part);
+    }
+    expect(guidance).toContain('restate that same style in every slide design');
+    expect(guidance).toContain('keep its established style');
+  });
+
+  it('treats the opening request of a new conversation as a request for a course', () => {
+    const guidance = DSL_TOOLS_PROMPT;
+    expect(guidance).toContain(
+      'the opening request of a new conversation is a request for a course by default: build one',
+    );
+    for (const exception of [
+      'a question about a course the conversation already refers to',
+      'a question about settings or how the product works',
+      'small talk',
+      'a change to an existing course',
+    ]) {
+      expect(guidance).toContain(exception);
+    }
+    expect(guidance).toContain(
+      'When you genuinely cannot tell whether the user wants a course, ask once with ask_user',
+    );
+    expect(guidance).toContain('instead of only answering in chat');
+  });
+
+  it('gets the first page persisted before any work it does not need', () => {
+    const guidance = DSL_TOOLS_PROMPT;
+    expect(guidance).toContain('get its first page persisted as early as possible');
+    expect(guidance).toContain('generate page 1 before any work that page does not need');
+    expect(guidance).toContain('Research the first page relies on still comes first');
+    expect(guidance).toContain('the images for page N right before generating page N');
+    expect(guidance).toContain(
+      'never generate a batch of images or videos for the whole course up front',
+    );
+    // The page-1 rule follows the stage-design pointer, so a new course still
+    // reads the build method first.
+    expect(guidance.indexOf('read the `stage-design` skill')).toBeLessThan(
+      guidance.indexOf('get its first page persisted'),
+    );
+  });
+
+  it('tells the image guidance to make images per page, just in time', () => {
+    const guidance = generateImagePromptBlock();
+    expect(guidance).toContain("obtain that page's real srcs right before generating it");
+    expect(guidance).toContain('Generate images one page at a time');
+    expect(guidance).toContain(
+      'never as a batch for the whole course before its first page exists',
+    );
+    expect(guidance).not.toContain('obtain every real src first');
+  });
+
   it('validates widget params through the tool schema', () => {
     const generate = find(buildGenerationTools(deps(state(document([])).store)), 'generate_scene');
     const base = {
@@ -503,6 +655,71 @@ describe('generation and deck tools', () => {
       false,
     );
     expect(Value.Check(generate.parameters, { ...base, widgetType: 'hologram' })).toBe(false);
+  });
+
+  it('declares generate_scene widgetOutline as an object that accepts extra keys', async () => {
+    const current = state(document([]));
+    let calls = 0;
+    const aiCall = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? '<!DOCTYPE html><html><body><div id="loop"></div></body></html>' : '[]';
+    });
+    const generate = find(buildGenerationTools(deps(current.store, { aiCall })), 'generate_scene');
+    const widgetOutline = (
+      generate.parameters as unknown as {
+        properties: {
+          widgetOutline: {
+            type?: unknown;
+            additionalProperties?: unknown;
+            description?: unknown;
+          };
+        };
+      }
+    ).properties.widgetOutline;
+    const description =
+      'Interactive pages only: widget configuration object matching widgetType (e.g. { concept, keyVariables } for simulation, { diagramType, nodes } for diagram, { language } for code, { gameType, challenge } for game, { visualizationType, objects } for visualization3d). Must be a plain object. Defaults to { concept: title } when widgetType is set; when only widgetOutline is set, widgetType defaults to simulation.';
+
+    // The model-facing schema is this JSON Schema. Type.Unknown omits `type`,
+    // so providers do not require an object and models send a JSON string.
+    expect(widgetOutline.type).toBe('object');
+    expect(widgetOutline.additionalProperties).not.toBe(false);
+    expect(widgetOutline.description).toBe(description);
+    expect((generate.parameters as { required?: string[] }).required ?? []).not.toContain(
+      'widgetOutline',
+    );
+
+    const base = {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'For loops',
+      type: 'interactive',
+      brief: 'Practice Python for loops',
+    };
+    expect(
+      Value.Check(generate.parameters, {
+        ...base,
+        widgetType: 'code',
+        widgetOutline: { language: 'python', concept: 'for loop', extra: true },
+      }),
+    ).toBe(true);
+    expect(
+      Value.Check(generate.parameters, {
+        ...base,
+        widgetType: 'code',
+        widgetOutline: '{"language":"python","concept":"for loop"}',
+      }),
+    ).toBe(false);
+
+    const response = await generate.execute('call', {
+      ...base,
+      widgetType: 'code',
+      widgetOutline: { language: 'python', concept: 'for loop' },
+    } as never);
+    expect(response).not.toMatchObject({
+      isError: true,
+      details: { error: 'invalid-widget-outline' },
+    });
+    expect(current.get()?.scenes[0]?.content).toMatchObject({ widgetType: 'code' });
   });
 
   it('detects slide media placeholders without returning page bodies', () => {
@@ -581,6 +798,35 @@ describe('generation and deck tools', () => {
     }
   });
 
+  it('names the narration voice and the kept lines in the generate_tts result', async () => {
+    const current = state(document([slide('a', 1)]));
+    const synthesizeTts = vi.fn(async () => ({
+      available: true,
+      changed: true,
+      generated: 1,
+      skipped: 2,
+      failed: [],
+      voice: {
+        binding: 'tts-x::voice-default',
+        source: 'provider-default' as const,
+        teacher: 'Ms. Lin',
+        fallbackReason: 'teacher-unbound' as const,
+      },
+    }));
+    const tools = buildDslCourseToolset(deps(current.store, { synthesizeTts }));
+    const response = await find(tools, 'generate_tts').execute('tts', {
+      stageId: 'stage-test',
+      order: 1,
+    } as never);
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toContain('1 generated, 2 skipped, 0 failed.');
+    expect(text).toContain(
+      'Voice: tts-x::voice-default (provider default; teacher "Ms. Lin" has no voice bound).',
+    );
+    expect(text).toContain('2 line(s) kept their existing audio and voice; pass force');
+    expect(response.details).toMatchObject({ voice: { binding: 'tts-x::voice-default' } });
+  });
+
   it('fails closed through an owner-bound store for every new write tool', async () => {
     const foreign = state(null);
     const tools = buildDslCourseToolset(deps(foreign.store));
@@ -596,5 +842,229 @@ describe('generation and deck tools', () => {
       expect(response).toMatchObject({ isError: true });
     }
     expect(foreign.get()).toBeNull();
+  });
+
+  it('keeps generate_tts content to the failure tally and the kept-line note', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const response = await find(
+      buildDslCourseToolset(
+        deps(current.store, {
+          synthesizeTts: vi.fn(async () => ({
+            available: true,
+            changed: false,
+            generated: 0,
+            skipped: 1,
+            failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+          })),
+        }),
+      ),
+      'generate_tts',
+    ).execute('call', { stageId: 'stage-test', order: 1 } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toBe(
+      'Narration audio: 0 generated, 1 skipped, 1 failed (RATE_LIMITED\u00d71). 1 line(s) kept their existing audio and voice; pass force to re-synthesize them.',
+    );
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain('speech-a');
+    expect(response.details).toMatchObject({
+      failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+    });
+    expect(JSON.stringify(response.content)).not.toContain(raw);
+  });
+
+  it('mentions narration failures in generate_actions content', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const response = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => ({
+            available: true,
+            changed: false,
+            generated: 0,
+            skipped: 0,
+            failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+          })),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call', { stageId: 'stage-test', order: 1 } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toContain('Persisted 1 known actions for "Intro".');
+    expect(text).toContain(
+      'Narration audio: 0 generated, 0 skipped, 1 failed (RATE_LIMITED\u00d71).',
+    );
+    expect(text).not.toContain(raw);
+    expect(text).not.toContain('speech-a');
+    expect(response.details).toMatchObject({
+      audio: { failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }] },
+    });
+  });
+
+  it('counts narration failures by error code without provider bodies', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const raw = 'RAW_PROVIDER_BODY secret-upstream';
+    const failed = [
+      { id: 'speech-a', reason: 'RATE_LIMITED' },
+      { id: 'speech-b', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+    ];
+    const summary = {
+      available: true,
+      changed: false,
+      generated: 0,
+      skipped: 0,
+      failed,
+    };
+    const tally = '2 failed (RATE_LIMITED\u00d71, PROVIDER_QUOTA_EXHAUSTED\u00d71)';
+    const tts = await find(
+      buildDslCourseToolset(deps(current.store, { synthesizeTts: vi.fn(async () => summary) })),
+      'generate_tts',
+    ).execute('call-tts', { stageId: 'stage-test', order: 1 } as never);
+    const actions = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => summary),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-actions', { stageId: 'stage-test', order: 1 } as never);
+
+    const ttsText = (tts.content[0] as { text: string }).text;
+    const actionsText = (actions.content[0] as { text: string }).text;
+    expect(ttsText).toBe(`Narration audio: 0 generated, 0 skipped, ${tally}.`);
+    expect(actionsText).toContain('Persisted 1 known actions for "Intro".');
+    expect(actionsText).toContain(`Narration audio: 0 generated, 0 skipped, ${tally}.`);
+    for (const text of [ttsText, actionsText]) {
+      expect(text).not.toContain(raw);
+      expect(text).not.toContain('speech-a');
+      expect(text).not.toContain('speech-b');
+      expect(text).not.toContain('secret-upstream');
+    }
+  });
+
+  it('does not emit a narration audio tally from generate_scene', async () => {
+    const current = state(document([]));
+    const synthesizeTts = vi.fn(async () => ({
+      available: true,
+      changed: true,
+      generated: 0,
+      skipped: 0,
+      failed: [
+        { id: 'speech-a', reason: 'RATE_LIMITED' },
+        { id: 'speech-b', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+      ],
+    }));
+    let calls = 0;
+    const response = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          synthesizeTts,
+          aiCall: vi.fn(async () => {
+            calls += 1;
+            return calls === 1
+              ? JSON.stringify([{ id: 'q1', type: 'short_answer', question: 'Try it?' }])
+              : JSON.stringify([{ type: 'text', content: 'Hello' }]);
+          }),
+        }),
+      ),
+      'generate_scene',
+    ).execute('call', {
+      stageId: 'stage-test',
+      order: 1,
+      title: 'Practice',
+      type: 'quiz',
+      brief: 'Try the idea',
+    } as never);
+
+    const text = (response.content[0] as { text: string }).text;
+    expect(text).toContain('Page 1 "Practice" persisted.');
+    expect(text).not.toMatch(/Narration audio:/);
+    expect(text).not.toContain('RATE_LIMITED');
+    expect(text).not.toContain('PROVIDER_QUOTA_EXHAUSTED');
+    expect(text).not.toContain('speech-a');
+    expect(synthesizeTts).not.toHaveBeenCalled();
+  });
+
+  it('reports the narration voice and the failure tally together, including when every line fails', async () => {
+    const current = state(document([slide('a', 1, 'Intro')]));
+    const voice = {
+      binding: 'tts-x::warm',
+      source: 'roster-teacher' as const,
+      teacher: 'Ms. Lin',
+    };
+    const partial = {
+      available: true,
+      changed: true,
+      generated: 1,
+      skipped: 0,
+      failed: [
+        { id: 'speech-b', reason: 'RATE_LIMITED' },
+        { id: 'speech-c', reason: 'PROVIDER_QUOTA_EXHAUSTED' },
+      ],
+      voice,
+    };
+    const tally = '2 failed (RATE_LIMITED\u00d71, PROVIDER_QUOTA_EXHAUSTED\u00d71)';
+    const voiceNote = 'Voice: tts-x::warm (teacher "Ms. Lin"\'s roster binding).';
+    const textOf = (response: { content: ReadonlyArray<unknown> }) => {
+      const block = response.content[0];
+      return typeof block === 'object' &&
+        block !== null &&
+        'text' in block &&
+        typeof block.text === 'string'
+        ? block.text
+        : '';
+    };
+
+    const tts = await find(
+      buildDslCourseToolset(deps(current.store, { synthesizeTts: vi.fn(async () => partial) })),
+      'generate_tts',
+    ).execute('call-tts', { stageId: 'stage-test', order: 1 } as never);
+    const actions = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => partial),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-actions', { stageId: 'stage-test', order: 1 } as never);
+
+    for (const text of [textOf(tts), textOf(actions)]) {
+      expect(text).toContain(tally);
+      expect(text).toContain(voiceNote);
+      expect(text).not.toContain('speech-b');
+      expect(text).not.toContain('speech-c');
+    }
+
+    const allFailed = {
+      available: true,
+      changed: false,
+      generated: 0,
+      skipped: 0,
+      failed: [{ id: 'speech-a', reason: 'RATE_LIMITED' }],
+      voice,
+    };
+    const actionsZero = await find(
+      buildGenerationTools(
+        deps(current.store, {
+          generateActions: vi.fn(async () => [{ id: 'speech-a', type: 'speech', text: 'Hello' }]),
+          synthesizeTts: vi.fn(async () => allFailed),
+        }),
+      ),
+      'generate_actions',
+    ).execute('call-zero', { stageId: 'stage-test', order: 1 } as never);
+    const zeroText = textOf(actionsZero);
+    expect(zeroText).toContain(
+      'Narration audio: 0 generated, 0 skipped, 1 failed (RATE_LIMITED\u00d71).',
+    );
+    expect(zeroText).not.toContain(voiceNote);
+    expect(actionsZero.details).toMatchObject({
+      audio: { generated: 0, voice, failed: allFailed.failed },
+    });
   });
 });

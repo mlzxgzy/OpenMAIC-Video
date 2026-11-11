@@ -472,6 +472,25 @@ BEGIN
   END IF;
 END
 $agent_session_owner_event_type_validation$;
+ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS locale TEXT;
+ALTER TABLE agent_sessions ADD COLUMN IF NOT EXISTS open_question_seq INTEGER;
+
+UPDATE agent_sessions s
+SET open_question_seq = pending.seq
+FROM (
+  SELECT question.session_id, max(question.seq) AS seq
+  FROM agent_session_events question
+  WHERE question.type = 'user_question'
+    AND NOT EXISTS (
+      SELECT 1 FROM agent_session_events answer
+      WHERE answer.session_id = question.session_id
+        AND answer.seq > question.seq
+        AND answer.type = 'user_message'
+        AND length(btrim(COALESCE(answer.data->>'text', ''))) > 0
+    )
+  GROUP BY question.session_id
+) pending
+WHERE s.id = pending.session_id AND s.open_question_seq IS NULL;
 `;
 
 const EXPECTED_USER_SKILL_PG_SCHEMA = `
@@ -543,7 +562,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS agent_session_materials_session_owner_material
 CREATE INDEX IF NOT EXISTS agent_session_materials_extraction_queue_idx
   ON agent_session_materials (created_at)
   WHERE kind = 'source' AND extraction_status IN ('pending','running');
-`;
+
+ALTER TABLE agent_session_materials ADD COLUMN IF NOT EXISTS extraction_reason_code TEXT;`;
 
 /** Records the statements an ensure function actually issues. */
 function recordingQueryable(): { statements: string[]; queryable: Queryable } {
@@ -697,6 +717,31 @@ const EXPECTED_ASSET_PG_SCHEMA: readonly string[] = [
      stage_id TEXT NOT NULL PRIMARY KEY,
      withdrawn_at TIMESTAMPTZ NOT NULL
    )`,
+  `CREATE TABLE IF NOT EXISTS asset_root_refs (
+     root_kind TEXT NOT NULL,
+     root_id TEXT NOT NULL,
+     asset_id TEXT NOT NULL REFERENCES asset_entries(id) ON DELETE CASCADE,
+     PRIMARY KEY (root_kind, root_id, asset_id)
+   )`,
+  `CREATE INDEX IF NOT EXISTS asset_root_refs_asset_idx
+     ON asset_root_refs (asset_id)`,
+  `ALTER TABLE asset_reference_tracking
+     ADD COLUMN IF NOT EXISTS rule_version INTEGER NOT NULL DEFAULT 1`,
+  `CREATE TABLE IF NOT EXISTS asset_blob_stages (
+     id TEXT PRIMARY KEY,
+     content_hash TEXT NOT NULL REFERENCES asset_blobs(content_hash) ON DELETE CASCADE,
+     expires_at TIMESTAMPTZ NOT NULL
+   )`,
+  `CREATE INDEX IF NOT EXISTS asset_blob_stages_content_hash_idx
+     ON asset_blob_stages (content_hash)`,
+  `CREATE INDEX IF NOT EXISTS asset_blob_stages_expires_idx
+     ON asset_blob_stages (expires_at)`,
+];
+
+const EXPECTED_RETAINED_ASSETS_UPGRADE = [
+  'ALTER TABLE document_asset_refs DROP CONSTRAINT document_asset_refs_scope_check',
+  `ALTER TABLE document_asset_refs ADD CONSTRAINT document_asset_refs_scope_check
+ CHECK (scope IN ('stage', 'scene', 'retained'))`,
 ];
 
 describe('ASSET_PG_SCHEMA is a pinned contract', () => {
@@ -704,7 +749,10 @@ describe('ASSET_PG_SCHEMA is a pinned contract', () => {
     const { statements, queryable } = recordingQueryable();
     await ensureAssetSchema(queryable);
 
-    expect(schemaStatements(statements)).toEqual([...EXPECTED_ASSET_PG_SCHEMA]);
+    expect(schemaStatements(statements)).toEqual([
+      ...EXPECTED_ASSET_PG_SCHEMA,
+      ...EXPECTED_RETAINED_ASSETS_UPGRADE,
+    ]);
   });
 
   it('reissues the same statements where no version is recorded', async () => {
@@ -714,7 +762,9 @@ describe('ASSET_PG_SCHEMA is a pinned contract', () => {
 
     expect(schemaStatements(statements)).toEqual([
       ...EXPECTED_ASSET_PG_SCHEMA,
+      ...EXPECTED_RETAINED_ASSETS_UPGRADE,
       ...EXPECTED_ASSET_PG_SCHEMA,
+      ...EXPECTED_RETAINED_ASSETS_UPGRADE,
     ]);
   });
 
@@ -732,8 +782,14 @@ describe('ASSET_PG_SCHEMA is a pinned contract', () => {
       // so an embedded semicolon would send two statements as one query.
       expect(statement.includes(';'), `not a single statement: ${statement}`).toBe(false);
       const sql = statement.trim();
+      // The open-question backfill only fills rows still NULL, from the same
+      // event-log rule the append path maintains, so a replay changes nothing.
+      const openQuestionBackfill =
+        /^UPDATE agent_sessions s\s+SET open_question_seq = pending\.seq\s/.test(sql) &&
+        /AND s\.open_question_seq IS NULL$/.test(sql);
       expect(
         /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(sql) ||
+          openQuestionBackfill ||
           /^ALTER TABLE [a-z_]+\s+ADD COLUMN IF NOT EXISTS /.test(sql),
         `ASSET_PG_SCHEMA statement is not an idempotent create or additive migration: ${statement}`,
       ).toBe(true);
@@ -869,8 +925,14 @@ describe.each(schemas)('$name is a pinned contract', ({ name, actual, expected, 
         (sql.match(/ALTER TABLE/g) ?? []).length ===
           (sql.match(/IF EXISTS \(\s*SELECT 1\s+FROM pg_attribute/g) ?? []).length &&
         !/DROP COLUMN/.test(sql);
+      // The open-question backfill only fills rows still NULL, from the same
+      // event-log rule the append path maintains, so a replay changes nothing.
+      const openQuestionBackfill =
+        /^UPDATE agent_sessions s\s+SET open_question_seq = pending\.seq\s/.test(sql) &&
+        /AND s\.open_question_seq IS NULL$/.test(sql);
       expect(
         /^CREATE (TABLE|INDEX|UNIQUE INDEX) IF NOT EXISTS /.test(sql) ||
+          openQuestionBackfill ||
           /^ALTER TABLE [a-z_]+\s+ADD COLUMN IF NOT EXISTS /.test(sql) ||
           localConstraintMigration ||
           constraintValidation ||

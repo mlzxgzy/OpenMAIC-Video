@@ -109,6 +109,7 @@ import {
   VOXCPM_VLLM_MODEL_ID,
   VOXCPM_AUTO_VOICE_ID,
   normalizeVoxCPMBackend,
+  voxCPMPromptProviderOptions,
   type VoxCPMProviderOptions,
 } from './voxcpm';
 import { createLogger } from '@/lib/logger';
@@ -155,6 +156,13 @@ export interface TTSGenerationResult {
 export class TTSRateLimitError extends Error {
   /** Milliseconds from a `Retry-After` header, when the provider sent one. */
   readonly retryAfterMs?: number;
+  /**
+   * Classifier sentinel, not the provider's HTTP status. Business-level rate
+   * limits (MiniMax HTTP 200 + code 1002, Doubao business codes) still carry
+   * 429 so `runFailureCode` and route retry map this class to `RATE_LIMITED`
+   * and a retryable status. A quota error attached as `cause` still wins.
+   */
+  readonly statusCode = 429;
 
   constructor(
     public readonly provider: string,
@@ -323,6 +331,8 @@ export async function generateTTS(
 
       case 'minimax-tts':
         return await generateMiniMaxTTS(config, text, signal);
+      case 'xiaomi-tts':
+        return await generateXiaomiTTS(config, text, signal);
       case 'doubao-tts':
         return await generateDoubaoTTS(config, text, signal);
       case 'elevenlabs-tts':
@@ -352,7 +362,7 @@ export async function generateTTS(
     if (isTimeoutSignal(signal)) {
       throw new TTSRequestTimeoutError(
         config.providerId,
-        `TTS request timed out after ${ttsRequestTimeoutMs()}ms (provider ${config.providerId}) — the provider did not respond. Retry the tool call.`,
+        `TTS request timed out after ${ttsRequestTimeoutMs()}ms (provider ${config.providerId}) — the provider did not respond. Do not retry with the same input without splitting long narration text or increasing TTS_REQUEST_TIMEOUT_MS.`,
       );
     }
     throw error;
@@ -466,8 +476,20 @@ async function generateVoxCPMTTS(
 
   const options = (config.providerOptions || {}) as VoxCPMProviderOptions;
   const backend = normalizeVoxCPMBackend(options.backend);
+  // A server-side caller (the agent's narration) names the speaker instead of
+  // sending the prompt the browser builds: design the auto voice from it.
+  const speakerPrompt =
+    !options.voicePrompt && !options.registeredVoiceId && config.speaker
+      ? voxCPMPromptProviderOptions(config.voice, {
+          ...(config.speaker.name ? { agentName: config.speaker.name } : {}),
+          ...(config.speaker.role ? { role: config.speaker.role } : {}),
+          ...(config.speaker.persona ? { persona: config.speaker.persona } : {}),
+          ...(config.speaker.voiceDesign ? { voiceDesign: config.speaker.voiceDesign } : {}),
+        }).voicePrompt
+      : undefined;
   const voicePrompt =
     options.voicePrompt ||
+    (config.voice === VOXCPM_AUTO_VOICE_ID ? speakerPrompt : undefined) ||
     (config.voice && config.voice !== 'default' && config.voice !== VOXCPM_AUTO_VOICE_ID
       ? config.voice
       : undefined);
@@ -952,19 +974,16 @@ async function generateQwenTTS(
   signal: AbortSignal,
 ): Promise<TTSGenerationResult> {
   const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
-  const cloneVoice = isQwenCloneVoice(config.voice);
+  const cloneVoice = isQwenCloneVoice(config.voice, config.voices);
 
   if (cloneVoice) {
-    const targetModel =
-      config.providerOptions?.qwenVoiceClone === true
-        ? config.modelId
-        : resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
     try {
       return await synthesizeQwenVoiceClone(
         {
           apiKey: config.apiKey,
           baseUrl,
-          targetModel,
+          // Server callers resolve and authorize the actual target before dispatch.
+          targetModel: config.modelId,
           publicOnly: config.publicOnly,
           managed: config.managed,
         },
@@ -985,7 +1004,7 @@ async function generateQwenTTS(
   // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
 
-  const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId);
+  const modelId = resolveTTSModelForVoice('qwen-tts', config.voice, config.modelId, config.voices);
   const resolvedModel = modelId || 'qwen3-tts-flash';
   // Instruction control: a natural-language delivery instruction for the line,
   // carried on the request's own options. Gated on the model, because DashScope
@@ -1212,7 +1231,7 @@ async function generateMiniMaxTTS(
 
 /**
  * Google Gemini TTS via the Interactions API.
- * Response audio is raw 24 kHz mono s16le PCM; wrap as WAV for classroom playback.
+ * Gemini 3.8 returns WAV; earlier preview models return raw mono s16le PCM.
  */
 async function generateGoogleTTS(
   config: TTSModelConfig,
@@ -1256,13 +1275,21 @@ async function generateGoogleTTS(
     throw new Error('Google Gemini TTS API error: response missing audio data');
   }
 
-  const pcm = new Uint8Array(Buffer.from(audio.data, 'base64'));
-  if (pcm.byteLength === 0) {
+  const bytes = new Uint8Array(Buffer.from(audio.data, 'base64'));
+  if (bytes.byteLength === 0) {
     throw new Error('Google Gemini TTS API error: empty audio payload');
   }
 
+  const mimeType = audio.mimeType?.split(';')[0].trim().toLowerCase();
+  if (mimeType === 'audio/wav') {
+    return { audio: bytes, format: 'wav' };
+  }
+  // Preserve the legacy PCM fallback for responses without a MIME type.
+  if (mimeType && mimeType !== 'audio/l16') {
+    throw new Error('Google Gemini TTS API error: unsupported audio format');
+  }
   return {
-    audio: pcmS16leMonoToWav(pcm, audio.sampleRate),
+    audio: pcmS16leMonoToWav(bytes, sampleRateFromL16Mime(audio.mimeType)),
     format: 'wav',
   };
 }
@@ -1273,7 +1300,7 @@ async function generateGoogleTTS(
  */
 function extractGoogleInteractionsAudio(
   payload: Record<string, unknown> | null,
-): { data: string; sampleRate: number } | null {
+): { data: string; mimeType?: string } | null {
   if (!payload || !Array.isArray(payload.steps)) return null;
 
   for (const step of payload.steps) {
@@ -1286,7 +1313,10 @@ function extractGoogleInteractionsAudio(
       if (block.type !== 'audio' || typeof block.data !== 'string' || block.data.length === 0) {
         continue;
       }
-      return { data: block.data, sampleRate: sampleRateFromL16Mime(block.mime_type) };
+      return {
+        data: block.data,
+        mimeType: typeof block.mime_type === 'string' ? block.mime_type : undefined,
+      };
     }
   }
 
@@ -1483,4 +1513,103 @@ function escapeXml(text: string): string {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&apos;');
+}
+
+/**
+ * Map a numeric speed to a graded natural-language pacing instruction.
+ * MiMo TTS takes speed only as a style instruction, not a request parameter,
+ * so the slider range maps to graded wording: 1.05 and 2.0 must not produce
+ * the same request.
+ */
+function xiaomiPacingInstruction(speed: number): string | null {
+  if (speed > 1.0) {
+    const pct = Math.round((speed - 1) * 100);
+    if (pct >= 60) return '说得非常快，语速很快。';
+    if (pct >= 25) return '说得快一些，语速偏快。';
+    return '语速稍微快一点。';
+  }
+  if (speed < 1.0) {
+    const pct = Math.round((1 - speed) * 100);
+    if (pct >= 40) return '说得非常慢，语速很慢。';
+    if (pct >= 15) return '说得慢一些，语速偏慢。';
+    return '语速稍微慢一点。';
+  }
+  return null;
+}
+
+/**
+ * Xiaomi MiMo TTS implementation.
+ *
+ * MiMo TTS does NOT expose an OpenAI-style /audio/speech endpoint. It reuses
+ * the chat/completions protocol: the text to synthesize goes in an `assistant`
+ * message (a hard provider rule), optional style instructions go in a `user`
+ * message, and the audio payload comes back base64-encoded at
+ * `choices[0].message.audio.data`. Numeric speed is not a request parameter,
+ * so a non-default speed is translated into a graded pacing instruction
+ * (`xiaomiPacingInstruction`).
+ */
+async function generateXiaomiTTS(
+  config: TTSModelConfig,
+  text: string,
+  signal: AbortSignal,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['xiaomi-tts'].defaultBaseUrl || '').replace(
+    /\/+$/,
+    '',
+  );
+
+  const messages: Array<{ role: string; content: string }> = [];
+  const pacing = xiaomiPacingInstruction(config.speed ?? 1.0);
+  if (pacing) {
+    messages.push({ role: 'user', content: pacing });
+  }
+  messages.push({ role: 'assistant', content: text });
+
+  const response = await ttsFetch(config, `${baseUrl}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.apiKey}`,
+      'Content-Type': 'application/json; charset=utf-8',
+      ...appAttributionHeaders(baseUrl),
+    },
+    body: JSON.stringify({
+      model: config.modelId || TTS_PROVIDERS['xiaomi-tts'].defaultModelId,
+      messages,
+      audio: {
+        format: 'wav',
+        voice: config.voice || 'mimo_default',
+      },
+    }),
+    signal,
+  });
+
+  if (!response.ok) {
+    throwIfTtsRateLimited('Xiaomi MiMo', response.status, response.headers.get('retry-after'));
+    const error = await response.json().catch(() => ({ error: { message: response.statusText } }));
+    throw new Error(`Xiaomi MiMo TTS API error: ${error.error?.message || response.statusText}`);
+  }
+
+  const data = await response.json();
+  const audioData = data?.choices?.[0]?.message?.audio?.data;
+  if (typeof audioData !== 'string' || !audioData) {
+    throw new TTSInvalidResponseError('Xiaomi MiMo', 'Xiaomi MiMo TTS API returned no audio data');
+  }
+  // Node's base64 decoder is lenient: whitespace or malformed input silently
+  // decodes to zero or arbitrary bytes. A "success" carrying those would be
+  // billed and persisted as an unplayable asset, so validate the payload.
+  const audio = Buffer.from(audioData, 'base64');
+  if (
+    audio.byteLength < 44 ||
+    !audio.subarray(0, 4).equals(Buffer.from('RIFF')) ||
+    !audio.subarray(8, 12).equals(Buffer.from('WAVE'))
+  ) {
+    throw new TTSInvalidResponseError(
+      'Xiaomi MiMo',
+      `Xiaomi MiMo TTS returned a ${audio.byteLength}-byte payload that is not a valid WAV file`,
+    );
+  }
+  return {
+    audio: new Uint8Array(audio),
+    format: 'wav',
+  };
 }

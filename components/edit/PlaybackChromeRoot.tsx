@@ -12,16 +12,37 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from 'react';
 import { useStageStore } from '@/lib/store';
 import { PENDING_SCENE_ID, flushStageSave } from '@/lib/store/stage';
 import { setSpeechTextClearAudioById } from '@/components/edit/ActionsBar/actions-edit';
-import { discardSpeechAudio } from '@/lib/audio/regenerate-speech-tts';
+import { AnimatePresence, motion } from 'motion/react';
+import { CourseEnd } from '@/components/classroom/course-end/CourseEnd';
+import {
+  readSceneQuizAnswers,
+  summarizeScenes,
+  type CompleteSummary,
+} from '@/lib/classroom/complete-summary';
+import {
+  courseIsComplete,
+  moreIsComing,
+  opensOnNext,
+  opensOnPlaybackEnd,
+  opensOnQuizSubmit,
+  opensWhenBuildEnds,
+  pageAwaitsLearner,
+  waitsForNextPage,
+  type CourseEndAction,
+  type CourseEndContext,
+} from '@/lib/classroom/course-end';
+import { sessionBuildsCourse, useWorkbenchStore } from '@/lib/workbench/session-store';
+import { onQuizReviewed } from '@/lib/classroom/quiz-reviewed';
+import { loadQuizAttemptState } from '@/lib/quiz/runtime';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { SceneSidebar } from '@/components/stage/scene-sidebar';
+import { isTextEntryTarget } from '@/components/stage/page-rail';
 import { Header } from '@/components/header';
 import { CanvasArea } from '@/components/canvas/canvas-area';
 import { Roundtable } from '@/components/roundtable';
@@ -44,6 +65,7 @@ import { ActionEngine } from '@/lib/action/engine';
 import { createAudioPlayer } from '@/lib/utils/audio-player';
 import { useDiscussionTTS } from '@/lib/hooks/use-discussion-tts';
 import { useWidgetIframeStore } from '@/lib/store/widget-iframe';
+import { MEDIA_CONTROL } from '@/lib/interactive/media-bridge';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
 import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action';
 import { cn } from '@/lib/utils';
@@ -78,6 +100,9 @@ import {
 } from '@/components/canvas/slide-element-pick-overlay';
 import { shouldClearDraftElementReference } from '@/components/chat/element-reference-receipt';
 
+/** The pause before the end state, the same as between two pages on autoplay. */
+const COURSE_END_GAP_MS = 1500;
+
 type DraftElementReference = {
   reference: ElementReference;
   selectionVersion: number;
@@ -96,6 +121,7 @@ type ElementReferenceSendSnapshot = Pick<DraftElementReference, 'reference' | 's
  * chat to be quiescent — fire-and-forget on unmount loses that guarantee.
  */
 export interface PlaybackChromeRootHandle {
+  pauseForInteractiveMedia: () => void;
   /** Ends any active SSE session, stops the engine, cleans up TTS audio. */
   teardown: () => Promise<void>;
   /** Receives one identity-only pick from the sibling Interactive iframe host. */
@@ -107,16 +133,20 @@ export interface PlaybackChromeRootHandle {
 interface PlaybackChromeRootProps {
   readonly onRetryOutline?: (outlineId: string) => Promise<void>;
   readonly generationFailureMessage?: string;
-  /** Whether the Pro Switch in Header should be enabled. */
+  /** Whether the edit control in Header should be enabled. */
   readonly canEnterProMode?: boolean;
-  /** Pro Switch click handler — parent coordinates teardown + mode flip. */
+  /** Edit control click handler — parent coordinates teardown + mode flip. */
   readonly onEnterProMode?: () => void;
-  readonly proModeActive?: boolean;
-  readonly headerBackControl?: ReactNode;
-  readonly hideHeaderBackControl?: boolean;
+  /**
+   * The workbench is part of this build: the header offers Learn | Edit and,
+   * with `onOpenInWorkspace`, the way into the workspace (see `HeaderControls`).
+   */
+  readonly workbenchControls?: boolean;
+  readonly onOpenInWorkspace?: () => void;
+  /** A visitor's way into their own workbench (see `HeaderControls`). */
+  readonly makeOwnCourseHref?: string;
+  /** The workspace pane draws its own header around a hosted classroom. */
   readonly hideHeader?: boolean;
-  readonly hideHeaderGlobalControls?: boolean;
-  readonly hideHeaderCourseActions?: boolean;
   readonly onInteractivePickerChange?: (state: PlaybackInteractivePickerState | null) => void;
   /**
    * Whether the notes tab may rewrite narration lines. Resolved by the host
@@ -129,7 +159,7 @@ interface PlaybackChromeRootProps {
 
 /**
  * PlaybackChromeRoot — owns the entire playback/autonomous chrome and
- * its state. Mounted whenever `mode !== 'edit'`. The Pro Switch in
+ * its state. Mounted whenever `mode !== 'edit'`. The edit control in
  * `Header` calls `onEnterProMode`; the parent `Stage` is responsible
  * for calling `ref.teardown()` before unmounting this root so SSE and
  * the engine wind down cleanly.
@@ -141,12 +171,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       generationFailureMessage,
       canEnterProMode,
       onEnterProMode,
-      proModeActive,
-      headerBackControl,
-      hideHeaderBackControl,
+      workbenchControls,
+      onOpenInWorkspace,
+      makeOwnCourseHref,
       hideHeader,
-      hideHeaderGlobalControls,
-      hideHeaderCourseActions,
       onInteractivePickerChange,
       canEditScript = false,
     },
@@ -166,6 +194,8 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     const failedOutlines = useStageStore.use.failedOutlines();
     const generationComplete = useStageStore.use.generationComplete();
     const generationInterrupted = useStageStore.use.generationInterrupted();
+    // The workspace's agent run is writing this very course: its pages keep landing.
+    const agentBuilding = useWorkbenchStore((s) => sessionBuildsCourse(s, stage?.id));
 
     const currentScene = getCurrentScene();
     const coursewareReferenceEnabled = isCoursewareReferenceEnabled();
@@ -311,12 +341,18 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     }, [selectedAgentIds]);
 
     const engineRef = useRef<PlaybackEngine | null>(null);
+    const openCourseEndRef = useRef<(() => Promise<void>) | null>(null);
+    const beginWaitRef = useRef<((sceneId: string, byHand: boolean) => void) | null>(null);
     const audioPlayerRef = useRef(createAudioPlayer());
     const chatAreaRef = useRef<ChatAreaRef>(null);
     const lectureSessionIdRef = useRef<string | null>(null);
     const lectureActionCounterRef = useRef(0);
     const currentPlaybackActionIndexRef = useRef<number | null>(currentPlaybackActionIndex);
     const activeSceneIdRef = useRef<string | null>(currentSceneId);
+    const pauseInteractiveMedia = useCallback(() => {
+      const sceneId = activeSceneIdRef.current;
+      if (sceneId) useWidgetIframeStore.getState().sendMessageByScene[sceneId]?.(MEDIA_CONTROL, {});
+    }, []);
     const discussionAbortRef = useRef<AbortController | null>(null);
     const presentationIdleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const cursorSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -595,6 +631,13 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           discussionTTS.cleanup();
           resetSceneState();
         },
+        pauseForInteractiveMedia: () => {
+          const engine = engineRef.current;
+          if (engine?.getMode() !== 'playing') return;
+          engine.pause();
+          if (lectureSessionIdRef.current)
+            chatAreaRef.current?.pauseBuffer(lectureSessionIdRef.current);
+        },
         acceptInteractivePick: (pick) => interactivePickHandlerRef.current(pick),
         cancelElementPick: () => setElementPickActive(false),
       }),
@@ -801,6 +844,7 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
 
         // Create new PlaybackEngine
         const engine = new PlaybackEngine([currentScene], actionEngine, audioPlayerRef.current, {
+          beforeSpeech: pauseInteractiveMedia,
           onModeChange: (mode) => {
             setEngineMode(mode);
           },
@@ -963,6 +1007,18 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                 }
               }, 1500);
             }
+            // The last page finished: the course's end, autoplay or not.
+            const finishedSceneId = currentScene.id;
+            const finishedType = currentScene.type;
+            window.setTimeout(() => {
+              if (useStageStore.getState().currentSceneId !== finishedSceneId) return;
+              if (opensOnPlaybackEnd(courseEndContextRef.current, finishedType)) {
+                void openCourseEndRef.current?.();
+              } else if (!pageAwaitsLearner(finishedType)) {
+                // More is being built: wait here for it, not at an end that isn't one.
+                beginWaitRef.current?.(finishedSceneId, false);
+              }
+            }, COURSE_END_GAP_MS);
           },
         });
 
@@ -1220,18 +1276,125 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     // get scene information
     const isPendingScene = currentSceneId === PENDING_SCENE_ID;
     const hasNextPending = generatingOutlines.length > 0;
-    // True when every outline has materialized into a scene and nothing is
-    // currently generating — signals the classroom has finished and the user
-    // can see a completion page. Comparing scenes.length === outlines.length
-    // (rather than just `scenes.length > 0`) means a partial generation with
-    // some failed outlines does not falsely trigger completion. The persisted
-    // generationComplete flag also marks completion directly, so an edited
-    // finished deck (e.g. a deleted slide, leaving outlines.length > scenes)
-    // still reads as complete.
-    const isCourseComplete =
-      generationComplete ||
-      (outlines.length > 0 && scenes.length === outlines.length && generatingOutlines.length === 0);
-    const canAdvanceToPendingSlot = hasNextPending || isCourseComplete;
+    // Complete once every outline has its scene, or the persisted flag says so
+    // (an edited finished deck can have fewer scenes than outlines) — but never
+    // while a generation run or the workspace's agent is still building it: an
+    // agent grows the outline page by page, so between two pages it only looks
+    // complete. See `courseIsComplete`.
+    const courseBuild = {
+      generationComplete,
+      outlineCount: outlines.length,
+      sceneCount: scenes.length,
+      generatingCount: generatingOutlines.length,
+      agentBuilding,
+    };
+    const moreComing = moreIsComing(courseBuild);
+    // The end state: a layer over the last page, with its own way in from next.
+    const nextOpensEnd = courseIsComplete(courseBuild);
+    const [courseEnd, setCourseEnd] = useState<CompleteSummary | null>(null);
+    const courseEndFiredRef = useRef(false);
+    const courseEndTokenRef = useRef(0);
+    const lastScene = scenes.at(-1);
+
+    const openCourseEnd = useCallback(async () => {
+      courseEndFiredRef.current = true;
+      const token = ++courseEndTokenRef.current;
+      const deck = useStageStore.getState().scenes;
+      const summary = await summarizeScenes(deck, (sceneId) =>
+        readSceneQuizAnswers(
+          deck.find((scene) => scene.id === sceneId),
+          loadQuizAttemptState,
+        ),
+      );
+      if (token === courseEndTokenRef.current) setCourseEnd(summary);
+    }, []);
+    const closeCourseEnd = useCallback(() => {
+      courseEndTokenRef.current += 1;
+      setCourseEnd(null);
+    }, []);
+
+    // It belongs to the last page: leaving that page, however, closes it.
+    useEffect(() => {
+      closeCourseEnd();
+    }, [currentSceneId, closeCourseEnd]);
+
+    // What the delayed triggers need to know when they fire, not when they were set.
+    const courseEndContextRef = useRef<CourseEndContext>({
+      courseComplete: false,
+      onLastPage: false,
+      busy: false,
+      fired: false,
+    });
+    courseEndContextRef.current = {
+      courseComplete: nextOpensEnd,
+      onLastPage: !!lastScene && lastScene.id === currentSceneId,
+      busy: isTopicActive || chatIsStreaming || engineMode === 'live',
+      fired: courseEndFiredRef.current,
+    };
+    openCourseEndRef.current = openCourseEnd;
+
+    // At the last page while more is being built: the learner waits here for the
+    // next page, told it is coming, and moves on to it when it lands.
+    const [waitingPast, setWaitingPast] = useState<{
+      readonly sceneId: string;
+      /** Begun by pressing next, rather than by the page ending. */
+      readonly byHand: boolean;
+    } | null>(null);
+    const waitContextRef = useRef({ moreComing, onLastPage: false, pendingPage: hasNextPending });
+    waitContextRef.current = {
+      moreComing,
+      onLastPage: courseEndContextRef.current.onLastPage,
+      pendingPage: hasNextPending,
+    };
+    const beginWait = useCallback((sceneId: string, byHand: boolean) => {
+      if (courseEndContextRef.current.busy) return;
+      if (!waitsForNextPage(waitContextRef.current)) return;
+      setWaitingPast({ sceneId, byHand });
+    }, []);
+    beginWaitRef.current = beginWait;
+
+    useEffect(() => {
+      if (!waitingPast) return;
+      const index = scenes.findIndex((scene) => scene.id === waitingPast.sceneId);
+      const next = index >= 0 ? scenes[index + 1] : undefined;
+      if (waitingPast.sceneId !== currentSceneId) {
+        setWaitingPast(null);
+      } else if (next) {
+        // The next page landed: go on to it, playing on if playback was.
+        setWaitingPast(null);
+        const autoplay = useSettingsStore.getState().autoPlayLecture;
+        if (waitingPast.byHand || autoplay) {
+          if (autoplay && !waitingPast.byHand) autoStartRef.current = true;
+          setCurrentSceneId(next.id);
+        }
+      } else if (!moreComing) {
+        // The build ended with this page last: it was the end after all.
+        setWaitingPast(null);
+        if (opensWhenBuildEnds(courseEndContextRef.current, waitingPast.byHand)) {
+          void openCourseEnd();
+        }
+      }
+    }, [currentSceneId, moreComing, openCourseEnd, scenes, setCurrentSceneId, waitingPast]);
+
+    // A quiz on the last page opens it once handed in: it is what the page was waiting for.
+    useEffect(
+      () =>
+        onQuizReviewed(() => {
+          window.setTimeout(() => {
+            if (opensOnQuizSubmit(courseEndContextRef.current)) void openCourseEnd();
+            else {
+              const sceneId = useStageStore.getState().currentSceneId;
+              if (sceneId) beginWaitRef.current?.(sceneId, false);
+            }
+          }, COURSE_END_GAP_MS);
+        }),
+      [openCourseEnd],
+    );
+
+    // A completed course has nothing pending: don't wait on the slot for what cannot come.
+    useEffect(() => {
+      if (isPendingScene && nextOpensEnd && lastScene) setCurrentSceneId(lastScene.id);
+    }, [isPendingScene, lastScene, nextOpensEnd, setCurrentSceneId]);
 
     // previous scene (gated)
     const handlePreviousScene = useCallback(() => {
@@ -1254,16 +1417,65 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       const currentIndex = scenes.findIndex((s) => s.id === currentSceneId);
       if (currentIndex < scenes.length - 1) {
         void gatedSceneSwitch(scenes[currentIndex + 1].id);
-      } else if (canAdvanceToPendingSlot) {
-        // On last real scene → advance to pending slot (generating or completion page)
+      } else if (hasNextPending) {
+        // On last real scene → advance to the page still being generated
         void gatedSceneSwitch(PENDING_SCENE_ID);
+      } else if (opensOnNext(courseEndContextRef.current)) {
+        if (engineRef.current && engineMode === 'playing') engineRef.current.pause();
+        void openCourseEnd();
+      } else if (currentSceneId) {
+        beginWait(currentSceneId, true);
       }
-    }, [currentSceneId, gatedSceneSwitch, canAdvanceToPendingSlot, isPendingScene, scenes]);
+    }, [
+      beginWait,
+      currentSceneId,
+      engineMode,
+      gatedSceneSwitch,
+      hasNextPending,
+      isPendingScene,
+      openCourseEnd,
+      scenes,
+    ]);
+
+    const handleCourseEndAction = useCallback(
+      (action: CourseEndAction) => {
+        const target =
+          action === 'reviewWrong'
+            ? courseEnd?.firstWrongQuizId
+            : action === 'doQuiz'
+              ? courseEnd?.unattemptedQuizIds[0]
+              : scenes[0]?.id;
+        closeCourseEnd();
+        if (!target) return;
+        if (action !== 'restart') {
+          void gatedSceneSwitch(target);
+          return;
+        }
+        // A new playthrough, from the first word.
+        courseEndFiredRef.current = false;
+        clearSceneResumePosition(target);
+        if (target === currentSceneId) {
+          void handlePlayPause();
+          return;
+        }
+        autoStartRef.current = true;
+        void gatedSceneSwitch(target);
+      },
+      [
+        clearSceneResumePosition,
+        closeCourseEnd,
+        courseEnd,
+        currentSceneId,
+        gatedSceneSwitch,
+        handlePlayPause,
+        scenes,
+      ],
+    );
 
     const currentSceneIndex = isPendingScene
       ? scenes.length
       : scenes.findIndex((s) => s.id === currentSceneId);
-    const totalScenesCount = scenes.length + (canAdvanceToPendingSlot ? 1 : 0);
+    const totalScenesCount = scenes.length + (hasNextPending ? 1 : 0);
     const showElementReference = coursewareReferenceEnabled && mode === 'playback';
     const canPickSlideElement = Boolean(
       showElementReference &&
@@ -1539,12 +1751,9 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
     /**
      * Persist a narration line the user rewrote in the notes tab.
      *
-     * Two writes, in this order, and the order is the whole point: the text
-     * change drops the line's stamped audio FIRST (`setSpeechTextClearAudioById`
-     * clears `audioId` and raises `audioInvalidated`), and only then is the
-     * cached blob deleted. Doing it the other way round would leave a window
-     * where the document still names an asset whose bytes are already gone —
-     * the exact dangling reference `audioInvalidated` exists to prevent.
+     * `setSpeechTextClearAudioById` drops the line's stamped audio and marks it
+     * invalidated, so the line reads as un-voiced until it is regenerated. The
+     * bytes stay: an undo restores these fields and the clip with them.
      *
      * Applied to the LATEST actions from the store rather than this render's
      * snapshot, so a concurrent playback-driven or agent-driven update is not
@@ -1555,21 +1764,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         const store = useStageStore.getState();
         const scene = store.scenes.find((candidate) => candidate.id === sceneId);
         if (!scene) return;
-        const previousAudioId = (scene.actions ?? []).find((action) => action.id === actionId) as
-          | { audioId?: string }
-          | undefined;
         store.updateScene(sceneId, {
           actions: setSpeechTextClearAudioById(scene.actions ?? [], actionId, text),
         });
-        // Re-check the audio state only AFTER the blob is gone, so the status
-        // row can't race the async delete and briefly still read "voiced".
-        void discardSpeechAudio(scene.order, {
-          id: actionId,
-          ...(previousAudioId?.audioId ? { audioId: previousAudioId.audioId } : {}),
-        }).catch(() => undefined);
-        // Debounced persistence would otherwise let a reload land between the
-        // text write and the audio drop; the edit is the user's work, so it is
-        // durable when the panel closes.
+        // Debounced persistence would otherwise let a reload land after the
+        // text write; the edit is the user's work, so it is durable when the
+        // panel closes.
         void flushStageSave().catch(() => undefined);
       },
       [],
@@ -1580,29 +1780,12 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       setWhiteboardOpenManually(!whiteboardOpen);
     };
 
-    const isPresentationShortcutTarget = useCallback((target: EventTarget | null) => {
-      if (!(target instanceof HTMLElement)) return false;
-
-      if (target.isContentEditable || target.closest('[contenteditable="true"]')) {
-        return true;
-      }
-
-      return (
-        target.closest(
-          ['input', 'textarea', 'select', '[role="slider"]', 'input[type="range"]'].join(', '),
-        ) !== null
-      );
-    }, []);
-
     useEffect(() => {
       const onKeyDown = (event: KeyboardEvent) => {
         if (event.defaultPrevented) return;
         // Let modifier-key combos (Ctrl+C, Ctrl+S, etc.) pass through to the browser
         if (event.ctrlKey || event.metaKey || event.altKey) return;
-        if (
-          isPresentationShortcutTarget(event.target) ||
-          isPresentationShortcutTarget(document.activeElement)
-        ) {
+        if (isTextEntryTarget(event.target) || isTextEntryTarget(document.activeElement)) {
           return;
         }
 
@@ -1649,11 +1832,6 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
             event.preventDefault();
             setTTSMuted(!ttsMuted);
             break;
-          case 's':
-          case 'S':
-            event.preventDefault();
-            setSidebarCollapsed(!sidebarCollapsed);
-            break;
           case 'c':
           case 'C':
             event.preventDefault();
@@ -1674,13 +1852,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
       handlePreviousScene,
       isPresenting,
       isPresentationInteractionActive,
-      isPresentationShortcutTarget,
       resetPresentationIdleTimer,
       setChatAreaCollapsed,
-      setSidebarCollapsed,
       setTTSMuted,
       setTTSVolume,
-      sidebarCollapsed,
       togglePresentation,
       ttsMuted,
       ttsVolume,
@@ -1724,19 +1899,10 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
         }
       : null;
 
-    // Scene viewer height — header is 80px when visible, roundtable is
-    // 192px in playback mode (autonomous hides it). Mode is guaranteed
-    // non-'edit' here since the parent Stage unmounts this component
-    // when entering Pro mode.
-    const sceneViewerHeight = (() => {
-      const headerHeight = isPresenting || hideHeader ? 0 : 80;
-      const roundtableHeight = mode === 'playback' && !isPresenting ? 192 : 0;
-      return `calc(100% - ${headerHeight + roundtableHeight}px)`;
-    })();
-
     return (
       <div
         ref={stageRef}
+        data-playback-stage=""
         className={cn(
           'flex-1 flex overflow-hidden bg-gray-50 dark:bg-gray-900',
           isPresenting && !controlsVisible && 'cursor-none',
@@ -1747,41 +1913,29 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
           onCollapseChange={setSidebarCollapsed}
           onSceneSelect={gatedSceneSwitch}
           onRetryOutline={onRetryOutline}
-          isCourseComplete={isCourseComplete}
         />
 
         {/* Main Content Area */}
         <div className="flex-1 flex flex-col overflow-hidden min-w-0 relative">
-          {/* Header — playback only. The Pro Switch fires `onEnterProMode`
+          {/* Header — playback only. The edit control fires `onEnterProMode`
             (passed by the parent Stage) which awaits our `teardown()`
             before the parent flips mode to 'edit'. */}
           {!isPresenting && !hideHeader && (
             <Header
-              currentSceneTitle={
-                currentScene?.title ||
-                (isCourseComplete && isPendingScene ? t('stage.courseComplete') : '')
-              }
+              currentSceneTitle={currentScene?.title || ''}
               mode={mode}
-              proModeActive={proModeActive}
               canEdit={!!canEnterProMode}
               onToggleEditMode={onEnterProMode}
-              backControl={headerBackControl}
-              hideBackControl={hideHeaderBackControl}
-              hideGlobalControls={hideHeaderGlobalControls}
-              hideCourseActions={hideHeaderCourseActions}
+              workbenchControls={workbenchControls}
+              onOpenInWorkspace={onOpenInWorkspace}
+              makeOwnCourseHref={makeOwnCourseHref}
             />
           )}
 
           {/* Canvas Area — playback-only renderer. The parent Stage swaps
             this whole PlaybackChromeRoot out when entering edit mode, so
             no inline branching is needed here. */}
-          <div
-            className="overflow-hidden relative flex-1 min-h-0 isolate"
-            style={{
-              height: sceneViewerHeight,
-            }}
-            suppressHydrationWarning
-          >
+          <div className="overflow-hidden relative flex-1 min-h-0 isolate" suppressHydrationWarning>
             <CanvasArea
               currentScene={currentScene}
               currentSceneIndex={currentSceneIndex}
@@ -1830,7 +1984,6 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               onCancelElementPick={() => setElementPickActive(false)}
               hideToolbar={mode === 'playback' || (isPresenting && !controlsVisible)}
               isPendingScene={isPendingScene}
-              isCourseComplete={isCourseComplete}
               isGenerationFailed={
                 isPendingScene && failedOutlines.some((f) => f.id === generatingOutlines[0]?.id)
               }
@@ -1842,6 +1995,25 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
                   : undefined
               }
             />
+            <AnimatePresence>
+              {courseEnd && !isPendingScene ? (
+                <motion.div
+                  key="course-end"
+                  className="absolute inset-0 z-[130]"
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.18 }}
+                >
+                  <CourseEnd
+                    summary={courseEnd}
+                    courseName={stage?.name ?? ''}
+                    pageCount={scenes.length}
+                    blurBehind={currentScene?.type !== 'interactive'}
+                    onDismiss={closeCourseEnd}
+                    onAction={handleCourseEndAction}
+                  />
+                </motion.div>
+              ) : null}
+            </AnimatePresence>
           </div>
 
           {/* Roundtable Area */}
@@ -1854,6 +2026,11 @@ export const PlaybackChromeRoot = forwardRef<PlaybackChromeRootHandle, PlaybackC
               )}
             >
               <Roundtable
+                nextOpensEnd={nextOpensEnd}
+                foldDock={
+                  Boolean(courseEnd) && !lectureSpeech && (playbackCompleted || !firstSpeechText)
+                }
+                courseEndOpen={Boolean(courseEnd) && !isPendingScene}
                 mode={mode}
                 initialParticipants={participants}
                 playbackView={playbackView}

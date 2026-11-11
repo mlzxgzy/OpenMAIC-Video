@@ -17,19 +17,25 @@ describe('the workspace rail is transient browser chrome', () => {
     expect(toggle).toContain('NAV_COLLAPSED_STORAGE_KEY');
     expect(toggle).not.toContain('setChat(');
     expect(toggle).not.toContain('setClassroom(');
-    expect(shell).toContain('onToggleCollapsed={collapse.toggleNav}');
+    // The rail's own toggle; while the request preview holds the center it
+    // also answers the preview's temporary fold (see `toggleRail`).
+    expect(shell).toContain('onToggleCollapsed={toggleRail}');
+    const from = shell.indexOf('const toggleRail');
+    const handler = shell.slice(from, shell.indexOf('return (', from));
+    expect(handler).toContain('collapse.toggleNav()');
   });
 
   it('leaves a direct expand affordance when dismissed', () => {
-    const mini = rail.slice(rail.indexOf('pro-nav-rail-mini'), rail.indexOf('renderCourseRow'));
+    const mini = rail.slice(rail.indexOf('pro-nav-rail-mini'), rail.indexOf('renderSessionRow'));
     expect(mini).toContain('testId="pro-nav-expand"');
     expect(mini).toContain('onClick={onToggleCollapsed}');
     expect(mini).toContain('aria-expanded={false}');
   });
 
-  it('keeps conversations and courses as separate destinations', () => {
-    expect(rail).toContain("id: 'sessions'");
-    expect(rail).toContain("id: 'courses'");
+  it('lists conversations only; courses are a destination page', () => {
+    expect(rail).toContain('id="sessions"');
+    expect(rail).toContain('id: WORKSPACE_COURSES_VIEW');
+    expect(rail).not.toContain('role="tablist"');
     expect(rail).not.toMatch(/course.*sessionId|session.*courseId/);
   });
 });

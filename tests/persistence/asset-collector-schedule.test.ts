@@ -7,6 +7,16 @@ import type { AssetCollectorSchedule } from '@/lib/persistence/asset-collector-s
 // exercised against a real server in schema-bootstrap-concurrency.pg.test.ts.
 // register() starts the background workers. Real ones keep polling the
 // database after the file's tests end and log into a closing worker.
+vi.mock('@/lib/server/pbl-v3/lifecycle-schedule', () => ({
+  startLearningLifecycle: vi.fn(),
+}));
+const startTeachingExecutionWatchdog = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/server/pbl-v3/execution-watchdog', () => ({
+  startTeachingExecutionWatchdog,
+}));
+vi.mock('@/lib/server/sandbox/checkpoint-collector', () => ({
+  startCheckpointCollector: vi.fn(),
+}));
 vi.mock('@/lib/server/generation/run/runner', () => ({
   startGenerationRunner: () => ({ workerId: 'test', wake: () => {}, stop: async () => {} }),
 }));
@@ -16,7 +26,10 @@ vi.mock('@/lib/server/materials/extraction', () => ({
 vi.mock('@/lib/server/legacy-classroom-import', () => ({
   startLegacyClassroomImport: () => ({ stop: async () => {} }),
 }));
-vi.mock('@/lib/persistence/schema-boot-check', () => ({ startSchemaBootCheck: vi.fn() }));
+vi.mock('@/lib/persistence/schema-boot-check', () => ({
+  startSchemaBootCheck: vi.fn(),
+  startRuntimeSchemaMonitor: vi.fn(),
+}));
 vi.mock('@/lib/persistence/schema-bootstrap-lock', () => ({
   SCHEMA_BOOTSTRAP_LOCK_KEY: 0,
   withSchemaBootstrapLock: <T>(pool: unknown, body: (queryable: never) => Promise<T>) =>
@@ -67,6 +80,15 @@ class MockReferenceTrackingNotEnabled extends Error {
   constructor() {
     super('no reference writer has ever run');
     this.name = 'AssetReferenceTrackingNotEnabledError';
+  }
+}
+
+class MockReferenceRuleVersion extends Error {
+  readonly databaseVersion = 3;
+  readonly knownVersion = 2;
+  constructor() {
+    super('newer reference rules');
+    this.name = 'AssetReferenceRuleVersionError';
   }
 }
 
@@ -129,6 +151,7 @@ function mockStorage(collect: () => Promise<Partial<CollectionPass>>): Harness {
   vi.doMock('@openmaic/storage/asset/collector', () => ({
     DEFAULT_ASSET_COLLECTION_GRACE_MS: 60 * 60 * 1000,
     AssetReferenceTrackingNotEnabledError: MockReferenceTrackingNotEnabled,
+    AssetReferenceRuleVersionError: MockReferenceRuleVersion,
     StorageLockUnavailableError: MockLockUnavailable,
     AssetCollector: class {
       collectPass = harness.collectPass;
@@ -307,6 +330,25 @@ describe('asset collector schedule', () => {
     expect(info).toHaveBeenCalledTimes(1);
     expect(String(info.mock.calls[0]?.[0])).toContain('enumerated 50 document(s)');
     info.mockRestore();
+  });
+
+  it('reports newer reference rules as an outdated instance, and keeps collecting', async () => {
+    const harness = mockStorage(async () => ({}));
+    harness.collectPass.mockRejectedValue(new MockReferenceRuleVersion());
+    vi.stubEnv('DATABASE_URL', 'postgres://collector-outdated');
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    schedule = await startSchedule();
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+    await vi.advanceTimersByTimeAsync(15 * 60 * 1000);
+
+    expect(harness.collectPass).toHaveBeenCalledTimes(2);
+    expect(error).toHaveBeenCalledTimes(2);
+    const alarm = String(error.mock.calls[0]?.[0]);
+    expect(alarm).toContain('reference rules version 3');
+    expect(alarm).toContain('Upgrade this instance');
+    expect(alarm).not.toContain('retrying on the next interval');
+    error.mockRestore();
   });
 
   it('reports a marker that is gone as a defect, and keeps collecting', async () => {
@@ -533,10 +575,14 @@ describe('asset collector schedule', () => {
 
 describe('instrumentation registration', () => {
   beforeEach(() => {
+    startTeachingExecutionWatchdog.mockClear();
     vi.resetModules();
     vi.unstubAllEnvs();
+    // Model routing is independent of scheduling and must not read local deployment files.
+    vi.doMock('@/lib/server/model-config/runtime', () => ({ deploymentConfig: vi.fn() }));
     // register() refuses to boot without a database; these cases start past it.
     vi.stubEnv('DATABASE_URL', 'postgres://collector-registration/openmaic');
+    vi.stubEnv('OPENMAIC_AGENT_RUNTIME_ENABLED', 'false');
   });
 
   it('starts the schedule on the Node.js server runtime', async () => {
@@ -550,6 +596,7 @@ describe('instrumentation registration', () => {
     await register();
 
     expect(startAssetCollectorSchedule).toHaveBeenCalledOnce();
+    expect(startTeachingExecutionWatchdog).toHaveBeenCalledOnce();
   });
 
   it('refuses to start on a malformed pending TTL, before anything is scheduled', async () => {
@@ -570,6 +617,7 @@ describe('instrumentation registration', () => {
     await expect(register()).rejects.toThrow(/ASSET_PENDING_TTL_MS/);
     expect(exitOnBootFailure).toHaveBeenCalledOnce();
     expect(startAssetCollectorSchedule).not.toHaveBeenCalled();
+    expect(startTeachingExecutionWatchdog).not.toHaveBeenCalled();
   });
 
   it('does nothing on the Edge runtime', async () => {
@@ -583,5 +631,31 @@ describe('instrumentation registration', () => {
     await register();
 
     expect(startAssetCollectorSchedule).not.toHaveBeenCalled();
+    expect(startTeachingExecutionWatchdog).not.toHaveBeenCalled();
   });
+
+  it.each(['OPENMAIC_PBL_IDLE_TIMEOUT_MS', 'OPENMAIC_PBL_ARCHIVE_FAILURE_GRACE_MS'])(
+    'refuses malformed %s through the fatal boot path before scheduling work',
+    async (setting) => {
+      const startAssetCollectorSchedule = vi.fn();
+      vi.doMock('@/lib/persistence/asset-collector-schedule', () => ({
+        startAssetCollectorSchedule,
+      }));
+      const startLegacyClassroomImport = vi.fn(() => ({ stop: async () => {} }));
+      vi.doMock('@/lib/server/legacy-classroom-import', () => ({ startLegacyClassroomImport }));
+      const exitOnBootFailure = vi.fn(async () => {});
+      vi.doMock('@/lib/server/boot-failure', () => ({ exitOnBootFailure }));
+      vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+      vi.stubEnv(setting, 'Infinity');
+
+      const { register } = await import('@/instrumentation');
+      await expect(register()).rejects.toThrow(setting);
+      expect(exitOnBootFailure).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ name: 'InvalidBootConfigurationError' }),
+      );
+      expect(startLegacyClassroomImport).not.toHaveBeenCalled();
+      expect(startAssetCollectorSchedule).not.toHaveBeenCalled();
+      expect(startTeachingExecutionWatchdog).not.toHaveBeenCalled();
+    },
+  );
 });

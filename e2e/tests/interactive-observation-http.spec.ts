@@ -33,19 +33,24 @@ function bundle(declared: boolean) {
 import React, {useLayoutEffect,useEffect,useMemo,useRef,useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {createObservationSession} from './lib/interactive/observation-bridge';
+import {createInteractiveMediaSession,mediaDocumentId,MEDIA_CONTROL} from './lib/interactive/media-bridge';
 import {patchHtmlForIframe} from './lib/utils/iframe';
 import {supportsInteractiveObservation, OBSERVATION_SCOPE_ID} from './lib/interactive/observation';
 import {sampleInteractiveState} from './lib/interactive/chat-observation';
 const useI18n=()=>({t:k=>k});
-const widget={registerObservation(){},registerIframe(){},markIframeReady(){},getSendMessage(){return undefined}};
-const useWidgetIframeStore=selector=>selector(widget);
+const widget={documentTokenByScene:{},sendMessageByScene:{},registerObservation(){},
+ registerIframe(sceneId,send,token){widget.documentTokenByScene[sceneId]=token;widget.sendMessageByScene[sceneId]=send;},
+ markIframeReady(){},getSendMessage(){return undefined}};
+const useWidgetIframeStore=Object.assign(selector=>selector(widget),{getState:()=>widget});
 const useCanvasStore={use:{pickTarget:()=>null}};
 const useElementRefsStore={use:{refs:()=>[]}};
 const runtimeErrorState={errors:{},clearScene(){}};
 const useSceneRuntimeErrors=Object.assign((selector)=>selector(runtimeErrorState),{getState:()=>runtimeErrorState});
 const InteractiveRuntimeErrorBanner=()=>null;
+const InteractiveMoreBelowCue=()=>null;
 const resolveInteractivePickerMode=()=>null;
-import { GENUI_LOGICAL_WIDTH, GENUI_LOGICAL_HEIGHT, fitGenUiViewport } from './lib/interactive/logical-viewport';
+import { GENUI_LOGICAL_WIDTH, GENUI_LOGICAL_HEIGHT } from './lib/interactive/logical-viewport';
+import { GENUI_FIT_REPORT_REQUEST, GENUI_FIT_SCROLL_REQUEST, useGenUiFit } from './lib/interactive/use-genui-fit';
 import { intersectClientBoxes } from './lib/edit/visible-client-rect';
 ${component}
 window.sample=()=>sampleInteractiveState(

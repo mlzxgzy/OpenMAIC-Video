@@ -322,6 +322,19 @@ const objectY = baseY - BOTTOM_MARGIN - (value / maxValue) * playableHeight;
 - [ ] **Animation is OBVIOUS, not subtle - user can tell simulation is running**
 
 
+## Available libraries
+The deployment hosts the libraries below. When a page needs one of them, load it from the URL listed here, exactly as written, instead of a public CDN. Load only libraries the page needs. Initialize classic-script libraries after their load event, or after DOMContentLoaded when using defer.
+- katex 0.16.38: /vendor/interactive/katex@0.16.38/dist/katex.min.js
+- three 0.160.0: /vendor/interactive/three@0.160.0/build/three.module.js
+- chart.js 4.4.8: /vendor/interactive/chart.js@4.4.8/dist/chart.umd.js
+- @tailwindcss/browser 4.1.18: /vendor/interactive/@tailwindcss/browser@4.1.18/dist/index.global.js
+- Three.js addons import-map prefix: /vendor/interactive/three@0.160.0/examples/jsm/
+For Three.js use an import map with "three" and "three/addons/" set to the URLs above. Tailwind uses the v4 browser runtime, not the legacy v3 Play CDN API. The platform handles KaTeX automatically when math delimiters occur in page text; do not load or call KaTeX yourself.
+
+## Math typesetting
+
+The platform loads KaTeX into any interactive page that contains math, whether in the page text or in strings your scripts write into the page, and typesets math wherever it appears, including text your scripts add or change after the page loads. Write math as LaTeX between \`\\(\` and \`\\)\` for inline math or \`\\[\` and \`\\]\` for display math, also inside script strings, and leave typesetting to the platform. Do not load KaTeX, MathJax or any other math library yourself, and do not call their functions: the page can run where such a copy never loads, and a call into a missing library stops the page's script.
+
 ## REQUIRED: declared current state for newly generated interactive content (v1)
 
 This contract applies to every interactive content type. Report what the activity *is* right now, in the lesson's own terms — not a dump of JavaScript variables. The platform reads the same data for every lesson; there are no slider/circuit/game-specific collectors. Do not present protocol names to students.
@@ -1779,4 +1792,81 @@ Teach in English.
 {"background":{"type":"solid","color":"#ffffff"},"elements":[{"id":"title_001","type":"text","left":60,"top":50,"width":880,"height":76,"content":"<p style=\\"font-size:32px;\\"><strong>Title Content</strong></p>","defaultFontName":"","defaultColor":"#333333"},{"id":"content_001","type":"text","left":60,"top":150,"width":880,"height":130,"content":"<p style=\\"font-size:18px;\\">• Point One</p><p style=\\"font-size:18px;\\">• Point Two</p><p style=\\"font-size:18px;\\">• Point Three</p>","defaultFontName":"","defaultColor":"#333333"}]}",
   },
 }
+`;
+
+exports[`pins representative system and user prompts for every scene kind 2`] = `
+"Create a simulation widget for: Energy transfer
+
+## Concept Overview
+
+Explore how energy changes with a slider.
+
+## Key Points
+
+Move the slider
+Observe the result
+
+## Variables to Expose
+
+Ramp height (0.5–3, m), Friction (0–0.5), mass
+
+## Design Idea
+
+A ball rolls down a ramp; bars show kinetic and potential energy.
+
+## Additional Design Requirements
+
+- Controls:
+  - Height slider
+  - Release button
+- Readouts:
+  - Kinetic energy (J)
+  - Speed at the bottom
+
+## Language
+
+Teach in English.
+
+---
+
+Generate a complete, interactive HTML simulation with these MANDATORY features:
+
+### Structure
+1. **Embedded JSON config** in \`<script type="application/json" id="widget-config">\`
+2. **Control panel** with sliders for each variable
+3. **Canvas visualization** with proper sizing
+4. **Preset buttons** for common scenarios
+
+### Mobile Responsiveness (CRITICAL)
+1. **Control panel MUST NOT overlap canvas on mobile**
+2. Use \`flex-col md:flex-row\` layout with proper spacing
+3. Control panel: \`max-h-[40vh] md:max-h-screen\` with overflow scroll
+4. Canvas container: \`min-h-[300px]\` to ensure visibility
+5. Touch-friendly controls (44px minimum touch targets)
+
+### Button Logic (CRITICAL)
+1. **Main button MUST handle all states correctly:**
+   - "启动" → Starts simulation
+   - "暂停" → Pauses running simulation
+   - "重新开始" → Resets to initial state, then starts fresh
+2. **Reset function MUST reset ALL state variables** (position, velocity, time, etc.)
+3. Use clear state tracking: \`{ running: boolean, ended: boolean, paused: boolean }\`
+
+### Canvas
+1. Auto-resize on window resize
+2. Clear visualization with grid or guides
+3. Real-time data display overlay
+4. Proper scaling for different screen sizes
+
+### Interactivity
+1. Real-time updates when sliders change
+2. Presets apply and reset simulation
+3. Keyboard shortcuts (Space = toggle, R = reset)
+4. Touch gestures for mobile
+
+### Visual Polish
+1. Show current simulation state (running/paused/ended)
+2. Animate transitions
+3. Clear feedback when simulation ends
+4. High contrast colors for visibility"
 `;

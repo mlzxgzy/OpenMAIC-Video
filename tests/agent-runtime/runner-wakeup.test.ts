@@ -12,26 +12,34 @@
  *     the hundreds-of-ms range instead of on the 5s fallback poll;
  *  3. the 5s message/cancel polls stay as the lossy-NOTIFY backstop.
  */
+import type { AgentOptions } from '@earendil-works/pi-agent-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
 
 const mocks = vi.hoisted(() => {
   // The drain refuses to steer without a matching lease, and WORKER_ID is a
   // random-per-process value. Capture it from the first appendRunEvent call
   // (the runner passes WORKER_ID as its second argument) and hand it back
   // through getSession so `leaseMatches` sees a live, owned session.
+  const history = { started: false };
   let workerId: string | undefined;
+  let sessionId = 'session-wake';
   let deliveredUserMessageSeq = 0;
+  const recordWorker = async (_id: string, worker: string, _event?: { type?: string }) => {
+    workerId = worker;
+    sessionId = _id;
+    return 1;
+  };
   const store = {
-    appendRunEvent: vi.fn(async (_id: string, worker: string, _event?: { type?: string }) => {
-      workerId = worker;
-      return 1;
-    }),
+    appendRunEvent: vi.fn(recordWorker),
+    pruneMessageUpdates: vi.fn(async () => 0),
     clearCancel: vi.fn(async () => undefined),
     finishSession: vi.fn(async () => true),
     getSession: vi.fn(async () =>
       workerId
         ? {
-            id: 'session-wake',
+            id: sessionId,
             ownerId: 'owner-1',
             status: 'running',
             attempt: 1,
@@ -45,13 +53,23 @@ const mocks = vi.hoisted(() => {
     readEventsAfter: vi.fn(async (sessionId: string, afterSeq: number) =>
       afterSeq > 0
         ? []
-        : (await store.listUserMessages(sessionId)).map((message) => ({
-            id: message.seq,
-            ts: message.ts,
-            attempt: 1,
-            type: 'user_message',
-            data: { text: message.text, delivery: message.delivery, materials: message.materials },
-          })),
+        : [
+            ...(history.started
+              ? [{ id: 1, ts: 1, attempt: 1, type: 'run_started', data: {} }]
+              : []),
+            ...(await store.listUserMessages(sessionId)).map((message) => ({
+              id: message.seq,
+              ts: message.ts,
+              attempt: 1,
+              type: 'user_message',
+              data: {
+                text: message.text,
+                delivery: message.delivery,
+                materials: message.materials,
+                locale: message.locale,
+              },
+            })),
+          ],
     ),
     heartbeat: vi.fn(async () => true),
     markUserMessageDelivered: vi.fn(async (_id, _worker, _attempt, messageSeq: number) => {
@@ -64,7 +82,14 @@ const mocks = vi.hoisted(() => {
       async (
         _sessionId?: string,
       ): Promise<
-        Array<{ seq: number; ts: number; text: string; delivery: string; materials: unknown[] }>
+        Array<{
+          seq: number;
+          ts: number;
+          text: string;
+          delivery: string;
+          materials: unknown[];
+          locale?: string;
+        }>
       > => [],
     ),
     releaseLease: vi.fn(async () => undefined),
@@ -79,15 +104,38 @@ const mocks = vi.hoisted(() => {
   return {
     store,
     bus,
+    teachingClosed: false,
+    /** Transcript the next run finds in its entry tree (a run cut off mid-turn). */
+    entrySeed: [] as unknown[],
+    history,
+    /** The default event append; a test that replaces it leaves it replaced. */
+    recordWorker,
     resetWorker: () => {
       workerId = undefined;
       deliveredUserMessageSeq = 0;
+      store.appendRunEvent.mockImplementation(async (id, worker) => {
+        workerId = worker;
+        sessionId = id;
+        return 1;
+      });
     },
   };
 });
 
 vi.mock('@/lib/server/agent-runtime/store', () => ({
   getAgentSessionStore: vi.fn(async () => mocks.store),
+}));
+
+vi.mock('@/lib/server/pbl-v3/runner-tools', () => ({
+  teachingRunnerConfig: vi.fn(async () => ({
+    systemPrompt: 'Teaching test',
+    tools: [],
+    allowedToolNames: new Set(),
+    thinkingConfig: { enabled: true, effort: 'low' },
+    isTurnComplete: () => mocks.teachingClosed,
+    needsTurnReceipt: () => false,
+  })),
+  withTeachingTurnBoundary: (stream: unknown) => stream,
 }));
 
 vi.mock('@/lib/server/agent-runtime/event-notify-bus', () => ({
@@ -108,16 +156,34 @@ vi.mock('@/lib/server/agent-runtime/session-materials', async (importActual) => 
     await importActual<typeof import('@/lib/server/agent-runtime/session-materials')>();
   return { ...actual, listSessionMaterials: vi.fn(async () => []) };
 });
+// The runner lists what the session reaches through the shared resolver;
+// links need a database these tests do not have.
+vi.mock('@/lib/server/agent-runtime/material-resolver', async (importActual) => {
+  const actual =
+    await importActual<typeof import('@/lib/server/agent-runtime/material-resolver')>();
+  return {
+    ...actual,
+    listSessionScopeMaterials: vi.fn(async () => []),
+  };
+});
 
 vi.mock('@/lib/server/agent-runtime/entry-tree-storage', async (importActual) => {
   const actual =
     await importActual<typeof import('@/lib/server/agent-runtime/entry-tree-storage')>();
-  const { InMemorySessionRepo } = await import('@earendil-works/pi-agent-core');
+  const { InMemorySessionRepo, Session } = await import('@earendil-works/pi-agent-core');
   return {
     ...actual,
     AgentSessionEntryStorage: {
-      open: async ({ sessionId }: { sessionId: string }) =>
-        (await new InMemorySessionRepo().create({ id: sessionId })).getStorage(),
+      open: async ({ sessionId }: { sessionId: string }) => {
+        const storage = (await new InMemorySessionRepo().create({ id: sessionId })).getStorage();
+        if (mocks.entrySeed.length) {
+          const seeded = new Session(storage);
+          for (const message of mocks.entrySeed.splice(0)) {
+            await seeded.appendMessage(message as never);
+          }
+        }
+        return storage;
+      },
     },
   };
 });
@@ -145,9 +211,10 @@ vi.mock('@/lib/server/agent-runtime/owner-scoped-documents', () => ({
 
 // Capability resolution stays hermetic: no web search and no voice
 // registration backend in this harness.
-vi.mock('@/lib/server/agent-runtime/web-search', () => ({
-  resolveWebSearchCapability: () => null,
-}));
+vi.mock('@/lib/server/agent-runtime/web-search', async (importActual) => {
+  const actual = await importActual<typeof import('@/lib/server/agent-runtime/web-search')>();
+  return { ...actual, resolveWebSearchCapability: () => null };
+});
 vi.mock('@/lib/server/agent-runtime/voice-clone-tools', async (importActual) => {
   const actual =
     await importActual<typeof import('@/lib/server/agent-runtime/voice-clone-tools')>();
@@ -190,6 +257,12 @@ const fake = vi.hoisted(() => {
   class FakeAgent {
     state: { messages: unknown[]; errorMessage?: string } = { messages: [] };
     steerCalls: Array<{ role: string; content: unknown }> = [];
+    afterToolCall?: AgentOptions['afterToolCall'];
+    /** What the runner built the agent with: its tools, among them the material tools. */
+    options: { initialState?: { tools?: unknown[] } } = {};
+    /** Hold a steered message's message_end until `consumeSteered` (pi consumes later). */
+    deferSteerEnd = false;
+    private heldSteers: Array<{ role: string; content: unknown }> = [];
     promptCalls = 0;
     abortCalls = 0;
     private subscribers = new Set<(event: unknown) => void>();
@@ -198,6 +271,8 @@ const fake = vi.hoisted(() => {
     reset(): void {
       this.state = { messages: [] };
       this.steerCalls = [];
+      this.heldSteers = [];
+      this.deferSteerEnd = false;
       this.promptCalls = 0;
       this.abortCalls = 0;
       this.subscribers = new Set();
@@ -257,8 +332,20 @@ const fake = vi.hoisted(() => {
 
     steer(message: { role: string; content: unknown }): void {
       this.steerCalls.push(message);
+      if (this.deferSteerEnd) {
+        this.heldSteers.push(message);
+        return;
+      }
       this.state.messages.push(message);
       this.emitMessageEnd(message);
+    }
+
+    /** Test hook: pi takes the held steered messages into the conversation. */
+    consumeSteered(): void {
+      for (const message of this.heldSteers.splice(0)) {
+        this.state.messages.push(message);
+        this.emitMessageEnd(message);
+      }
     }
 
     private emitMessageEnd(message: { role: string; content: unknown }): void {
@@ -274,8 +361,15 @@ const fake = vi.hoisted(() => {
 vi.mock('@earendil-works/pi-agent-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@earendil-works/pi-agent-core')>();
   class MockAgent extends fake.FakeAgent {
-    constructor() {
+    constructor(
+      options: {
+        initialState?: { tools?: unknown[] };
+        afterToolCall?: AgentOptions['afterToolCall'];
+      } = {},
+    ) {
       super();
+      this.options = options;
+      this.afterToolCall = options.afterToolCall;
       // The runner constructs exactly one Agent per run; expose it so tests can
       // wait for the run to reach the prompt and observe its steer/abort.
       fake.current.instance = this;
@@ -326,9 +420,30 @@ describe('runSession NOTIFY wakeup wiring', () => {
     fake.current.instance?.reset();
     fake.current.instance = undefined;
     mocks.resetWorker();
+    mocks.teachingClosed = false;
     mocks.bus.route = undefined;
     mocks.bus.wake = undefined;
     mocks.store.listUserMessages.mockResolvedValue([]);
+  });
+
+  it('uses the lease identity captured for this claim rather than the process identity', async () => {
+    const workerId = 'unique-claim-worker';
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, lease: { workerId, workerPid: process.pid, heartbeatAt: Date.now() } },
+    );
+    try {
+      await waitForReady();
+      expect(mocks.store.appendRunEvent.mock.calls[0]?.[1]).toBe(workerId);
+    } finally {
+      fake.current.instance?.releasePrompt();
+      await run;
+    }
+    expect(mocks.store.finishSession).toHaveBeenCalledWith(
+      'session-wake',
+      workerId,
+      expect.anything(),
+    );
   });
 
   it('subscribes to the session route, wakes the cancel check and drain, and unsubscribes on settle', async () => {
@@ -416,6 +531,148 @@ describe('runSession NOTIFY wakeup wiring', () => {
     expect(mocks.store.requeueForRetry).not.toHaveBeenCalled();
   });
 
+  const opening = { seq: 1, ts: 1, text: 'Build a lesson', delivery: 'queued', materials: [] };
+  const late = { seq: 2, ts: 2, text: 'My reply', delivery: 'steer', materials: [] };
+  const teachingSession = { ...SESSION, id: 'pbl-role-wake' };
+  function finishTool(name: string, isError = false) {
+    const toolCall = { type: 'toolCall' as const, id: 'handoff-tool', name, arguments: {} };
+    return fake.current.instance!.afterToolCall!({
+      assistantMessage: {
+        role: 'assistant',
+        content: [toolCall],
+        api: 'openai-completions',
+        provider: 'test',
+        model: 'wakeup-test',
+        timestamp: 1,
+        stopReason: 'toolUse',
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+      toolCall,
+      args: {},
+      isError,
+      result: { content: [], details: {} },
+      context: { systemPrompt: 'Teaching test', messages: [], tools: [] },
+    });
+  }
+
+  it.each(['request_learner_help', 'request_skill_review', 'complete_stage'])(
+    'leaves a late learner reply undelivered after successful %s for the next claim',
+    async (name) => {
+      mocks.store.listUserMessages.mockResolvedValue([opening]);
+      const run = runSession({ running: new Map(), shuttingDown: false }, teachingSession);
+      try {
+        await waitForReady();
+        expect(await finishTool(name)).toMatchObject({ terminate: true });
+        mocks.store.listUserMessages.mockResolvedValue([opening, late]);
+        mocks.bus.wake?.();
+      } finally {
+        fake.current.instance?.releasePrompt();
+        await run;
+      }
+      expect(fake.current.instance?.steerCalls).toHaveLength(0);
+      expect(mocks.store.markUserMessageDelivered.mock.calls.some((call) => call[3] === 2)).toBe(
+        false,
+      );
+      expect(mocks.store.requeueSession).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('rechecks a committed teaching handoff after an in-flight message read before the SDK callback', async () => {
+    mocks.store.listUserMessages.mockResolvedValue([opening]);
+    const run = runSession({ running: new Map(), shuttingDown: false }, teachingSession);
+    let finishRead: ((messages: (typeof opening)[]) => void) | undefined;
+    try {
+      await waitForReady();
+      mocks.store.listUserMessages.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishRead = resolve;
+          }),
+      );
+      mocks.bus.wake?.();
+      await vi.waitFor(() => expect(finishRead).toBeTypeOf('function'));
+      mocks.teachingClosed = true;
+      mocks.store.listUserMessages.mockResolvedValue([opening, late]);
+      finishRead!([opening, late]);
+    } finally {
+      finishRead?.([opening, late]);
+      fake.current.instance?.releasePrompt();
+      await run;
+    }
+    expect(fake.current.instance?.steerCalls).toHaveLength(0);
+    expect(mocks.store.markUserMessageDelivered.mock.calls.some((call) => call[3] === 2)).toBe(
+      false,
+    );
+    expect(mocks.store.requeueSession).toHaveBeenCalledOnce();
+  });
+
+  it('keeps live steering available after a failed learner-help tool', async () => {
+    mocks.store.listUserMessages.mockResolvedValue([opening]);
+    const run = runSession({ running: new Map(), shuttingDown: false }, teachingSession);
+    try {
+      await waitForReady();
+      expect(await finishTool('request_learner_help', true)).toMatchObject({ terminate: false });
+      mocks.store.listUserMessages.mockResolvedValue([opening, late]);
+      mocks.bus.wake?.();
+      await vi.waitFor(() => expect(fake.current.instance?.steerCalls).toHaveLength(1));
+    } finally {
+      fake.current.instance?.releasePrompt();
+      await run;
+    }
+    expect(mocks.store.markUserMessageDelivered.mock.calls.some((call) => call[3] === 2)).toBe(
+      true,
+    );
+    expect(mocks.store.requeueSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['session-wake', 'pbl-role-wake'])(
+    'preserves V3 frozen history while retaining ordinary snapshot pruning for %s',
+    async (id) => {
+      const run = runSession({ running: new Map(), shuttingDown: false }, { ...SESSION, id });
+      try {
+        await waitForReady();
+      } finally {
+        fake.current.instance?.releasePrompt();
+        await run;
+      }
+      if (id.startsWith('pbl-role-'))
+        expect(mocks.store.pruneMessageUpdates).not.toHaveBeenCalled();
+      else expect(mocks.store.pruneMessageUpdates).toHaveBeenCalled();
+    },
+  );
+
+  it('releases a revoked teaching claim and its timers even when Agent abort never settles its prompt', async () => {
+    const ctx = { running: new Map(), shuttingDown: false };
+    const run = runSession(ctx, { ...SESSION, id: 'pbl-role-uncooperative' });
+    await waitForReady();
+    const agent = fake.current.instance!;
+    const abort = vi.spyOn(agent, 'abort').mockImplementation(() => {});
+    mocks.store.heartbeat.mockResolvedValueOnce(false);
+    try {
+      await vi.waitFor(() => expect(ctx.running.size).toBe(0), { timeout: 4000 });
+      await run;
+      expect(abort).toHaveBeenCalled();
+      expect(mocks.bus.unsubscribeWakeup).toHaveBeenCalledOnce();
+      const replacement = { abort: new AbortController() };
+      ctx.running.set('pbl-role-uncooperative', replacement);
+      agent.releasePrompt();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(ctx.running.get('pbl-role-uncooperative')).toBe(replacement);
+      expect(mocks.store.finishSession).not.toHaveBeenCalled();
+    } finally {
+      agent.releasePrompt();
+      abort.mockRestore();
+      await run;
+    }
+  });
+
   it('still unsubscribes when setup fails before the agent is built', async () => {
     // A driver-model failure kills the run during setup — the wakeup
     // subscription created before the try must still be cleaned up.
@@ -427,5 +684,214 @@ describe('runSession NOTIFY wakeup wiring', () => {
 
     expect(mocks.bus.route).toEqual({ kind: 'session', sessionId: 'session-wake' });
     expect(mocks.bus.unsubscribeWakeup).toHaveBeenCalledOnce();
+  });
+});
+
+/**
+ * #1880: the material tools speak the language of the user message the run is
+ * answering. These runs go through the REAL `runSession` and call the
+ * `list_materials` the runner registered, on a conversation source whose
+ * parse failed because no parser is configured; its `reason` shows which
+ * language is in effect.
+ */
+describe('runSession material wording follows the consumed message', () => {
+  const REASON = {
+    'zh-CN': '解析服务不可用',
+    'en-US': 'Parsing service unavailable',
+    'ja-JP': '解析サービスを利用できません',
+  } as const;
+  const message = (seq: number, locale?: string) => ({
+    seq,
+    ts: seq,
+    text: `message ${seq}`,
+    delivery: 'queued',
+    materials: [],
+    ...(locale ? { locale } : {}),
+  });
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    fake.current.instance?.reset();
+    fake.current.instance = undefined;
+    mocks.resetWorker();
+    // An earlier test replaces the append; the drain needs the lease it records.
+    mocks.store.appendRunEvent.mockImplementation(mocks.recordWorker);
+    mocks.store.listUserMessages.mockResolvedValue([]);
+    const { listSessionScopeMaterials } =
+      await import('@/lib/server/agent-runtime/material-resolver');
+    vi.mocked(listSessionScopeMaterials).mockResolvedValue([
+      {
+        origin: 'session',
+        record: {
+          id: 'mat_failed',
+          sessionId: 'session-wake',
+          kind: 'source',
+          title: 'deck.pptx',
+          ownerMaterialId: null,
+          sourceUrl: null,
+          textAssetId: null,
+          rawAssetId: 'raw',
+          textChars: 0,
+          derivedFrom: null,
+          extraction: {
+            status: 'failed',
+            attempts: 1,
+            error: 'no parser: set PARSER_BASE_URL and PARSER_API_KEY',
+            reasonCode: 'service_unavailable',
+          },
+          createdAt: new Date(0).toISOString(),
+        },
+      },
+    ] as never);
+  });
+
+  /** What the registered list_materials says about the failed source right now. */
+  async function listedReason(): Promise<string> {
+    const tools = (fake.current.instance?.options.initialState?.tools ?? []) as Array<{
+      name: string;
+      execute: (id: string, params: unknown) => Promise<{ details: unknown }>;
+    }>;
+    const list = tools.find((candidate) => candidate.name === 'list_materials')!;
+    const { details } = await list.execute('list', {});
+    const wire = JSON.stringify(details);
+    expect(wire).not.toContain('PARSER_BASE_URL');
+    return (details as { materials: Array<{ extraction: { reason: string } }> }).materials[0]!
+      .extraction.reason;
+  }
+
+  async function settle(run: Promise<void>): Promise<void> {
+    fake.current.instance?.releasePrompt();
+    await run;
+  }
+
+  it('uses the language the session was created in for a first prompt with no message event', async () => {
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'en-US' },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['en-US']);
+    await settle(run);
+  });
+
+  it('falls back to the project default when neither the session nor a message names one', async () => {
+    const run = runSession({ running: new Map(), shuttingDown: false }, SESSION);
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['zh-CN']);
+    await settle(run);
+  });
+
+  it('answers queued messages in their own language, each from when it is consumed', async () => {
+    // Two queued messages: the run starts from the first; the second's
+    // language must not reach the turn before it.
+    mocks.store.listUserMessages.mockResolvedValue([message(5, 'en-US'), message(6, 'ja-JP')]);
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'zh-CN' },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['en-US']);
+
+    // The second is drained and handed to pi, but not yet consumed.
+    fake.current.instance!.deferSteerEnd = true;
+    mocks.bus.wake?.();
+    await vi.waitFor(() => expect(fake.current.instance?.steerCalls).toHaveLength(1));
+    expect(await listedReason()).toBe(REASON['en-US']);
+
+    // Pi takes it into the conversation: from its turn on, its language.
+    fake.current.instance!.consumeSteered();
+    expect(await listedReason()).toBe(REASON['ja-JP']);
+    await settle(run);
+  });
+
+  it('keeps the language in effect when a steered message names none, or an unsupported one', async () => {
+    mocks.store.listUserMessages.mockResolvedValue([message(5, 'en-US')]);
+    const run = runSession({ running: new Map(), shuttingDown: false }, SESSION);
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['en-US']);
+    mocks.store.listUserMessages.mockResolvedValue([
+      message(5, 'en-US'),
+      message(6),
+      message(7, 'xx-YY'),
+    ]);
+    mocks.bus.wake?.();
+    await vi.waitFor(() => expect(fake.current.instance?.steerCalls).toHaveLength(2));
+    expect(await listedReason()).toBe(REASON['en-US']);
+    await settle(run);
+  });
+
+  it('restores the language of the last consumed message after a restart with nothing pending', async () => {
+    // Both messages were consumed before the worker died; the session itself
+    // was created in English. The resumed run must not fall back to that.
+    mocks.store.listUserMessages.mockResolvedValue([message(5, 'en-US'), message(6, 'ja-JP')]);
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'en-US', claimReason: 'orphaned', deliveredUserMessageSeq: 6 },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['ja-JP']);
+    await settle(run);
+  });
+
+  it('continues a cut-off turn in its own language, not that of a message queued since', async () => {
+    // The worker died mid-turn after consuming message 5; message 6 arrived
+    // meanwhile. The takeover continues turn 5 -- and only consuming 6 moves on.
+    mocks.entrySeed.push({ role: 'user', content: 'message 5', timestamp: 5 });
+    mocks.history.started = true;
+    mocks.store.listUserMessages.mockResolvedValue([message(5, 'en-US'), message(6, 'ja-JP')]);
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'zh-CN', claimReason: 'orphaned', deliveredUserMessageSeq: 5 },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['en-US']);
+    mocks.bus.wake?.();
+    await vi.waitFor(() => expect(fake.current.instance?.steerCalls).toHaveLength(1));
+    expect(await listedReason()).toBe(REASON['ja-JP']);
+    await settle(run);
+    mocks.history.started = false;
+  });
+
+  it('resumes in the language of a frame saved before its delivered cursor landed', async () => {
+    // The worker saved user frame 6 to the transcript, then stopped before the
+    // separate delivered-cursor write: the cursor still says 5. The takeover
+    // continues the turn answering 6, so it must speak 6's language.
+    mocks.entrySeed.push({
+      role: 'user',
+      content: 'message 6',
+      timestamp: 6,
+      openmaicDurableUserMessageSeq: 6,
+    });
+    mocks.history.started = true;
+    mocks.store.listUserMessages.mockResolvedValue([message(5, 'en-US'), message(6, 'ja-JP')]);
+    const run = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'zh-CN', claimReason: 'orphaned', deliveredUserMessageSeq: 5 },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['ja-JP']);
+    await settle(run);
+    mocks.history.started = false;
+  });
+
+  it('keeps two sessions apart: one run’s language never reaches the next', async () => {
+    const first = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, locale: 'ja-JP' },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['ja-JP']);
+    await settle(first);
+
+    fake.current.instance?.reset();
+    fake.current.instance = undefined;
+    mocks.resetWorker();
+    const second = runSession(
+      { running: new Map(), shuttingDown: false },
+      { ...SESSION, id: 'session-other', locale: 'en-US' },
+    );
+    await waitForReady();
+    expect(await listedReason()).toBe(REASON['en-US']);
+    await settle(second);
   });
 });

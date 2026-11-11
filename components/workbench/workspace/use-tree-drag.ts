@@ -15,7 +15,8 @@
  * behaves differently per platform, and its drop targets fight the row buttons
  * underneath. Pointer events give the same gesture with a drop model we own —
  * hit-test whatever is under the pointer, split each row at its midpoint (see
- * `edgeFor`), and draw one hairline.
+ * `edgeFor`; across for a list, down the middle for a grid of cards), and draw
+ * one hairline.
  *
  * Two drop shapes:
  *   - onto a ROW of the same kind → insert before/after it (reorder);
@@ -25,6 +26,10 @@
  *     the same gesture. The workspace rail files into folder rows only — its
  *     tree keeps unfiled courses as plain top-level rows.
  *
+ * A container can be a reorderable row too (a folder card in a grid that mixes
+ * folders and courses): with `fileZone`, only the middle of such a card files
+ * the course into it, and its two outer edges place the course beside it.
+ *
  * Escape cancels mid-drag, and a pointercancel (a system gesture taking over)
  * is a cancel too — never a silent commit to wherever the pointer happened to
  * be.
@@ -32,18 +37,81 @@
 
 import {
   useCallback,
+  useId,
   useEffect,
   useRef,
+  useLayoutEffect,
+  type RefObject,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
 /** Same public shape consumed by the data layer's reorder operation. */
 export type DropTarget = { readonly before: string } | { readonly after: string };
 
-const edgeFor = (clientY: number, rect: Pick<DOMRect, 'top' | 'height'>) =>
-  clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+/** Which half of the row the pointer is in: top/bottom in a list, left/right in a grid. */
+const edgeFor = (
+  point: { readonly x: number; readonly y: number },
+  rect: Pick<DOMRect, 'top' | 'height' | 'left' | 'width'>,
+  axis: 'vertical' | 'horizontal',
+) =>
+  axis === 'horizontal'
+    ? point.x < rect.left + rect.width / 2
+      ? 'before'
+      : 'after'
+    : point.y < rect.top + rect.height / 2
+      ? 'before'
+      : 'after';
 
-export type DragKind = 'course' | 'session';
+/** Whether the point lies outside the centred `share` of the rect along `axis`. */
+const outsideZone = (
+  point: { readonly x: number; readonly y: number },
+  rect: Pick<DOMRect, 'top' | 'height' | 'left' | 'width'>,
+  axis: 'vertical' | 'horizontal',
+  share: number,
+) => {
+  const [at, start, length] =
+    axis === 'horizontal' ? [point.x, rect.left, rect.width] : [point.y, rect.top, rect.height];
+  // No layout (nothing measured yet): the whole card files, as it always did.
+  if (length <= 0) return false;
+  const margin = (length * (1 - share)) / 2;
+  return at < start + margin || at > start + length - margin;
+};
+
+/**
+ * How far (CSS px) a grid gap reaches: a pointer in the gutter between cards,
+ * or between two rows of cards, belongs to the nearest card within this
+ * distance, so the insertion line it would draw does not vanish exactly where
+ * a person aims to drop.
+ */
+const GRID_GAP_REACH_PX = 48;
+
+/** The nearest reorderable row of `kind` owned by `owner`, other than `skipId`, within reach. */
+const nearestGridRow = (
+  point: { readonly x: number; readonly y: number },
+  kind: string,
+  owner: string,
+  skipId: string,
+  within: HTMLElement | null | undefined,
+): HTMLElement | null => {
+  const scope = within ?? document;
+  let best: HTMLElement | null = null;
+  let bestDistance = GRID_GAP_REACH_PX;
+  for (const row of scope.querySelectorAll<HTMLElement>(`[data-ws-drop-kind="${kind}"]`)) {
+    if (row.dataset.wsDragOwner !== owner || row.dataset.wsDropId === skipId) continue;
+    const rect = row.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    const dx = Math.max(rect.left - point.x, 0, point.x - rect.right);
+    const dy = Math.max(rect.top - point.y, 0, point.y - rect.bottom);
+    const distance = Math.hypot(dx, dy);
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = row;
+    }
+  }
+  return best;
+};
+
+export type DragKind = 'course' | 'session' | 'material';
 
 /** Where the insertion hairline is drawn right now. */
 export interface DropIndicator {
@@ -69,14 +137,36 @@ const DRAG_THRESHOLD_PX = 4;
 export function useTreeDrag({
   onReorder,
   onMoveToFolder,
+  onHoverFolder,
+  scrollRef,
+  axis = 'vertical',
+  fileZone,
 }: {
-  readonly onReorder: (kind: DragKind, dragId: string, target: DropTarget) => void;
-  readonly onMoveToFolder: (courseId: string, folderId: string | undefined) => void;
+  readonly onReorder?: (kind: DragKind, dragId: string, target: DropTarget) => void;
+  readonly onMoveToFolder: (id: string, folderId: string | undefined) => void;
+  /** Expand a folder after a short hover; omitted by trees without this behaviour. */
+  readonly onHoverFolder?: (folderId: string) => void;
+  /** Constrain drops to this tree and scroll it near the pointer. */
+  readonly scrollRef?: RefObject<HTMLElement | null>;
+  /** How rows are laid out: a list (the default) splits rows top/bottom, a grid left/right. */
+  readonly axis?: 'vertical' | 'horizontal';
+  /**
+   * For a container that is also a row of the dragged kind: the share of its
+   * length, centred, that files into it (0–1). Outside it, the drop reorders
+   * beside the container. Omitted, a container always files.
+   */
+  readonly fileZone?: number;
 }): TreeDrag {
+  const owner = useId();
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragKind, setDragKind] = useState<DragKind | null>(null);
   const [indicator, setIndicator] = useState<DropIndicator | null>(null);
   const [folderTarget, setFolderTarget] = useState<string | null>(null);
+
+  const callbacks = useRef({ onReorder, onMoveToFolder, onHoverFolder });
+  useLayoutEffect(() => {
+    callbacks.current = { onReorder, onMoveToFolder, onHoverFolder };
+  });
 
   // Everything the live gesture needs, off React state: a drag reads it on
   // every pointermove and must not depend on a render having happened.
@@ -102,45 +192,112 @@ export function useTreeDrag({
   }, []);
 
   useEffect(() => {
+    let frame: number | undefined;
+    let hoverTimer: ReturnType<typeof setTimeout> | undefined;
+    let hovered: string | null = null;
+    let point: { x: number; y: number } | null = null;
+    const hover = (folderId: string | null) => {
+      if (hovered === folderId) return;
+      clearTimeout(hoverTimer);
+      hovered = folderId;
+      if (folderId && callbacks.current.onHoverFolder) {
+        hoverTimer = setTimeout(() => callbacks.current.onHoverFolder?.(folderId), 500);
+      }
+    };
+    const stop = () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      frame = undefined;
+      point = null;
+      hover(null);
+    };
+    const hitTest = () => {
+      const g = gesture.current;
+      if (!g?.active || !point) return;
+      const hit = document.elementFromPoint(point.x, point.y);
+      const under = scrollRef && !scrollRef.current?.contains(hit) ? null : hit;
+      const folderRow =
+        g.kind !== 'session' ? under?.closest<HTMLElement>('[data-ws-drop-folder]') : null;
+      const folderAsRow =
+        fileZone !== undefined && folderRow
+          ? folderRow.closest<HTMLElement>(`[data-ws-drop-kind="${g.kind}"]`)
+          : null;
+      const onFolderEdge =
+        !!folderAsRow &&
+        folderAsRow.dataset.wsDropId !== g.id &&
+        outsideZone(point, folderAsRow.getBoundingClientRect(), axis, fileZone!);
+      if (folderRow?.dataset.wsDragOwner === owner && !onFolderEdge) {
+        const folderId = folderRow.dataset.wsDropFolder ?? '';
+        g.drop = { kind: 'folder', folderId: folderId || undefined };
+        setFolderTarget(folderId);
+        setIndicator(null);
+        hover(folderId);
+        return;
+      }
+      hover(null);
+      const row = callbacks.current.onReorder
+        ? (under?.closest<HTMLElement>(`[data-ws-drop-kind="${g.kind}"]`) ??
+          // A grid's gutters are part of the drop: the nearest card takes them.
+          (axis === 'horizontal' && (!scrollRef || under)
+            ? nearestGridRow(point, g.kind, owner, g.id, scrollRef?.current)
+            : null))
+        : null;
+      const rowId = row?.dataset.wsDropId;
+      if (!row || row.dataset.wsDragOwner !== owner || !rowId || rowId === g.id) {
+        g.drop = null;
+        setIndicator(null);
+        setFolderTarget(null);
+        return;
+      }
+      const edge = edgeFor(point, row.getBoundingClientRect(), axis);
+      g.drop = { kind: 'row', target: edge === 'before' ? { before: rowId } : { after: rowId } };
+      setIndicator({ rowId, edge });
+      setFolderTarget(null);
+    };
+    let lastFrame = 0;
+    const autoScroll = (time: number) => {
+      const main = scrollRef?.current;
+      if (!gesture.current?.active || !main || !point) return;
+      const box = main.getBoundingClientRect();
+      const elapsed = Math.min(time - lastFrame, 32);
+      lastFrame = time;
+      if (
+        point.x >= box.left &&
+        point.x <= box.right &&
+        point.y >= box.top &&
+        point.y <= box.bottom
+      ) {
+        const edge = 40;
+        const speed =
+          point.y < box.top + edge
+            ? -Math.min(1, (box.top + edge - point.y) / edge)
+            : point.y > box.bottom - edge
+              ? Math.min(1, (point.y - box.bottom + edge) / edge)
+              : 0;
+        if (speed) {
+          main.scrollTop += speed * elapsed * 0.6;
+          hitTest();
+        }
+      }
+      frame = requestAnimationFrame(autoScroll);
+    };
     const onMove = (event: PointerEvent) => {
       const g = gesture.current;
       if (!g) return;
-
       if (!g.active) {
         const travelled = Math.abs(event.clientX - g.startX) + Math.abs(event.clientY - g.startY);
         if (travelled < DRAG_THRESHOLD_PX) return;
         g.active = true;
         setDragId(g.id);
         setDragKind(g.kind);
-        // Stops text selecting and the cursor flickering as the pointer
-        // travels over the rest of the tree — same trick the resize uses.
         document.documentElement.setAttribute('data-ws-dragging', 'true');
+        if (scrollRef) {
+          lastFrame = performance.now();
+          frame = requestAnimationFrame(autoScroll);
+        }
       }
       event.preventDefault();
-
-      const under = document.elementFromPoint(event.clientX, event.clientY);
-      const folderRow =
-        g.kind === 'course' ? under?.closest<HTMLElement>('[data-ws-drop-folder]') : null;
-      if (folderRow) {
-        const folderTarget = folderRow.dataset.wsDropFolder ?? '';
-        g.drop = { kind: 'folder', folderId: folderTarget || undefined };
-        setFolderTarget(folderTarget);
-        setIndicator(null);
-        return;
-      }
-
-      const row = under?.closest<HTMLElement>(`[data-ws-drop-kind="${g.kind}"]`);
-      const rowId = row?.dataset.wsDropId;
-      if (!row || !rowId || rowId === g.id) {
-        g.drop = null;
-        setIndicator(null);
-        setFolderTarget(null);
-        return;
-      }
-      const edge = edgeFor(event.clientY, row.getBoundingClientRect());
-      g.drop = { kind: 'row', target: edge === 'before' ? { before: rowId } : { after: rowId } };
-      setIndicator({ rowId, edge });
-      setFolderTarget(null);
+      point = { x: event.clientX, y: event.clientY };
+      hitTest();
     };
 
     const swallowNextClick = () => {
@@ -158,16 +315,18 @@ export function useTreeDrag({
       const g = gesture.current;
       if (!g) return;
       const { active, drop, id, kind } = g;
+      stop();
       reset();
       if (!active) return;
       swallowNextClick();
       if (!drop) return;
-      if (drop.kind === 'folder') onMoveToFolder(id, drop.folderId);
-      else onReorder(kind, id, drop.target);
+      if (drop.kind === 'folder') callbacks.current.onMoveToFolder(id, drop.folderId);
+      else callbacks.current.onReorder?.(kind, id, drop.target);
     };
 
     const onCancel = () => {
       const wasActive = gesture.current?.active;
+      stop();
       reset();
       if (wasActive) swallowNextClick();
     };
@@ -181,16 +340,19 @@ export function useTreeDrag({
     window.addEventListener('pointercancel', onCancel);
     window.addEventListener('keydown', onKey);
     return () => {
+      stop();
+      gesture.current = null;
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onCancel);
       window.removeEventListener('keydown', onKey);
       document.documentElement.removeAttribute('data-ws-dragging');
     };
-  }, [onMoveToFolder, onReorder, reset]);
+  }, [scrollRef, reset, owner, axis, fileZone]);
 
   const rowProps = useCallback(
     (kind: DragKind, id: string) => ({
+      'data-ws-drag-owner': owner,
       'data-ws-drop-kind': kind,
       'data-ws-drop-id': id,
       onPointerDown: (event: ReactPointerEvent<HTMLElement>) => {
@@ -208,12 +370,12 @@ export function useTreeDrag({
         };
       },
     }),
-    [],
+    [owner],
   );
 
   const folderProps = useCallback(
-    (folderId?: string) => ({ 'data-ws-drop-folder': folderId ?? '' }),
-    [],
+    (folderId?: string) => ({ 'data-ws-drop-folder': folderId ?? '', 'data-ws-drag-owner': owner }),
+    [owner],
   );
 
   return { dragId, dragKind, indicator, folderTarget, rowProps, folderProps };

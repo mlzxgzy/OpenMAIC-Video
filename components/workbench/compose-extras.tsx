@@ -6,13 +6,14 @@
  * the homepage/workspace launch face and the ongoing conversation composer.
  */
 import { useEffect, useId, useRef, useState } from 'react';
-import { AtSign, Loader2, Paperclip, Sparkles } from 'lucide-react';
+import { AlertCircle, AtSign, Loader2, Paperclip, RotateCw, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { cn } from '@/lib/utils/cn';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import {
   uploadWorkbenchMaterial,
+  useWorkbenchStore,
   WorkbenchMaterialUploadError,
   type WorkbenchMaterial,
 } from '@/lib/workbench/session-store';
@@ -26,7 +27,18 @@ import {
 } from '@/lib/workbench/material-upload-scheduling';
 import { WORKBENCH_MATERIAL_ACCEPT } from '@/lib/workbench/material-upload-policy';
 import { slashQuery } from '@/lib/workbench/composer-skills';
-import { ComposerPendingPill, ComposerPill, ComposerPillRow } from './composer-pill';
+import {
+  fetchMaterialExtractionState,
+  parseLibraryMaterial,
+  type MaterialExtractionState,
+} from '@/lib/workbench/material-library-client';
+import {
+  fetchMaterialMentionListing,
+  materialMentionCandidates,
+  type MaterialMentionCandidate,
+} from '@/lib/workbench/material-mention';
+import { ComposerPill, ComposerPillAction, ComposerPillRow } from './composer-pill';
+import { MaterialKindIcon } from './material-kind';
 
 // ── Skills (the `/` and composer `+` menus) ──────────────────────────────────
 //
@@ -106,7 +118,9 @@ export function SkillSlashMenu({
     // error branch's retry button can hold focus, and the keyboard must still
     // work afterwards. Navigation and picking stay matches-gated.
     const onKeyDown = (event: KeyboardEvent) => {
-      const textarea = menuRef.current?.parentElement?.querySelector('textarea');
+      const textarea = menuRef.current?.parentElement?.querySelector(
+        'textarea, [data-composer-input]',
+      );
       const onTextarea = event.target === textarea;
       if (event.isComposing) return;
 
@@ -142,8 +156,8 @@ export function SkillSlashMenu({
   }, [highlightedIndex, matches, onDismiss, onPick]);
 
   const groups = [
-    { source: 'user' as const, label: t('proMode.userSkillsGroup') },
-    { source: 'builtin' as const, label: t('proMode.builtinSkillsGroup') },
+    { source: 'user' as const, label: t('workspace.composer.userSkillsGroup') },
+    { source: 'builtin' as const, label: t('workspace.composer.builtinSkillsGroup') },
   ];
   return (
     <div
@@ -161,24 +175,24 @@ export function SkillSlashMenu({
         {loading ? (
           <li className="flex items-center gap-2 px-3 py-3 text-[11px] text-muted-foreground">
             <Loader2 className="size-3 animate-spin motion-reduce:animate-none" />
-            {t('proMode.skillsLoading')}
+            {t('workspace.composer.skillsLoading')}
           </li>
         ) : error ? (
           <li className="px-3 py-3 text-[11px] text-muted-foreground">
-            <span>{t('proMode.skillsLoadFailed')}</span>{' '}
+            <span>{t('workspace.composer.skillsLoadFailed')}</span>{' '}
             <button
               type="button"
               className="text-[var(--wb-accent)] hover:underline"
               onClick={() => void reload().catch(() => {})}
             >
-              {t('proMode.retrySkills')}
+              {t('workspace.composer.retrySkills')}
             </button>
           </li>
         ) : matches.length === 0 ? (
           <li className="px-3 py-3 text-[11px] text-muted-foreground">
             {filter
-              ? t('proMode.noSkillMatch', { query: `/${filter}` })
-              : t('proMode.noSkillsAvailable')}
+              ? t('workspace.composer.noSkillMatch', { query: `/${filter}` })
+              : t('workspace.composer.noSkillsAvailable')}
           </li>
         ) : (
           groups.map((group) => {
@@ -256,24 +270,75 @@ export function SkillSlashMenu({
 export interface MaterialUploadEntry {
   id: string;
   name: string;
+  /** The share of its bytes sent so far, 0 to 1 (while uploading). */
+  progress?: number;
+  /** Why it failed, in the user's language (a failed entry). */
+  reason?: string;
+  /** The picked file, kept so a failed upload can be sent again. */
+  file?: File;
 }
+
+/**
+ * Where a staged material's extraction stands, as the composer last read it:
+ * from the upload's answer, then from polling while it is parsed.
+ */
+export type ComposerMaterialExtraction = MaterialExtractionState;
+
+/** What `addExisting` did: staged it, found it staged, or could not (cap, gate). */
+export type AddExistingOutcome = 'staged' | 'already' | 'full' | 'disabled';
 
 export interface ComposerMaterials {
   /** Runtime rollout gate shared by picker, paste, and drop entry points. */
   enabled: boolean;
+  /** The gate has answered, either way (`enabled` alone cannot tell "not yet" from "no"). */
+  enabledKnown: boolean;
   materials: WorkbenchMaterial[];
   /**
    * Files picked but not yet settled, in pick order. Every entry is rendered
-   * as a spinner chip immediately; uploads settle each entry by id, so
+   * as a chip with its upload progress immediately; uploads settle each entry by id, so
    * concurrent selections never hide each other behind a single slot.
    */
   uploading: MaterialUploadEntry[];
-  /** Entries whose upload failed (shown as removable error chips). */
+  /** Entries whose upload failed (shown as error chips with retry and remove). */
   failed: MaterialUploadEntry[];
+  /**
+   * The staged materials' extraction by id, once this composer has read it
+   * again; a material missing here is as its `extractionStatus` says.
+   */
+  extraction: Readonly<Record<string, ComposerMaterialExtraction>>;
+  /** Send a failed upload again. */
+  retryFailed: (id: string) => void;
+  /** Queue a staged material whose parse failed for another parse. */
+  retryExtraction: (materialId: string) => void;
   addFiles: (files: FileList | File[]) => void;
+  /**
+   * Stage a material the knowledge base already holds (the `@` picker): one
+   * more pill, attached only when the message is sent. One already staged is
+   * left as it is; the per-message cap applies as it does to uploads.
+   * Answers what happened, for a caller that must know (the knowledge base
+   * page's hand-over); `full` has already told the user.
+   */
+  addExisting: (material: WorkbenchMaterial) => AddExistingOutcome;
   remove: (materialId: string) => void;
   removeFailed: (id: string) => void;
+  /** Remove only the staged objects accepted by this send. Later picks survive. */
+  removeSent: (sent: readonly WorkbenchMaterial[]) => void;
   clear: () => void;
+  /**
+   * A new conversation in this composer: nothing staged, uploading or failed
+   * is kept, and an upload still in flight is no longer this draft's -- it
+   * may finish into the library, but its pill, failure and slot stay with
+   * the draft it was picked for. `clear` keeps such uploads.
+   */
+  startOver: () => void;
+  /**
+   * The composer now shows another conversation. What is staged stays (one
+   * staging list serves every conversation the pane shows), but an upload
+   * still in flight was picked for the conversation before: it finishes into
+   * the library without becoming a pill here, as after `startOver`. Failed
+   * uploads were that conversation's too, and go with it.
+   */
+  leaveUploads: () => void;
   /** True while any upload is in flight — submits should wait for it. */
   busy: boolean;
 }
@@ -311,26 +376,39 @@ async function probeMaterialsEnabled(): Promise<boolean> {
   return materialsProbe;
 }
 
-/** Runtime-delivered rollout gate; false until the server probe says true. */
-export function useMaterialUploadsEnabled(): boolean {
-  const [enabled, setEnabled] = useState(materialsEnabledCache === true);
+/** The rollout gate as this surface knows it: still asking, or the answer. */
+type MaterialUploadsGate = 'pending' | 'on' | 'off';
+
+function useMaterialUploadsGate(): MaterialUploadsGate {
+  const [gate, setGate] = useState<MaterialUploadsGate>(() =>
+    materialsEnabledCache === null ? 'pending' : materialsEnabledCache ? 'on' : 'off',
+  );
   useEffect(() => {
     let cancelled = false;
     void probeMaterialsEnabled().then((value) => {
-      if (!cancelled) setEnabled(value);
+      if (!cancelled) setGate(value ? 'on' : 'off');
     });
     return () => {
       cancelled = true;
     };
   }, []);
-  return enabled;
+  return gate;
 }
+
+/** Runtime-delivered rollout gate; false until the server probe says true. */
+export function useMaterialUploadsEnabled(): boolean {
+  return useMaterialUploadsGate() === 'on';
+}
+
+/** How often a staged material being parsed is read again. */
+const MATERIAL_PARSE_POLL_MS = 1500;
 
 export function useComposerMaterials(
   initialMaterials: readonly WorkbenchMaterial[] = [],
 ): ComposerMaterials {
   const { t, locale } = useI18n();
-  const enabled = useMaterialUploadsEnabled();
+  const gate = useMaterialUploadsGate();
+  const enabled = gate === 'on';
   const initial = useRef<WorkbenchMaterial[] | null>(null);
   if (initial.current === null) {
     initial.current = initialMaterials.slice(0, MAX_COMPOSER_MATERIALS);
@@ -338,46 +416,57 @@ export function useComposerMaterials(
   const [materials, setMaterials] = useState<WorkbenchMaterial[]>(() => [...initial.current!]);
   const [uploading, setUploading] = useState<MaterialUploadEntry[]>([]);
   const [failed, setFailed] = useState<MaterialUploadEntry[]>([]);
+  // Include picks queued before the next render, retaining the current object
+  // so a completed send cannot remove a later pick with the same id.
+  const stagedObjects = useRef(new Set(initial.current));
   const seq = useRef(0);
   const slotLedger = useRef(new MaterialSlotLedger(initial.current.length));
   const identityGate = useRef(createMaterialUploadIdentityGate());
+  /** Bumped by `startOver`; an upload belongs to the draft it was picked in. */
+  const draft = useRef(0);
 
-  const addFiles = (files: FileList | File[]) => {
-    if (!enabled) return;
-    const selected = Array.from(files);
-    if (!slotLedger.current.canAccept(selected.length)) {
-      toast.error(t('workbench.material.maxSelected', { count: MAX_COMPOSER_MATERIALS }));
-      return;
-    }
-    slotLedger.current.reserve(selected.length);
+  type UploadJob = { file: File; entry: MaterialUploadEntry };
 
-    // Register every picked file as a pending chip BEFORE any upload runs, so
-    // a slow first upload never hides later selections. Uploads are settled
-    // per entry by id, each flipping independently to done or failed.
-    const jobs = selected.map((file) => ({
-      file,
-      entry: {
-        id: `${Date.now()}-${seq.current++}-${file.name}`,
-        name: file.name,
-      },
-    }));
-    setUploading((items) => [...items, ...jobs.map((job) => job.entry)]);
+  /**
+   * Upload jobs whose slots are reserved: each pill is shown at once and
+   * settled by its id, flipping on its own to staged or failed.
+   */
+  const runUploads = (jobs: UploadJob[]) => {
+    const ledger = slotLedger.current;
+    const pickedIn = draft.current;
+    setUploading((items) => [...items, ...jobs.map((job) => ({ ...job.entry, progress: 0 }))]);
 
-    const upload = async ({
-      file,
-      entry,
-    }: {
-      file: File;
-      entry: MaterialUploadEntry;
-    }): Promise<boolean> => {
+    const upload = async ({ file, entry }: UploadJob): Promise<boolean> => {
       let succeeded = false;
+      // Whole percents only: a re-render per progress event is wasted.
+      let shown = 0;
+      const onProgress = (sent: number) => {
+        const percent = Math.floor(sent * 100);
+        if (percent === shown) return;
+        shown = percent;
+        setUploading((items) =>
+          items.map((item) => (item.id === entry.id ? { ...item, progress: percent / 100 } : item)),
+        );
+      };
       try {
-        const staged = await retryMaterialUpload(() => uploadWorkbenchMaterial(file));
-        setMaterials((current) => [...current, staged]);
+        const staged = await retryMaterialUpload(() =>
+          uploadWorkbenchMaterial(file, { onProgress }),
+        );
         succeeded = true;
+        if (draft.current === pickedIn) {
+          stagedObjects.current.add(staged);
+          setMaterials((current) => [...current, staged]);
+        }
         return true;
       } catch (err) {
-        setFailed((items) => [...items, entry]);
+        if (draft.current !== pickedIn) return false;
+        // The four refusals the user can act on are said as such; anything
+        // else (a server or network failure) is just "upload failed".
+        const reason =
+          err instanceof WorkbenchMaterialUploadError && [413, 415, 429, 507].includes(err.status)
+            ? err.userMessage(t, locale)
+            : t('workbench.material.uploadFailedShort');
+        setFailed((items) => [...items, { id: entry.id, name: entry.name, reason, file }]);
         toast.error(
           err instanceof WorkbenchMaterialUploadError
             ? err.userMessage(t, locale)
@@ -387,7 +476,7 @@ export function useComposerMaterials(
         );
         return false;
       } finally {
-        slotLedger.current.settle(succeeded);
+        ledger.settle(succeeded);
         setUploading((items) => items.filter((item) => item.id !== entry.id));
       }
     };
@@ -395,29 +484,229 @@ export function useComposerMaterials(
     void scheduleMaterialUploadBatch(identityGate.current, jobs, upload);
   };
 
+  const addFiles = (files: FileList | File[]) => {
+    if (!enabled) return;
+    const selected = Array.from(files);
+    if (!slotLedger.current.canAccept(selected.length)) {
+      toast.error(t('workbench.material.maxSelected', { count: MAX_COMPOSER_MATERIALS }));
+      return;
+    }
+    slotLedger.current.reserve(selected.length);
+    // Register every picked file as a pending chip BEFORE any upload runs, so
+    // a slow first upload never hides later selections.
+    runUploads(
+      selected.map((file) => ({
+        file,
+        entry: { id: `${Date.now()}-${seq.current++}-${file.name}`, name: file.name },
+      })),
+    );
+  };
+
+  const retryFailed = (id: string) => {
+    const entry = failed.find((item) => item.id === id);
+    if (!enabled || !entry?.file) return;
+    if (!slotLedger.current.canAccept(1)) {
+      toast.error(t('workbench.material.maxSelected', { count: MAX_COMPOSER_MATERIALS }));
+      return;
+    }
+    slotLedger.current.reserve(1);
+    setFailed((items) => items.filter((item) => item.id !== id));
+    runUploads([{ file: entry.file, entry: { id: entry.id, name: entry.name } }]);
+  };
+
+  // ── Extraction ──────────────────────────────────────────────────────
+  // A staged upload is parsed by the server in the background: its pill
+  // follows the parse, read again every POLL while it runs.
+  const [extraction, setExtraction] = useState<Record<string, ComposerMaterialExtraction>>({});
+  const parsingIds = materials
+    .filter((material) => {
+      const status = extraction[material.materialId]?.status ?? material.extractionStatus;
+      return status === 'pending' || status === 'running';
+    })
+    .map((material) => material.materialId);
+  const parsingKey = parsingIds.join(',');
+  useEffect(() => {
+    if (!parsingKey) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void Promise.all(
+        parsingKey.split(',').map(async (materialId) => {
+          try {
+            const state = await fetchMaterialExtractionState(materialId, controller.signal);
+            return [materialId, state] as const;
+          } catch {
+            // A failed read is tried again on the next tick.
+            return [materialId, undefined] as const;
+          }
+        }),
+      ).then((answers) => {
+        if (controller.signal.aborted) return;
+        setExtraction((current) => {
+          const next = { ...current };
+          for (const [materialId, state] of answers) {
+            if (state === undefined) continue;
+            // Gone from the library: there is no file left to parse.
+            next[materialId] = state ?? { status: 'failed', reasonCode: 'source_unavailable' };
+          }
+          return next;
+        });
+      });
+    }, MATERIAL_PARSE_POLL_MS);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // `extraction` changes with every answer, which re-arms the next tick.
+  }, [parsingKey, extraction]);
+
+  const retryExtraction = (materialId: string) => {
+    setExtraction((current) => ({ ...current, [materialId]: { status: 'pending' } }));
+    parseLibraryMaterial(materialId).catch(() => {
+      setExtraction((current) => ({ ...current, [materialId]: { status: 'failed' } }));
+      toast.error(t('workbench.material.retryFailed'));
+    });
+  };
+
+  const addExisting = (material: WorkbenchMaterial): AddExistingOutcome => {
+    if (!enabled) return 'disabled';
+    if ([...stagedObjects.current].some((item) => item.materialId === material.materialId)) {
+      return 'already';
+    }
+    if (!slotLedger.current.canAccept(1)) {
+      toast.error(t('workbench.material.maxSelected', { count: MAX_COMPOSER_MATERIALS }));
+      return 'full';
+    }
+    slotLedger.current.reserve(1);
+    stagedObjects.current.add(material);
+    slotLedger.current.settle(true);
+    setMaterials((current) =>
+      current.some((item) => item.materialId === material.materialId)
+        ? current
+        : [...current, material],
+    );
+    return 'staged';
+  };
+
   return {
     enabled,
+    enabledKnown: gate !== 'pending',
     materials,
     uploading,
     failed,
+    extraction,
+    retryFailed,
+    retryExtraction,
     addFiles,
-    remove: (materialId) =>
-      setMaterials((items) => {
-        if (items.some((item) => item.materialId === materialId)) {
+    addExisting,
+    remove: (materialId) => {
+      for (const item of stagedObjects.current) {
+        if (item.materialId === materialId) {
+          stagedObjects.current.delete(item);
           slotLedger.current.removeCompleted();
         }
-        return items.filter((item) => item.materialId !== materialId);
-      }),
+      }
+      setMaterials((items) => items.filter((item) => item.materialId !== materialId));
+    },
     removeFailed: (id) => setFailed((items) => items.filter((item) => item.id !== id)),
+    removeSent: (sent) => {
+      const snapshot = new Set(sent);
+      for (const item of snapshot) {
+        if (stagedObjects.current.delete(item)) {
+          slotLedger.current.removeCompleted();
+        }
+      }
+      // The updater is pure: StrictMode replay cannot release a slot twice.
+      setMaterials((items) => items.filter((item) => !snapshot.has(item)));
+    },
     clear: () => {
       // Uploads are not cancelled by clear. Keep their reservations so a late
       // success remains counted when its pill appears after this reset.
+      stagedObjects.current.clear();
       slotLedger.current.clearCompleted();
       setMaterials([]);
       setFailed([]);
     },
+    startOver: () => {
+      draft.current += 1;
+      stagedObjects.current.clear();
+      // A fresh ledger: uploads in flight settle into the old one.
+      slotLedger.current = new MaterialSlotLedger(0);
+      setMaterials([]);
+      setUploading([]);
+      setFailed([]);
+    },
+    leaveUploads: () => {
+      draft.current += 1;
+      // The staged pills keep their slots; the uploads leaving settle into
+      // the old ledger.
+      slotLedger.current = new MaterialSlotLedger(stagedObjects.current.size);
+      setUploading([]);
+      setFailed([]);
+    },
     busy: uploading.length > 0,
   };
+}
+
+/** Which composer a knowledge base hand-over is for, decided when it was asked. */
+export type MaterialSeedTarget =
+  | { readonly kind: 'home' }
+  /** A conversation's composer, by its owner key (`draft:<courseId>` for a new one). */
+  | { readonly kind: 'chat'; readonly ownerKey: string };
+
+/**
+ * "Chat with this material" from the knowledge base page: one material to
+ * stage in one composer, once. `key` tells one hand-over from the next.
+ */
+export interface MaterialSeed {
+  readonly key: number;
+  readonly material: WorkbenchMaterial;
+  readonly target: MaterialSeedTarget;
+}
+
+/**
+ * Stage a hand-over in this composer if it is the one the hand-over names,
+ * and say whether the composer must wait for it.
+ *
+ * While the materials gate has not answered, the hand-over waits -- and so
+ * must this composer's send (the answer is `true`): a message sent then would
+ * leave without the material the teacher chose. Once the gate answers yes it
+ * is staged -- only staged, nothing is uploaded or attached before the
+ * message is sent (RFC #1716 §4); answered no, nothing can be staged here and
+ * the hand-over is over. `onConsumed` hands the key back once, when the
+ * outcome is known: staged, already staged, refused by the per-message cap
+ * (which `addExisting` has already told the user; not kept to reappear
+ * later), or materials not offered.
+ *
+ * Call it AFTER any effect that resets the composer. A reset that runs again
+ * for the same hand-over -- React replaying effects in development -- is
+ * answered by staging it again (`addExisting` keeps one pill per material);
+ * a refused one is not tried twice.
+ */
+export function useMaterialSeed(input: {
+  readonly seed: MaterialSeed | null | undefined;
+  /** This composer is the seed's target. */
+  readonly targeted: boolean;
+  readonly materials: Pick<ComposerMaterials, 'enabled' | 'enabledKnown' | 'addExisting'>;
+  readonly onConsumed?: (key: number) => void;
+}): boolean {
+  const { seed, targeted, materials, onConsumed } = input;
+  /** The hand-over this composer answered, and how. */
+  const handled = useRef<{ readonly key: number; readonly outcome: AddExistingOutcome } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!seed || !targeted || !materials.enabledKnown) return;
+    const earlier = handled.current?.key === seed.key ? handled.current.outcome : null;
+    if (earlier === 'full' || earlier === 'disabled') return;
+    const outcome = materials.enabled ? materials.addExisting(seed.material) : 'disabled';
+    if (earlier !== null) return;
+    handled.current = { key: seed.key, outcome };
+    onConsumed?.(seed.key);
+    // `materials` is a fresh object each render; the gate is what can change
+    // the outcome, and `handled` keeps the answer to one per key.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seed, targeted, materials.enabled, materials.enabledKnown]);
+  return Boolean(seed && targeted && !materials.enabledKnown);
 }
 
 export function AttachButton({
@@ -545,56 +834,199 @@ export function SkillButton({
   );
 }
 
+const PILL_ICON = 'size-[11px]';
+
+/** Audio and video are transcribed rather than parsed: the pill says which. */
+function isMediaMime(mime?: string): boolean {
+  return !!mime && (mime.startsWith('audio/') || mime.startsWith('video/'));
+}
+
 export function MaterialChips({
   materials,
   uploading,
   failed = [],
+  extraction = {},
   onRemove,
   onRemoveFailed,
+  onRetryFailed,
+  onRetryExtraction,
   className,
   inline = false,
 }: {
   materials: WorkbenchMaterial[];
   uploading: MaterialUploadEntry[];
   failed?: MaterialUploadEntry[];
+  /** The staged materials' extraction as last read (`ComposerMaterials.extraction`). */
+  extraction?: Readonly<Record<string, ComposerMaterialExtraction>>;
   onRemove: (materialId: string) => void;
   onRemoveFailed?: (id: string) => void;
+  onRetryFailed?: (id: string) => void;
+  onRetryExtraction?: (materialId: string) => void;
   className?: string;
   /** Share the caller's pill row instead of opening one (see `ComposerPillRow`). */
   inline?: boolean;
 }) {
   const { t } = useI18n();
   if (materials.length === 0 && uploading.length === 0 && failed.length === 0) return null;
+  const retry = t('toolbar.materialRetry');
   return (
     <ComposerPillRow
       className={inline ? undefined : className}
       contents={inline}
       testId="workbench-materials"
     >
-      {materials.map((m) => (
-        <ComposerPill
-          key={m.materialId}
-          icon={<Paperclip size={10} />}
-          label={m.name}
-          title={m.name}
-          onRemove={() => onRemove(m.materialId)}
-          removeLabel={t('workbench.material.remove', { name: m.name })}
-        />
-      ))}
-      {uploading.map((entry) => (
-        <ComposerPendingPill key={entry.id} label={entry.name} />
-      ))}
-      {failed.map((entry) => (
-        <ComposerPill
-          key={entry.id}
-          tone="danger"
-          icon={<Paperclip size={10} />}
-          label={entry.name}
-          title={entry.name}
-          onRemove={onRemoveFailed ? () => onRemoveFailed(entry.id) : undefined}
-          removeLabel={t('workbench.material.removeFailed')}
-        />
-      ))}
+      {materials.map((m) => {
+        const state = extraction[m.materialId];
+        const status = state?.status ?? m.extractionStatus;
+        const parsing = status === 'pending' || status === 'running';
+        const failedParse = status === 'failed';
+        const kindIcon = <MaterialKindIcon mime={m.mimeType} name={m.name} className={PILL_ICON} />;
+        if (failedParse) {
+          const reason = t(
+            state?.reasonCode
+              ? `workspace.knowledgeBase.failure.${state.reasonCode}.label`
+              : 'workspace.knowledgeBase.status.failed',
+          );
+          return (
+            <ComposerPill
+              key={m.materialId}
+              tone="danger"
+              status="failed"
+              testId="workbench-material-pill"
+              className="max-w-[300px]"
+              icon={<AlertCircle className={PILL_ICON} />}
+              label={m.name}
+              meta={reason}
+              title={`${m.name} · ${reason}`}
+              action={
+                onRetryExtraction ? (
+                  <ComposerPillAction
+                    label={retry}
+                    testId="workbench-material-retry"
+                    onClick={() => onRetryExtraction(m.materialId)}
+                  >
+                    <RotateCw size={9} strokeWidth={2.5} />
+                  </ComposerPillAction>
+                ) : undefined
+              }
+              onRemove={() => onRemove(m.materialId)}
+              removeLabel={t('workbench.material.remove', { name: m.name })}
+            />
+          );
+        }
+        const parsingLabel = t(
+          isMediaMime(m.mimeType) ? 'toolbar.materialTranscribing' : 'toolbar.materialParsing',
+        );
+        return (
+          <ComposerPill
+            key={m.materialId}
+            status={parsing ? 'parsing' : 'ready'}
+            testId="workbench-material-pill"
+            icon={
+              parsing ? (
+                <Loader2 className={cn(PILL_ICON, 'animate-spin motion-reduce:animate-none')} />
+              ) : (
+                kindIcon
+              )
+            }
+            label={m.name}
+            meta={parsing ? parsingLabel : undefined}
+            pinMeta
+            title={parsing ? `${m.name} · ${parsingLabel}` : m.name}
+            progress={parsing ? 'indeterminate' : undefined}
+            onRemove={() => onRemove(m.materialId)}
+            removeLabel={t('workbench.material.remove', { name: m.name })}
+          />
+        );
+      })}
+      {uploading.map((entry) => {
+        const percent = Math.round((entry.progress ?? 0) * 100);
+        return (
+          <ComposerPill
+            key={entry.id}
+            tone="pending"
+            status="uploading"
+            testId="workbench-material-pill"
+            icon={<Loader2 className={cn(PILL_ICON, 'animate-spin motion-reduce:animate-none')} />}
+            label={entry.name}
+            meta={<span className="tabular-nums">{percent}%</span>}
+            pinMeta
+            title={`${entry.name} · ${t('toolbar.materialUploading', { percent })}`}
+            progress={entry.progress ?? 0}
+          />
+        );
+      })}
+      {failed.map((entry) => {
+        const reason = entry.reason ?? t('workbench.material.uploadFailedShort');
+        return (
+          <ComposerPill
+            key={entry.id}
+            tone="danger"
+            status="failed"
+            testId="workbench-material-pill"
+            className="max-w-[300px]"
+            icon={<AlertCircle className={PILL_ICON} />}
+            label={entry.name}
+            meta={reason}
+            title={`${entry.name} · ${reason}`}
+            action={
+              onRetryFailed && entry.file ? (
+                <ComposerPillAction
+                  label={retry}
+                  testId="workbench-material-retry"
+                  onClick={() => onRetryFailed(entry.id)}
+                >
+                  <RotateCw size={9} strokeWidth={2.5} />
+                </ComposerPillAction>
+              ) : undefined
+            }
+            onRemove={onRemoveFailed ? () => onRemoveFailed(entry.id) : undefined}
+            removeLabel={t('workbench.material.removeFailed')}
+          />
+        );
+      })}
     </ComposerPillRow>
   );
+}
+
+/**
+ * The knowledge base's sources for the `@` menu while it is open, matching
+ * the typed query (debounced), marked for this conversation and for what is
+ * already staged. `undefined` while materials are not offered at all, so the
+ * menu stays the classroom picker. A material change of this run
+ * (`materialLibraryRevision`) refetches.
+ */
+export function useMaterialMentions(input: {
+  open: boolean;
+  enabled: boolean;
+  query: string;
+  sessionId: string | null;
+  staged: readonly WorkbenchMaterial[];
+}): MaterialMentionCandidate[] | undefined {
+  const { open, enabled, query, sessionId, staged } = input;
+  const revision = useWorkbenchStore((state) => state.materialLibraryRevision);
+  const [listing, setListing] = useState<{
+    query: string;
+    sessionId: string | null;
+    materials: Awaited<ReturnType<typeof fetchMaterialMentionListing>>;
+  }>();
+  useEffect(() => {
+    if (!open || !enabled) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      void fetchMaterialMentionListing({ query, sessionId, signal: controller.signal }).then(
+        (materials) => {
+          if (!controller.signal.aborted) setListing({ query, sessionId, materials });
+        },
+      );
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [open, enabled, query, sessionId, revision]);
+  if (!enabled) return undefined;
+  const listed =
+    listing?.query === query && listing.sessionId === sessionId ? listing.materials : [];
+  return materialMentionCandidates(listed, new Set(staged.map((material) => material.materialId)));
 }

@@ -44,11 +44,19 @@ because it strips the styles. Before any slide write, read the page with
 **`detail:"source"`**: it returns the page's exact persisted JSON (all style
 fields, raw content HTML with inline marks and line breaks, exact geometry,
 z-order), and it is the root your patch paths address — a field read at
-`/content/canvas/elements/2/left` is written back through that same path. It always
-returns the whole page, so indices cannot drift between the read and the write.
+`/content/canvas/elements/2/left` is written back through that same path. Source output paginates after 12,000 characters; follow `nextOffset` until the
+target field and its exact anchor are available. Do not reconstruct omitted text.
 **`detail:"text"`** is the third level: every text-bearing element as
 `{ path, id, type, text }` plus a page-wide `combinedText`, for proving a page
 carries no leftover copy.
+
+For `str_replace`, copy the **decoded field value**, not the JSON serialization:
+actual newlines and literal backslash+n are different characters. Preserve HTML
+marks, whitespace and quotes exactly in `oldText`; never invent styles from the
+visible-text view. Supply the field's explicit `path`. The same rule applies to
+`newText`: preserve the intended code's escaping, not the surrounding JSON's.
+After an anchor rejection, use the returned diagnostic and re-read source where
+needed; correct the anchor rather than repeating the same failed patch.
 
 ## Choose the smallest operation
 
@@ -91,6 +99,11 @@ Rules of the matrix:
   house style, so an edit that looks wrong is your value, not the tool's.
 - `edit_deck insert` creates an empty stub; fill it with `generate_scene` using
   that new page's explicit `type` and `brief`, or patch an already valid scene.
+- A slide that `generate_scene` writes or rewrites into an existing course
+  carries a `design` that restates the course's established style — its
+  background, palette, type scale, title placement and layout grammar, read
+  from the existing pages — so the page joins the deck instead of starting a
+  new one. Change the style only when the user asks for it.
 - `generate_scene` with `instruction` discards the page and regenerates it. That is
   a rewrite, not an edit: reserve it for the moment the user plainly wants a page
   rebuilt, never as a shortcut around careful editing.
@@ -119,10 +132,10 @@ Rules of the matrix:
 For layout-sensitive changes (positioning, density, new elements, alignment),
 verify with `render_scene_preview` when it is available: look at the render,
 edit, look once more. Budget **at most two preview rounds per page** — each
-render costs a tool call and the whole run has a hard call cap. Do not preview
+render costs a tool call and time the user waits through. Do not preview
 pages you did not touch, and do not loop past the budget: if two rounds have
-not converged, stop and tell the user what remains instead of burning the rest
-of the run on one page.
+not converged, leave that page, carry on with the rest of the request, and note
+what remains on it in the final report instead of burning the run on one page.
 
 ## Narration audio follows text
 
@@ -161,6 +174,11 @@ course as shared ground:
   automatically as it lands; a sequence of small writes loses less to a
   conflict than one sweeping rewrite. Never accumulate a batch "prepared but
   not written" — write as you go.
+- **Keep interactive HTML usable after every call.** Never clear `/content/html`
+  or replace it with a placeholder or partial document before filling it in
+  through later calls. Edit exact anchors, or submit the complete replacement
+  in one `patch_stage` batch. Each call persists independently; stopping between
+  calls must not leave the page broken.
 - **Yield when the user is editing.** If the user says they are changing the
   same page, or a fresh read shows content you did not write, stop, re-read,
   and reconcile before writing again. Never overwrite a human's fresher
@@ -172,5 +190,6 @@ There is no hard tool-call cap, but every extra call is latency the user
 watches. Spend calls on edits, not ceremony: one `list_scenes` at entry, one `read_stage` per
 page before its edits, the edits themselves, `generate_tts`
 where wording changed, a preview round only where layout is genuinely at
-risk. If the request is large, do the highest-value edits first and tell the
-user what remains.
+risk. If the request is large, do the highest-value edits first, then keep
+going until the whole request is done; do not hand the remaining work back to
+the user.

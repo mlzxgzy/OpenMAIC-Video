@@ -101,6 +101,8 @@ allowUserKeys: false               # ユーザーはこれらのプロバイダ�
 | `proxy` | いいえ | このプロバイダーへのリクエストに使う HTTP プロキシの URL。 |
 | `credentials` | 一部のプリセット | 単一のキーを使わないサービス用のキーペア。AliDocMind は `accessKeyId` と `accessKeySecret` を使います。 |
 | `options` | いいえ | 秘密でない、プロバイダー固有の設定。たとえば `voxcpm-tts` の `backend`。名前は英数字、`_`、`-` で、値は文字列・数値・真偽値（ネストしたマップやリストは不可）です。`${VAR}` も使えます。オプションはモデル設定に表示されるため、キーを入れてはいけません。デプロイ専用で、モデル設定からは設定できません。 |
+| `voices` | いいえ | TTS プリセット専用。組み込み音声一覧を空でないリストで置き換えます。各項目は `id` と `name` が必須、`language` と `gender`（`male`、`female`、`neutral`）は任意です。ID は重複不可で、予約済みのバインド区切り文字 `::` は使用できません。ユーザー音声は保持され、Qwen のクローン音声はクローンモデルを使います。省略時は従来の一覧を保持します。 |
+| `options.defaultVoice` | いいえ | このプロバイダーのデフォルト音声 ID。空白だけでない文字列である必要があります。この ID を含む空でない `voices` リストが必須です。`voices` のみの場合は先頭を使い、有効な明示的選択が優先されます。両方を省略すると従来の動作を維持します。 |
 
 ほとんどのプリセットは組み込みレジストリに対応し、1 つの機能だけをカバーします。`openai` プリセットはチャットのみで、OpenAI の画像・音声合成・文字起こしはそれぞれ `openai-image`、`openai-tts`、`openai-whisper` プリセットです。機能ごとにプロバイダーを 1 つ宣言し、1 つのキーで複数の機能を使う場合は同じ `${VAR}` を参照してください。**Token Plan プリセット**（`minimax`、`tokendance`、`volcengine-ark`、`kimi-coding-plan`）は 1 つのキーで複数の機能をカバーし、各機能はプラン独自のエンドポイントを使います。プロバイダーに設定した `baseUrl` は、そのプロバイダーがカバーするすべての機能のエンドポイントを置き換えるため、Token Plan に `baseUrl` を設定するのは全機能が一緒に移る場合だけにしてください。
 
@@ -121,8 +123,8 @@ Amazon Bedrock（`preset: bedrock`）はサーバーの AWS 認証情報チェ�
 | `course.content.pbl` | chat | `course.content` | プロジェクト型学習（PBL）シーン |
 | `course.actions` | chat | `llm` | シーンのアクション（各シーンでエージェントが話す内容と行う動作） |
 | `classroom` | chat | `llm` | 授業中のチャット、クイズの採点、PBL ランタイム |
-| `agent` | chat | `llm` | Pro ワークベンチのエージェント。**ツール呼び出しが必要。** `api` と `contextWindow` も指定可能 |
-| `agent.title` | chat | `agent` | Pro セッションのタイトル。`openmaic.yml` でのみ設定でき、モデル設定には表示されません |
+| `agent` | chat | `llm` | ワークベンチのエージェント。**ツール呼び出しが必要。** `api` と `contextWindow` も指定可能 |
+| `agent.title` | chat | `agent` | ワークベンチのセッションのタイトル。`openmaic.yml` でのみ設定でき、モデル設定には表示されません |
 | `tts` | tts | — | 音声合成 |
 | `asr` | asr | — | 音声認識（音声入力、音声・動画の文字起こし） |
 | `image` | image | — | 画像生成 |
@@ -311,7 +313,7 @@ slots:
   webSearch: tavily
 ```
 
-その後 `DEFAULT_MODEL` と `MODEL_FALLBACK` を削除します。プロバイダー変数は `${VAR}` 参照の元として残して構いません。`<PREFIX>_BASE_URL` はプロバイダーの `baseUrl` になり（`OPENAI_BASE_URL` → `openai` の `baseUrl`。URL を直接書くか、変数を設定したままなら `${OPENAI_BASE_URL}` と書きます）、`<PREFIX>_MODELS` はその `models` リストになります。変換された `DEFAULT_MODEL` と同じく、ここに書いた `llm` はワークスペースが変更できるサーバーの既定値です。全員に対して固定するには `lock: [llm]` を加えてください。変換結果と異なり、`agent` は `llm` に従うようになります。Pro エージェントを無効のままにするには `agent: null` と書いてください。
+その後 `DEFAULT_MODEL` と `MODEL_FALLBACK` を削除します。プロバイダー変数は `${VAR}` 参照の元として残して構いません。`<PREFIX>_BASE_URL` はプロバイダーの `baseUrl` になり（`OPENAI_BASE_URL` → `openai` の `baseUrl`。URL を直接書くか、変数を設定したままなら `${OPENAI_BASE_URL}` と書きます）、`<PREFIX>_MODELS` はその `models` リストになります。変換された `DEFAULT_MODEL` と同じく、ここに書いた `llm` はワークスペースが変更できるサーバーの既定値です。全員に対して固定するには `lock: [llm]` を加えてください。変換結果と異なり、`agent` は `llm` に従うようになります。ワークベンチのエージェントを無効のままにするには `agent: null` と書いてください。
 
 **server-providers.yml。** 移行前：
 
@@ -435,7 +437,7 @@ ACCESS_CODE=your-secret-code
 機能フラグは `true` または `1` を有効とし、特記がない限りそれ以外は無効です。`NEXT_PUBLIC_*` はビルド時にクライアントに注入されるため、変更後は再ビルドが必要です。
 
 ```bash
-# MAIC Editor（Pro モード）
+# MAIC Editor（授業エディター）
 NEXT_PUBLIC_MAIC_EDITOR_ENABLED=true
 
 # Pi 再生時の PPT・インタラクティブ教材参照（ビルド時フラグ。編集モードの参照には影響しません）
@@ -452,6 +454,9 @@ NEXT_PUBLIC_ENABLE_VIDEO_EXPORT=true
 
 # 実験的 PPTX インポート入口表示
 NEXT_PUBLIC_ENABLE_PPTX_IMPORT=true
+
+# アカウントメニューの「ドキュメント」が開くドキュメントサイト（既定は同一オリジンの /docs）
+NEXT_PUBLIC_DOCS_URL=https://docs.example.com
 ```
 
 教室チャットは常に Pi で動作し、ツール／関数呼び出しに対応したモデルが必要です。**コースモデル設定**の**教室**で対応モデルを選択するか、`openmaic.yml` の `classroom` スロット（または継承元の `llm` スロット）を設定してください。Gemini では Google の OpenAI 互換エンドポイントではなく、ネイティブの `google` プリセットを使います。 組み込みカタログでツール呼び出し非対応とされているモデルは推論前に `400 MODEL_CONFIG_INVALID`（`reason: tool_calling_required`）で拒否され、**コースモデル設定**でも教室スロットにこの要件が表示されます。
@@ -554,6 +559,10 @@ TTS_DOUBAO_BASE_URL=       # 任意の上書き
 TTS_QWEN_API_KEY=
 TTS_QWEN_BASE_URL=         # 任意の上書き
 
+# Xiaomi MiMo TTS
+TTS_XIAOMI_API_KEY=
+TTS_XIAOMI_BASE_URL=https://api.xiaomimimo.com/v1
+
 # 任意の OpenAI 互換 TTS エンドポイント
 TTS_OPENAI_API_KEY=
 TTS_OPENAI_BASE_URL=
@@ -562,7 +571,7 @@ TTS_OPENAI_BASE_URL=
 TTS_VOXCPM_BASE_URL=http://localhost:8000
 ```
 
-対応している TTS prefix は `TTS_OPENAI_`、`TTS_AZURE_`、`TTS_GLM_`、`TTS_QWEN_`、`TTS_MINIMAX_`、`TTS_DOUBAO_`、`TTS_ELEVENLABS_`、`TTS_GOOGLE_`、`TTS_VOXCPM_`、`TTS_LEMONADE_` です。ローカル Lemonade TTS と VoxCPM2 は API key 不要です。ブラウザのネイティブ TTS はサーバー設定不要です。
+対応している TTS prefix は `TTS_OPENAI_`、`TTS_AZURE_`、`TTS_GLM_`、`TTS_QWEN_`、`TTS_MINIMAX_`、`TTS_DOUBAO_`、`TTS_ELEVENLABS_`、`TTS_GOOGLE_`、`TTS_VOXCPM_`、`TTS_XIAOMI_`、`TTS_LEMONADE_` です。ローカル Lemonade TTS と VoxCPM2 は API key 不要です。ブラウザのネイティブ TTS はサーバー設定不要です。
 
 管理者は `TTS_<PROVIDER>_ENABLED=false` で特定の TTS プロバイダーをサーバー側で強制無効化できます。VoxCPM2（セルフホスト TTS＋音声クローン）については専用の [VoxCPM2](./voxcpm.mdx) ページを参照してください。
 
@@ -578,6 +587,10 @@ ASR_OPENAI_BASE_URL=       # 任意の上書き
 # Qwen ASR
 ASR_QWEN_API_KEY=
 ASR_QWEN_BASE_URL=         # 任意の上書き
+
+# Xiaomi MiMo ASR
+ASR_XIAOMI_API_KEY=
+ASR_XIAOMI_BASE_URL=https://api.xiaomimimo.com/v1
 
 # Azure ASR
 ASR_AZURE_API_KEY=
@@ -861,3 +874,11 @@ DeepSeek は `deepseek` プリセットでホスト型 Markdown 抽出も提供�
 同じ `firecrawl` プロバイダーは Web 検索（`POST /v2/search`）にも使えます。1 つのキーとベース URL で両方をまかなうため、1 つのプロバイダーを `slots.webSearch` と `slots.webFetch` の両方に割り当てられます。従来の `FIRECRAWL_API_KEY` と `FIRECRAWL_BASE_URL` 変数はこのプロバイダーを設定します。`webFetch` をこのプロバイダーに割り当てるまで、Webページ取得は `builtin` のままです。
 
 ホスト型サービスに URL を送る前に、セッションの URL 許可、厳密な URL 正規化、ローカル DNS の全アドレス検査を行います。返された最終 URL も、内容を受け入れる前に同じ検査を受けます。ホスト型サービス自身の DNS と中間リダイレクトはサービス側が制御するため、ローカルの検査ではそのネットワーク接続を固定できません。返されたテキストは信頼できないデータのままであり、認証チャレンジページの検出、バイト数制限、切り詰め表示、既存の Web 素材保存と `{trusted, untrusted}` の結果形式を適用します。
+
+## インタラクティブシーンのライブラリ
+
+インタラクティブシーンは、KaTeX、Three.js（addons を含む）、Chart.js、Tailwind v4 ブラウザランタイムを公開 CDN ではなくデプロイ自身から読み込みます。`pnpm install`、`pnpm dev`、`pnpm build` は、インストール済みパッケージから固定バージョンを `public/vendor/interactive` にコピーし、`/vendor/interactive` で配信します。KaTeX は数式を含むページでのみ読み込まれます。
+
+`INTERACTIVE_ASSET_BASE_URL` は公開されるビルド時の設定です。独自の CDN やオブジェクトストレージからこれらのファイルを配信する場合は、パッケージ/バージョンのパスを保ったまま `public/vendor/interactive` をコピーし、この変数を新しいベース URL（例：`https://assets.example.com/interactive`）に設定して再ビルドしてください。Docker では `--build-arg` で渡します。インタラクティブシーンはサンドボックス化された iframe で動作するため、配信先は JavaScript、CSS、フォントを正しい MIME タイプで返し、`Access-Control-Allow-Origin: *` を送信する必要があります。
+
+保存済みのインタラクティブ HTML は、教室で開くときと、スタンドアロン HTML または動画をエクスポートする前に再処理されます。そのため、これらのライブラリを指す互換性のある公開 CDN 参照は、コースを再生成しなくても書き換えられます。その他のライブラリ、互換性のないバージョン、旧 Tailwind v3 Play CDN（`cdn.tailwindcss.com`）、Google Fonts への参照は変更されず、引き続きそれらのホストへのネットワークアクセスが必要です。

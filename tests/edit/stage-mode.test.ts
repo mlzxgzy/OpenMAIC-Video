@@ -29,6 +29,16 @@ describe('stage edit mode store', () => {
     expect(useCanvasStore.getState().handleElementId).toBe('');
     expect(useCanvasStore.getState().editingElementId).toBe('');
   });
+
+  test("keeps the canvas host's percentage when leaving edit mode", () => {
+    useCanvasStore.getState().setCanvasPercentage(100);
+    useStageStore.getState().setMode('edit');
+
+    useStageStore.getState().setMode('playback');
+
+    expect(useCanvasStore.getState().canvasPercentage).toBe(100);
+    useCanvasStore.getState().setCanvasPercentage(90);
+  });
 });
 
 describe('isCurrentSceneEditable', () => {
@@ -105,8 +115,14 @@ describe('workspace classroom chrome', () => {
     expect(resolveStageChromeMode(eligible)).toBe('edit');
   });
 
-  test('Start Learning is the explicit hosted transition back to playback', () => {
+  test('the host can request embedded learning independently of stored mode', () => {
     expect(resolveStageChromeMode({ ...eligible, workbenchLearning: true })).toBe('playback');
+  });
+
+  test('learning cannot render another course document during a switch', () => {
+    expect(
+      resolveStageChromeMode({ ...eligible, workbenchLearning: true, stageMatchesHost: false }),
+    ).toBe('loading');
   });
 
   test('standalone classrooms keep their own stored presentation', () => {
@@ -133,7 +149,7 @@ describe('workspace classroom chrome', () => {
     );
   });
 
-  test('playback is unreachable in a hosted pane without Start Learning', () => {
+  test('playback is unreachable without a host learning request', () => {
     // Exhaustive over every other input: with `workbenchLearning` false, no
     // combination of readiness, ownership or stored mode yields playback.
     const booleans = [false, true];

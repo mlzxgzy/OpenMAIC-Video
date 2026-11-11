@@ -70,7 +70,8 @@ function buildThinChildContext(body: StatelessChatRequest): string {
 export function buildDirectorPrompt(
   body: StatelessChatRequest,
   agents: AgentConfig[],
-  maxAgentTurns: number,
+  native = false,
+  hasWhiteboardService = false,
 ): string {
   const agentList = agents
     .map(
@@ -98,9 +99,7 @@ export function buildDirectorPrompt(
     'You are the director of an in-class multi-agent classroom.',
     'Your job is to decide which classroom agent should speak next, call that agent with the `call_agent` tool, then finish the turn with exactly one terminal tool: `cue_user` to invite more user input, or `close_session` for a clear ending.',
     'For this PoC, you MUST call `call_agent` at least once before your final answer.',
-    `You may call at most ${maxAgentTurns} classroom agent turns in this server-side loop.`,
-    'Stop earlier if the classroom answer is already clear. Prefer 1-2 classroom agents; do not call more agents just to fill the budget.',
-    'Once the classroom agent turn limit is reached, do not call another classroom agent. Finish the director loop with exactly one terminal tool: `cue_user` or `close_session`.',
+    'Finish when the classroom answer is clear. Prefer 1-2 classroom agents; call another agent only when it would help answer the user.',
     'Do not write the classroom response yourself. The selected agent should produce the visible response.',
     'After the useful tool results come back, call exactly one terminal tool, then finish with a short internal summary only.',
     '',
@@ -133,6 +132,7 @@ export function buildDirectorPrompt(
     '7. Never let one child agent impersonate other classroom agents. If another perspective is needed, call that agent separately.',
     '8. When the useful classroom agent turns are complete, call exactly one terminal tool. Do not keep calling agents after the answer is sufficient.',
     '9. Keep every call_agent instruction brief. Do not ask one child agent for a full lecture, multiple examples, or multiple named-student interactions.',
+    '10. A `call_agent` result marked `failed`, `exhausted`, `stayed silent`, or a timed-out call means that agent did not deliver a full visible answer. Decide whether retrying, calling another agent, or handing the turn back with `cue_user` serves the learner best. After such a teacher or assistant call, `cue_user` is allowed without a visible teaching answer. Do not rely on the `cue_user` prompt to explain the failure; the learner sees a fixed notice instead.',
     '',
     '# Scene Reading and Evidence Delegation',
     'The course outline below is a navigation map, not the full scene content.',
@@ -143,14 +143,22 @@ export function buildDirectorPrompt(
     'You may read multiple relevant scenes before one delegation. Call `read_scene` again before a later child if that child also needs scene evidence.',
     '',
     `Session type: ${body.config.sessionType ?? 'qa'}`,
-    `Current scene: ${currentScene?.title ?? currentScene?.id ?? 'none'}`,
-    `Whiteboard open: ${body.storeState.whiteboardOpen ? 'yes' : 'no'}`,
+    ...(native
+      ? [
+          'Current board state and request-start scene/panel context are in the final state-data message.',
+          ...(hasWhiteboardService
+            ? ['A hidden panel does not mean drawing tools are unavailable.']
+            : []),
+        ]
+      : [
+          `Current scene: ${currentScene?.title ?? currentScene?.id ?? 'none'}`,
+          `Whiteboard open: ${body.storeState.whiteboardOpen ? 'yes' : 'no'}`,
+        ]),
     '',
     '# Course Outline',
     buildDirectorCourseOutline(body),
     '',
-    'Agents who already spoke before this Pi loop:',
-    respondedList,
+    ...(native ? [] : ['Agents who already spoke before this Pi loop:', respondedList]),
     '',
     'Available agents:',
     agentList || '(none)',
@@ -231,7 +239,7 @@ export function buildNativeChildPrompt(
         '',
         '# Native whiteboard behavior',
         '- A `wb_read` visibility result of `closed` means the Browser whiteboard is currently hidden; it does not mean whiteboard tools are unavailable or durable drawing is blocked.',
-        '- For every mutation, copy `nextMutation.expectedLastSeq` from the latest `wb_read` result exactly into `expectedLastSeq`; use `null` only when that value itself is `null`. After `STALE_STATE`, read again and use the new value.',
+        '- Before each model request, a fresh whiteboard state is appended as data at the end of the context; use it to track the current board. Read the board once before editing. For every mutation, copy `nextMutation.expectedLastSeq` exactly from the latest successful `wb_read` or mutation result; use `null` only when that value is `null`. Never guess a future sequence. Read again after `STALE_STATE` or an uncertain result, and otherwise when needed. The tail contains `whiteboard.lastSeq`, not a `nextMutation` receipt.',
         '- If the user explicitly requests a visible whiteboard drawing, call `wb_open` before the first mutation even when you have not observed the current visibility; then call `wb_read` and the required `wb_draw_*` tools. Do not wait for the user to ask you to open the whiteboard.',
         '- A `closed` visibility must not stop the requested mutation. Use the available `wb_draw_*` tools instead of substituting an ASCII/text-only drawing.',
         '- Do not say the whiteboard is unavailable when the required tools appear in the inventory, and do not claim the requested drawing is complete until the required mutation tool results succeed.',
@@ -250,6 +258,8 @@ export function buildNativeChildPrompt(
     '',
     '# Native response contract (CRITICAL)',
     '- Speak naturally as yourself. Never emit the Legacy JSON action array.',
+    '- Every visible text segment, including text before a tool call, is read aloud to the learner. Speak teaching content directly; do not narrate checking, drawing, or repairing the board, or read internal IDs, tool names, or mutation sequence numbers aloud.',
+    "- Respond in the same language as the learner, using expressions they can understand. For this reply, the learner's language takes precedence over the course language. A Chinese question needs a Chinese answer; do not switch to English because tools or instructions use English.",
     '- Visible speech must not imitate tool syntax or claim an effect succeeded before its tool result.',
     '- Use only tools in the exact inventory below. If the inventory is empty, respond with speech only.',
     '- Tool dispatch acceptance is best-effort server-side acceptance, not proof of Browser receipt or rendering.',
@@ -258,6 +268,22 @@ export function buildNativeChildPrompt(
     '# Available Native tools',
     nativeToolInventory,
     ...nativeWhiteboardGuidance,
+    ...(availableTools.includes('wb_draw_shape')
+      ? [
+          '# Native whiteboard shapes',
+          '- Geometry: every shape requires SVG path d data and viewBox:[w,h] with positive dimensions, never complete SVG markup. Element width/height scale the viewBox independently per axis; keep the viewBox ratio equal to width:height when proportions matter.',
+          '- Path/viewBox coordinates are local: origin (0,0) is the unrotated element upper-left. Never put absolute whiteboard x/y into path data or center a path around zero without offsetting it into the viewBox.',
+          '- x/y is the upper-left BEFORE rotation; rotate is a finite angle in degrees around the box center, positive clockwise (default 0). Work out the intended center first, then x=centerX-width/2 and y=centerY-height/2. Keep the rotated shape inside the canvas too.',
+          '- Arc radii are in viewBox units and scale with element width/height; unequal axis scales turn circular arcs into elliptical arcs.',
+          '- Close filled shapes with Z. Open curves use fillColor:"transparent" and stroke:{color,width,style?}; style defaults to solid (also dashed/dotted).',
+          '- Examples below omit expectedLastSeq only for readability: in EVERY actual call copy nextMutation.expectedLastSeq exactly from the latest successful wb_read or mutation result. The refreshed tail describes the current board; it does not advance sibling tool arguments automatically. Never copy a placeholder sequence.',
+          '- Right triangle: path:"M0 0 L4 0 L0 3 Z", viewBox:[4,3]; use width:height=4:3 to preserve its proportions.',
+          '- Open cubic curve: path:"M0 1 C1 0 2 0 3 1", viewBox:[3,1], fillColor:"transparent", stroke:{color:"#333333",width:2}.',
+          '- Complete circle/ellipse: path:"M1 0 A1 1 0 1 1 1 2 A1 1 0 1 1 1 0 Z", viewBox:[2,2]. Equal element width/height gives a circle; different dimensions give an ellipse.',
+          '- Clockwise upper-right quarter circle, top-left to bottom-right: path:"M0 0 A1 1 0 0 1 1 1", viewBox:[1,1]; for width=height its radius equals width.',
+          '- On an invalid shape error, correct the reported field/path position or reduce path complexity and retry. Do not claim success until the mutation succeeds. Native shapes persist as PPTShapeElement records, never Legacy JSON actions.',
+        ]
+      : []),
     '',
     '# Length & Style (CRITICAL)',
     buildLengthGuidelines(agent.role),

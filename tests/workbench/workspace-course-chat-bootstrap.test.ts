@@ -4,14 +4,16 @@
  *
  * This used to POST a session on arrival. Open a course, close the chat, open the
  * course again — three empty conversations in the rail, each named after the
- * classroom. Nothing is minted here now: an open conversation stays, otherwise the
- * user's most recent one is carried over, and a user with none gets an empty
- * composer whose first message creates the session.
+ * classroom. Nothing is minted here now: a conversation in the URL stays beside
+ * the course; a course opened by browsing is shown alone, the chat column folded,
+ * with "Edit with AI" offering an empty conversation whose first message creates
+ * the session. No other conversation is carried over to it.
  */
 
 import { act, createElement, StrictMode, type ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ChatNode } from '@/lib/workbench/session-store';
 
 interface MockSessionRow {
   readonly id: string;
@@ -21,6 +23,7 @@ interface MockSessionRow {
   readonly title?: string | null;
   readonly prompt?: string;
   readonly status?: 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+  readonly existingCourse?: boolean;
 }
 
 const mocks = vi.hoisted(() => ({
@@ -59,8 +62,14 @@ const mocks = vi.hoisted(() => ({
   } | null,
   courses: null as Record<string, unknown> | null,
   railProps: null as Record<string, unknown> | null,
+  coursesPageProps: null as Record<string, unknown> | null,
+  searchProps: null as Record<string, unknown> | null,
+  railCollapsedSeen: [] as unknown[],
+  homeProps: null as Record<string, unknown> | null,
+  libraryProps: null as Record<string, unknown> | null,
   ownerRuns: { runs: [] as readonly unknown[], forget: () => {} },
   store: {
+    chat: [] as ChatNode[],
     playbackOn: false,
     sessionId: null as string | null,
     status: 'succeeded' as
@@ -75,6 +84,7 @@ const mocks = vi.hoisted(() => ({
     waitingKey: null as string | null,
     waitingArmed: false,
     stageId: null as string | null,
+    existingCourse: false as boolean | null,
     libraryRevision: 0,
     stageLinkStageIds: [] as readonly string[],
     touchedStageIds: [] as readonly string[],
@@ -87,6 +97,8 @@ const mocks = vi.hoisted(() => ({
     sessionPrompt: null as string | null,
   },
   setSessionTitle: vi.fn(),
+  paneTabs: new Map<string, Record<string, unknown>>(),
+  loadedStage: null as { id: string; name: string } | null,
 }));
 
 vi.mock('next/navigation', () => ({
@@ -117,7 +129,7 @@ vi.mock('@/lib/workbench/session-store', () => {
 });
 vi.mock('@/lib/store/stage', () => ({
   useStageStore: (selector: (state: Record<string, unknown>) => unknown) =>
-    selector({ isOwner: true }),
+    selector({ isOwner: true, stage: mocks.loadedStage }),
 }));
 vi.mock('@/lib/workbench/use-workbench-session', () => ({
   useStageFreshnessSync: vi.fn(),
@@ -198,19 +210,26 @@ vi.mock('@/lib/workbench/owner-session-client', () => ({
     }
   },
 }));
-vi.mock('@/lib/workbench/pro-swap', () => ({ startProSwap: vi.fn() }));
 // The owner's generation runs (the rail's generating courses) are a separate
 // stream with nothing to say about the session and pane wiring under test.
 vi.mock('@/lib/generation-run-client/use-owner-runs', () => ({
   useOwnerRuns: () => mocks.ownerRuns,
 }));
+// The settings dialog (owned by the shell) has its own tests.
+vi.mock('@/components/settings', () => ({ SettingsDialog: () => null }));
 vi.mock('@/components/workbench/workspace/WorkspaceRail', () => ({
   WorkspaceRail: (props: Record<string, unknown>) => {
     mocks.railProps = props;
+    mocks.railCollapsedSeen.push(props.collapsed);
     return null;
   },
 }));
-vi.mock('@/components/workbench/workspace/WorkspaceHome', () => ({ WorkspaceHome: () => null }));
+vi.mock('@/components/workbench/workspace/WorkspaceHome', () => ({
+  WorkspaceHome: (props: Record<string, unknown>) => {
+    mocks.homeProps = props;
+    return null;
+  },
+}));
 vi.mock('@/components/workbench/workspace/WorkspaceChatPane', () => ({
   WorkspaceChatPane: (props: Record<string, unknown>) => {
     mocks.chatPaneProps = props;
@@ -229,13 +248,54 @@ vi.mock('@/components/workbench/workspace/WorkspaceClassroomPane', async () => {
     },
   };
 });
-vi.mock('@/components/workbench/workspace/PaneTab', () => ({ PaneTab: () => null }));
+vi.mock('@/components/workbench/workspace/PaneTab', () => ({
+  PaneTab: (props: { testId: string }) => {
+    mocks.paneTabs.set(props.testId, props as unknown as Record<string, unknown>);
+    return null;
+  },
+}));
+// The preview tab renders the real course tab strip, which keeps its active
+// tab in view; jsdom has no layout to scroll.
+Element.prototype.scrollIntoView ??= function scrollIntoView() {};
+// The palette itself is tested on its own; the shell owns its shortcut and wiring.
+vi.mock('@/components/workbench/workspace/WorkspaceSearchPalette', async (importActual) => {
+  const actual =
+    await importActual<typeof import('@/components/workbench/workspace/WorkspaceSearchPalette')>();
+  return {
+    ...actual,
+    WorkspaceSearchPalette: (props: Record<string, unknown>) => {
+      mocks.searchProps = props;
+      return createElement('div', { 'data-testid': 'workspace-search' });
+    },
+  };
+});
+// My courses carries the library's course actions (open, delete, the
+// generating cards); the page itself is tested on its own.
+vi.mock('@/components/workbench/workspace/WorkspaceCoursesPage', () => ({
+  WorkspaceCoursesPage: (props: Record<string, unknown>) => {
+    mocks.coursesPageProps = props;
+    return createElement('main', { 'data-testid': 'workspace-courses-page' });
+  },
+}));
+/** Open My courses from the rail and hand back the page's props. */
+const openMyCourses = async (): Promise<Record<string, unknown>> => {
+  await act(async () => (mocks.railProps!.onOpenView as (view: string) => void)('courses'));
+  expect(mocks.coursesPageProps).not.toBeNull();
+  return mocks.coursesPageProps!;
+};
+vi.mock('@/components/workbench/workspace/MaterialLibraryPage', () => ({
+  MaterialLibraryPage: (props: Record<string, unknown>) => {
+    mocks.libraryProps = props;
+    return createElement('main', { 'data-testid': 'pro-workspace-library' });
+  },
+}));
 vi.mock('@/components/workbench/workspace/ResizeHandle', () => ({ ResizeHandle: () => null }));
 
 import { WorkspaceShell } from '@/components/workbench/workspace/WorkspaceShell';
 import {
   CHAT_COLLAPSED_STORAGE_KEY,
   CLASSROOM_COLLAPSED_STORAGE_KEY,
+  NAV_COLLAPSED_STORAGE_KEY,
 } from '@/lib/workbench/workspace-panes';
 import { COURSE_TABS_STORAGE_KEY } from '@/lib/workbench/workspace-course-tabs';
 import {
@@ -265,6 +325,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/** The classroom header's "Edit with AI" on a browsed course. */
+const talkAboutCourse = async () => {
+  const talk = mocks.classroomProps?.onTalkAboutCourse as (() => void) | undefined;
+  expect(talk, 'a browsed course offers a conversation about it').toBeTypeOf('function');
+  await act(async () => talk!());
+};
+
 /** The draft-conversation capability the shell hands its chat pane, if any. */
 const draft = () =>
   mocks.chatPaneProps?.draftConversation as {
@@ -274,7 +341,9 @@ const draft = () =>
       materials: readonly unknown[];
       elementRefs: readonly unknown[];
       courseRefs: readonly unknown[];
+      boundCourseId?: string;
     }) => Promise<unknown>;
+    course?: { stageId: string; title: string };
   } | null;
 
 beforeEach(() => {
@@ -292,16 +361,20 @@ beforeEach(() => {
     state: 'ready',
     reload: vi.fn(() => Promise.resolve()),
     importInput: null,
-    discoveryContent: null,
-    openNewFolder: vi.fn(),
     moveCourse: vi.fn(),
-    createAndMove: vi.fn(),
     deleteCourse: vi.fn(),
   };
   mocks.classroomProps = null;
   mocks.classroomMounts = 0;
+  mocks.paneTabs.clear();
+  mocks.loadedStage = null;
   mocks.chatPaneProps = null;
   mocks.railProps = null;
+  mocks.coursesPageProps = null;
+  mocks.searchProps = null;
+  mocks.railCollapsedSeen = [];
+  mocks.homeProps = null;
+  mocks.libraryProps = null;
   mocks.ownerRuns = { runs: [], forget: () => {} };
   mocks.searchParams = new URLSearchParams('course=stage-1');
   mocks.sessionRows = [];
@@ -309,8 +382,11 @@ beforeEach(() => {
   mocks.ownerOptions = null;
   mocks.ownerClient = null;
   mocks.unconfirmedSessionTitles.clear();
+  mocks.store.chat = [];
+  mocks.store.pages = {};
   mocks.store.sessionId = null;
   mocks.store.stageId = null;
+  mocks.store.existingCourse = false;
   mocks.store.status = 'succeeded';
   mocks.store.sessionTitle = null;
   mocks.store.sessionPrompt = null;
@@ -397,7 +473,7 @@ describe('a course opened without a conversation', () => {
     expect(container?.querySelector('[data-testid="classroom-pane"]')).not.toBeNull();
   });
 
-  it('carries the most recent conversation into the middle column', async () => {
+  it('shows a browsed course alone: no conversation carried over, none minted', async () => {
     mocks.sessionRows = [
       { id: 'session-old', stageId: 'stage-9', updatedAt: 1 },
       { id: 'session-recent', stageId: 'stage-2', updatedAt: 9 },
@@ -405,24 +481,49 @@ describe('a course opened without a conversation', () => {
 
     await render();
 
-    expect(mocks.routerReplace).toHaveBeenCalledWith(
-      '/workspace?session=session-recent&course=stage-1',
-    );
-    // It is emphatically NOT "the session that owns this course": the recent one
-    // is about another stage entirely, and that is fine.
+    // The most recent conversation is about another course: putting it beside
+    // this one would read as that conversation editing it.
+    expect(mocks.routerReplace).not.toHaveBeenCalled();
+    expect(container?.querySelector('[data-testid="chat-pane"]')).toBeNull();
+    expect(mocks.classroomProps?.hidden).toBe(false);
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeTypeOf('function');
+    expect(mocks.startFirstMessage).not.toHaveBeenCalled();
+    // A view state of this open: the remembered fold is not written.
+    expect(localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY)).toBeNull();
+  });
+
+  it('offers an empty conversation about the course from "Edit with AI"', async () => {
+    mocks.sessionRows = [{ id: 'session-recent', stageId: 'stage-2', updatedAt: 9 }];
+    await render();
+
+    await talkAboutCourse();
+
+    expect(mocks.routerReplace).not.toHaveBeenCalled();
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(container?.querySelector('[data-testid="chat-pane"]')).not.toBeNull();
+    expect(mocks.chatPaneProps?.hidden).toBe(false);
+    expect(draft()).toMatchObject({
+      ownerKey: 'draft:stage-1',
+      course: { stageId: 'stage-1', title: 'stage-1 name' },
+    });
+    // Once the conversation is there, the header's offer goes away.
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeUndefined();
     expect(mocks.startFirstMessage).not.toHaveBeenCalled();
   });
 
-  it('offers an empty composer when the user has no conversations at all', async () => {
+  it('does not offer it for a course the viewer cannot change', async () => {
+    mocks.courses = {
+      ...mocks.courses!,
+      classrooms: [{ ...classroom('stage-1'), isOwner: false }],
+    };
     await render();
-
-    expect(mocks.routerReplace).not.toHaveBeenCalled();
-    expect(container?.querySelector('[data-testid="chat-pane"]')).not.toBeNull();
-    expect(draft()).toMatchObject({ ownerKey: 'draft:stage-1' });
+    expect(mocks.classroomProps?.readOnly).toBe(true);
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeUndefined();
   });
 
   it('creates the session from the first message, then attaches it', async () => {
     await render();
+    await talkAboutCourse();
     const courseRef = { kind: 'course', stageId: 'stage-1', title: '光的折射' };
 
     await act(async () => {
@@ -431,6 +532,8 @@ describe('a course opened without a conversation', () => {
         materials: [],
         elementRefs: [],
         courseRefs: [courseRef],
+        // The composer's opening mention of the course, still in the message.
+        boundCourseId: 'stage-1',
       });
     });
 
@@ -448,12 +551,13 @@ describe('a course opened without a conversation', () => {
     expect(mocks.requestFullFetch).toHaveBeenCalled();
   });
 
-  it('waits for the session list rather than flashing an empty composer', async () => {
+  it('does not wait for the session list: a browsed course needs none of it', async () => {
     mocks.sessionListState = 'loading';
 
     await render();
 
     expect(draft() ?? null).toBeNull();
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeTypeOf('function');
     expect(mocks.routerReplace).not.toHaveBeenCalled();
     expect(mocks.startFirstMessage).not.toHaveBeenCalled();
   });
@@ -500,19 +604,288 @@ describe('a course opened without a conversation', () => {
     expect(mocks.startFirstMessage).not.toHaveBeenCalled();
   });
 
-  it('adopts once, then settles — a list refresh does not re-navigate', async () => {
+  it('never navigates on its own — a list refresh changes nothing', async () => {
     mocks.sessionRows = [{ id: 'session-recent', stageId: 'stage-2', updatedAt: 9 }];
     await render();
-    expect(mocks.routerReplace).toHaveBeenCalledTimes(1);
-
-    mocks.searchParams = new URLSearchParams('session=session-recent&course=stage-1');
-    mocks.store.sessionId = 'session-recent';
-    await render();
     await act(async () =>
-      mocks.ownerOptions?.onSessions([{ id: 'session-recent', stageId: 'stage-2', updatedAt: 9 }]),
+      mocks.ownerOptions?.onSessions([{ id: 'session-recent', stageId: 'stage-2', updatedAt: 10 }]),
     );
 
-    expect(mocks.routerReplace).toHaveBeenCalledTimes(1);
+    expect(mocks.routerReplace).not.toHaveBeenCalled();
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Browsing to a course versus opening it from a conversation. With conversation
+ * A open, opening an unrelated course B from My courses used to keep A beside B,
+ * which read as A editing B.
+ */
+describe('a course opened by browsing', () => {
+  const twoCourses = () => {
+    mocks.courses = { ...mocks.courses!, classrooms: [classroom('stage-1'), classroom('stage-2')] };
+  };
+  /** Conversation A open, beside course stage-1 it was started from. */
+  const withConversationA = async () => {
+    twoCourses();
+    mocks.searchParams = new URLSearchParams('session=session-a&course=stage-1');
+    mocks.store.sessionId = 'session-a';
+    mocks.sessionRows = [{ id: 'session-a', stageId: 'stage-1', updatedAt: 9 }];
+    await render();
+    await act(async () => {});
+  };
+  /** The URL lands and the store detaches, as the navigation would do. */
+  const land = async (query: string) => {
+    mocks.searchParams = new URLSearchParams(query);
+    mocks.store.sessionId = new URLSearchParams(query).get('session');
+    await render();
+    await act(async () => {});
+  };
+
+  it('from My courses: leaves the conversation in the rail and shows the course alone', async () => {
+    await withConversationA();
+    const page = await openMyCourses();
+    await act(async () => (page.onOpenCourse as (id: string) => void)('stage-2'));
+
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?course=stage-2');
+    await land('course=stage-2');
+    expect(container?.querySelector('[data-testid="chat-pane"]')).toBeNull();
+    expect(mocks.classroomProps?.hidden).toBe(false);
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeTypeOf('function');
+    // The folded column's way back is there, and A is still a row of the rail.
+    expect(mocks.paneTabs.has('workspace-chat-reopen')).toBe(true);
+    expect((mocks.railProps?.sessions as { id: string }[]).map((row) => row.id)).toEqual([
+      'session-a',
+    ]);
+    // A view state: the remembered fold is not touched.
+    expect(localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY)).toBeNull();
+  });
+
+  it('from the global search: the same', async () => {
+    await withConversationA();
+    await act(async () => (mocks.railProps!.onOpenSearch as () => void)());
+    await act(async () => (mocks.searchProps!.onOpenCourse as (id: string) => void)('stage-2'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?course=stage-2');
+  });
+
+  it('from a conversation: the conversation stays beside the course', async () => {
+    await withConversationA();
+    const navigation = mocks.chatPaneProps?.navigation as { openCourse: (id: string) => void };
+    await act(async () => navigation.openCourse('stage-2'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith(
+      '/workspace?session=session-a&course=stage-2',
+    );
+    await land('session=session-a&course=stage-2');
+    expect(container?.querySelector('[data-testid="chat-pane"]')).not.toBeNull();
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeUndefined();
+  });
+
+  it('"Edit with AI" opens an empty conversation about the course, nothing created', async () => {
+    await withConversationA();
+    const page = await openMyCourses();
+    await act(async () => (page.onOpenCourse as (id: string) => void)('stage-2'));
+    await land('course=stage-2');
+    mocks.routerPush.mockClear();
+
+    await talkAboutCourse();
+
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+    expect(draft()).toMatchObject({ ownerKey: 'draft:stage-2' });
+    expect(mocks.chatPaneProps?.hidden).toBe(false);
+    expect(mocks.startFirstMessage).not.toHaveBeenCalled();
+  });
+
+  it('the folded column’s own way back does the same', async () => {
+    await render();
+    await act(async () => (mocks.paneTabs.get('workspace-chat-reopen')!.onClick as () => void)());
+
+    expect(draft()).toMatchObject({ ownerKey: 'draft:stage-1' });
+    expect(mocks.chatPaneProps?.hidden).toBe(false);
+  });
+
+  it('keeps a remembered chat fold as it was until the user unfolds', async () => {
+    localStorage.setItem(CHAT_COLLAPSED_STORAGE_KEY, '1');
+    await render();
+    await act(async () => {});
+    expect(localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY)).toBe('1');
+
+    await talkAboutCourse();
+    // Asking for the conversation is the user unfolding the column.
+    expect(mocks.chatPaneProps?.hidden).toBe(false);
+  });
+
+  it('Back and Forward restore what the history entry had beside the course', async () => {
+    vi.mocked(window.history.pushState).mockImplementation((state, unused, next) => {
+      History.prototype.pushState.call(window.history, state, unused, next);
+      mocks.routerPush(String(next));
+    });
+    History.prototype.replaceState.call(window.history, null, '', '/workspace?course=stage-1');
+    const travel = async (direction: 'back' | 'forward') => {
+      await act(async () => {
+        const popped = new Promise<void>((resolve) =>
+          window.addEventListener('popstate', () => resolve(), { once: true }),
+        );
+        window.history[direction]();
+        await popped;
+      });
+      await act(async () => {});
+    };
+    twoCourses();
+    await render();
+    const page = await openMyCourses();
+    await act(async () => (page.onOpenCourse as (id: string) => void)('stage-2'));
+    await talkAboutCourse();
+    expect(draft()).toMatchObject({ ownerKey: 'draft:stage-2' });
+
+    await travel('back');
+    expect(mocks.classroomProps?.browser).toMatchObject({ activeCourseId: 'stage-1' });
+    expect(container?.querySelector('[data-testid="chat-pane"]')).toBeNull();
+
+    // The empty conversation was asked for on top of that entry, not part of it.
+    await travel('forward');
+    expect(mocks.classroomProps?.browser).toMatchObject({ activeCourseId: 'stage-2' });
+    expect(container?.querySelector('[data-testid="chat-pane"]')).toBeNull();
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeTypeOf('function');
+  });
+
+  it('switching course tabs leaves the column as it is', async () => {
+    twoCourses();
+    localStorage.setItem(
+      COURSE_TABS_STORAGE_KEY,
+      JSON.stringify({ courseIds: ['stage-1', 'stage-2'], activeCourseId: 'stage-1' }),
+    );
+    await render();
+    const browser = () =>
+      mocks.classroomProps?.browser as { onActivateCourse: (id: string) => void };
+    // Browsed: another tab is browsed too.
+    await act(async () => browser().onActivateCourse('stage-2'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?course=stage-2');
+    await land('course=stage-2');
+    expect(container?.querySelector('[data-testid="chat-pane"]')).toBeNull();
+  });
+
+  it('switching course tabs keeps a conversation beside them', async () => {
+    twoCourses();
+    localStorage.setItem(
+      COURSE_TABS_STORAGE_KEY,
+      JSON.stringify({ courseIds: ['stage-1', 'stage-2'], activeCourseId: 'stage-2' }),
+    );
+    mocks.searchParams = new URLSearchParams('session=session-a&course=stage-2');
+    mocks.store.sessionId = 'session-a';
+    await render();
+    const browser = mocks.classroomProps?.browser as { onActivateCourse: (id: string) => void };
+    await act(async () => browser.onActivateCourse('stage-1'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith(
+      '/workspace?session=session-a&course=stage-1',
+    );
+  });
+});
+
+/**
+ * A course NOT in the viewer's list — a `/workspace?course=` link somebody else
+ * copied from their address bar — used to count as editable. Its access is
+ * asked of the stage-meta sidecar now, as the standalone classroom page asks,
+ * and it is read-only until the answer says otherwise.
+ */
+describe('a course that is not in the viewer’s list', () => {
+  const answerStageMeta = (answer: () => Promise<Response>) => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input).startsWith('/api/stage-meta/')
+          ? answer()
+          : ({ ok: true, json: async () => [] } as unknown as Response),
+      ),
+    );
+  };
+  const meta = (isOwner: boolean) =>
+    Response.json({ isOwner, isPublic: false, publishedAt: null, generationComplete: true });
+
+  beforeEach(() => {
+    mocks.searchParams = new URLSearchParams('course=stage-other');
+  });
+
+  it('is read-only, and says nothing, until its access is known', async () => {
+    answerStageMeta(() => new Promise<Response>(() => {}));
+    await render();
+
+    expect(fetch).toHaveBeenCalledWith('/api/stage-meta/stage-other', expect.anything());
+    expect(mocks.classroomProps).toMatchObject({ readOnly: true, readOnlyKnown: false });
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeUndefined();
+  });
+
+  it('sends someone else’s course to its classroom page, replacing the entry', async () => {
+    answerStageMeta(async () => meta(false));
+    await render();
+    await act(async () => {});
+
+    // The workbench is for the course's owner.
+    expect(mocks.routerReplace).toHaveBeenCalledWith('/classroom/stage-other');
+    expect(mocks.routerPush).not.toHaveBeenCalled();
+  });
+
+  it('keeps a course that does not exist where it is, for the classroom’s not-found', async () => {
+    answerStageMeta(async () => new Response('Not found', { status: 404 }));
+    await render();
+    await act(async () => {});
+
+    expect(mocks.routerReplace).not.toHaveBeenCalledWith('/classroom/stage-other');
+    expect(mocks.classroomProps).toMatchObject({ readOnly: true, readOnlyKnown: true });
+  });
+
+  it('keeps a course saved from Discover (in the list, not the viewer’s) in the workbench', async () => {
+    mocks.courses = {
+      ...mocks.courses!,
+      classrooms: [{ ...classroom('stage-saved'), isOwner: false }],
+    };
+    mocks.searchParams = new URLSearchParams('course=stage-saved');
+    await render();
+    await act(async () => {});
+
+    expect(mocks.routerReplace).not.toHaveBeenCalled();
+    expect(mocks.classroomProps).toMatchObject({ readOnly: true });
+  });
+
+  it('is read-only while someone else’s course is on its way out', async () => {
+    answerStageMeta(async () => meta(false));
+    await render();
+    await act(async () => {});
+
+    expect(mocks.classroomProps).toMatchObject({ readOnly: true, readOnlyKnown: true });
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeUndefined();
+    // The folded column's strip opens an ordinary new conversation: no course named.
+    await act(async () => (mocks.paneTabs.get('workspace-chat-reopen')!.onClick as () => void)());
+    expect(draft()).not.toHaveProperty('course');
+  });
+
+  it('is editable when the server says it is the viewer’s', async () => {
+    answerStageMeta(async () => meta(true));
+    await render();
+    await act(async () => {});
+
+    expect(mocks.classroomProps).toMatchObject({ readOnly: false });
+    expect(mocks.classroomProps?.onTalkAboutCourse).toBeTypeOf('function');
+  });
+
+  it('a course in the list is the list’s to answer: nothing is asked', async () => {
+    answerStageMeta(async () => meta(false));
+    mocks.searchParams = new URLSearchParams('course=stage-1');
+    await render();
+    await act(async () => {});
+
+    expect(fetch).not.toHaveBeenCalledWith('/api/stage-meta/stage-1', expect.anything());
+    expect(mocks.classroomProps).toMatchObject({ readOnly: false });
+  });
+
+  it('its tab is named by its document once it has loaded', async () => {
+    answerStageMeta(async () => meta(false));
+    mocks.loadedStage = { id: 'stage-other', name: 'Photosynthesis' };
+    await render();
+    await act(async () => {});
+
+    expect(
+      (mocks.classroomProps?.browser as { tabs: { id: string; name: string }[] }).tabs,
+    ).toContainEqual({ id: 'stage-other', name: 'Photosynthesis' });
   });
 });
 
@@ -763,6 +1136,58 @@ describe('workspace home intent', () => {
   });
 });
 
+describe('the navigation rail default', () => {
+  it('starts folded on the home surface, from the first render, without storing it', async () => {
+    mocks.searchParams = new URLSearchParams('');
+
+    await render();
+
+    expect(mocks.railCollapsedSeen.length).toBeGreaterThan(0);
+    expect(mocks.railCollapsedSeen.every((collapsed) => collapsed === true)).toBe(true);
+    expect(localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY)).toBeNull();
+  });
+
+  it.each([
+    ['0', false],
+    ['1', true],
+  ])('keeps a stored preference %s on the home surface', async (stored, collapsed) => {
+    mocks.searchParams = new URLSearchParams('');
+    localStorage.setItem(NAV_COLLAPSED_STORAGE_KEY, stored);
+
+    await render();
+
+    expect(mocks.railProps?.collapsed).toBe(collapsed);
+  });
+
+  it.each(['course=stage-1', 'session=session-1', 'view=library'])(
+    'keeps the expanded default for the deep link ?%s',
+    async (query) => {
+      mocks.searchParams = new URLSearchParams(query);
+      mocks.store.sessionId = query.startsWith('session=') ? 'session-1' : null;
+      mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+
+      await render();
+
+      expect(mocks.railProps?.collapsed).toBe(false);
+      expect(localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY)).toBeNull();
+    },
+  );
+
+  it('stays as entered when a conversation opens, and remembers the first toggle', async () => {
+    mocks.searchParams = new URLSearchParams('');
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    await render();
+
+    await act(async () => (mocks.railProps?.onOpenSession as (id: string) => void)('session-1'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?session=session-1');
+    expect(mocks.railProps?.collapsed).toBe(true);
+
+    await act(async () => (mocks.railProps?.onToggleCollapsed as () => void)());
+    expect(mocks.railProps?.collapsed).toBe(false);
+    expect(localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY)).toBe('0');
+  });
+});
+
 /**
  * The bug this pair of assertions exists for: after "new chat" the middle column
  * showed a spinner and "connecting" forever. The pane must be handed a DRAFT (which is
@@ -837,7 +1262,8 @@ describe('a course a generation run is still producing', () => {
     await render();
     await act(async () => {});
 
-    const courseRuns = mocks.railProps?.courseRuns as ReadonlyMap<string, unknown>;
+    const page = await openMyCourses();
+    const courseRuns = page.courseRuns as ReadonlyMap<string, unknown>;
     expect([...courseRuns.keys()]).toEqual(['stage-2']);
     expect(courseRuns.get('stage-2')).toBe(run);
     const navigation = mocks.chatPaneProps?.navigation as {
@@ -846,11 +1272,9 @@ describe('a course a generation run is still producing', () => {
     };
     expect(navigation.courseOptions.map((option) => option.id)).toEqual(['stage-1']);
     expect([...navigation.generatingCourseIds]).toEqual(['stage-2']);
-    // The run with no course yet is the rail's placeholder row — and, having
+    // The run with no course yet is My courses' placeholder card — and, having
     // no course, never a mention candidate.
-    expect((mocks.railProps?.pendingRuns as Array<{ id: string }>).map((r) => r.id)).toEqual([
-      'run-2',
-    ]);
+    expect((page.pendingRuns as Array<{ id: string }>).map((r) => r.id)).toEqual(['run-2']);
     expect(navigation.courseOptions.some((option) => option.id === 'run-2')).toBe(false);
   });
 });
@@ -873,8 +1297,7 @@ describe('opening a course from a card in the conversation', () => {
     await render();
     await act(async () => {});
 
-    const onOpenCourse = mocks.railProps?.onOpenCourse as (id: string) => void;
-    await act(async () => onOpenCourse('stage-2'));
+    await act(async () => navigation().openCourse('stage-2'));
 
     expect(localStorage.getItem(CLASSROOM_COLLAPSED_STORAGE_KEY)).toBe('0');
     expect(localStorage.getItem(CHAT_COLLAPSED_STORAGE_KEY)).toBe('1');
@@ -924,6 +1347,8 @@ describe('opening a course from a card in the conversation', () => {
   });
 
   it('is a press with no state to read: the pane’s open set is not published', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
+    mocks.store.sessionId = 'session-1';
     await render();
     await act(async () => {});
     // `openCourseIds` existed only so a card could say switch-to-tab / showing about
@@ -1213,5 +1638,2203 @@ describe('owner title projection in the workspace shell', () => {
 
     expect(mocks.setSessionTitle).not.toHaveBeenCalled();
     expect(mocks.store.sessionTitle).toBe('Detail title');
+  });
+});
+
+describe('the global search', () => {
+  const searchShown = () => container?.querySelector('[data-testid="workspace-search"]') !== null;
+  const chord = (init: KeyboardEventInit) =>
+    act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', bubbles: true, ...init }));
+    });
+
+  it('opens and closes with the platform chord, and from the rail', async () => {
+    await render();
+    expect(searchShown()).toBe(false);
+    // jsdom is not a Mac: Ctrl+K.
+    await chord({ metaKey: true });
+    expect(searchShown()).toBe(false);
+    await chord({ ctrlKey: true });
+    expect(searchShown()).toBe(true);
+    await chord({ ctrlKey: true });
+    expect(searchShown()).toBe(false);
+
+    await act(async () => (mocks.railProps?.onOpenSearch as () => void)());
+    expect(searchShown()).toBe(true);
+    await act(async () => (mocks.searchProps?.onOpenChange as (open: boolean) => void)(false));
+    expect(searchShown()).toBe(false);
+  });
+
+  it('starts a new chat with the platform chord, as the rail’s button does', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    await render();
+    mocks.routerPush.mockClear();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'j', code: 'KeyJ', ctrlKey: true }));
+    });
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace');
+  });
+
+  it('leaves the chord to an editor that already handled it', async () => {
+    await render();
+    const event = new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, cancelable: true });
+    event.preventDefault();
+    await act(async () => {
+      window.dispatchEvent(event);
+    });
+    expect(searchShown()).toBe(false);
+  });
+
+  it('opens a material on the knowledge base, located', async () => {
+    await render();
+    await chord({ ctrlKey: true });
+    await act(async () =>
+      (mocks.searchProps?.onOpenMaterial as (material: unknown) => void)({
+        materialId: 'm1',
+        name: 'worksheet.pdf',
+      }),
+    );
+    expect(String(mocks.routerPush.mock.calls.at(-1)?.[0])).toContain('view=library');
+    expect(mocks.libraryProps?.locate).toMatchObject({ materialId: 'm1', name: 'worksheet.pdf' });
+  });
+
+  it('opens chats and courses through the shell’s own handlers', async () => {
+    await render();
+    await chord({ ctrlKey: true });
+    expect(mocks.searchProps?.onOpenSession).toBe(mocks.railProps?.onOpenSession);
+    expect(mocks.searchProps?.onOpenView).toBe(mocks.railProps?.onOpenView);
+  });
+});
+
+describe('the knowledge base page', () => {
+  const libraryShown = () =>
+    container?.querySelector('[data-testid="pro-workspace-library"]') !== null;
+  const layout = () =>
+    container?.querySelector('[data-testid="pro-workspace"]')?.getAttribute('data-ws-layout');
+  const openLibrary = async () => {
+    const onOpenView = mocks.railProps?.onOpenView as (view: string) => void;
+    expect(onOpenView).toBeTypeOf('function');
+    await act(async () => onOpenView('library'));
+  };
+
+  it('opens from the rail into the main area, leaving the conversation mounted', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    await render();
+    expect(mocks.railProps?.activeView).toBe(null);
+    mocks.detach.mockClear();
+
+    await openLibrary();
+
+    expect(mocks.routerPush).toHaveBeenCalledWith('/workspace?session=session-1&view=library');
+    expect(libraryShown()).toBe(true);
+    expect(layout()).toBe('view:library');
+    expect(mocks.railProps?.activeView).toBe('library');
+    // Hidden, not unmounted: the run's stream and the draft survive the page.
+    expect(container?.querySelector('[data-testid="chat-pane"]')).not.toBeNull();
+    expect(mocks.chatPaneProps?.hidden).toBe(true);
+    expect(mocks.detach).not.toHaveBeenCalled();
+  });
+
+  it('keeps the page and adds no history entry when the agent creates a course under it', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    await render();
+    await openLibrary();
+    expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+
+    mocks.store.stageLinkStageIds = ['stage-1'];
+    await render();
+    await act(async () => {});
+
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith(
+      '/workspace?session=session-1&course=stage-1&view=library',
+    );
+    // One Back from the page still leaves it: the course arrived by replace.
+    expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    expect(libraryShown()).toBe(true);
+    expect(container?.querySelector('[data-testid="classroom-pane"]')).not.toBeNull();
+    expect(mocks.classroomProps?.hidden).toBe(true);
+  });
+
+  it('stays open when a first message sent before it opened creates its session', async () => {
+    const started = deferred<{
+      sessionId: string;
+      elementRefsAccepted: boolean;
+      courseRefsAccepted: boolean;
+    }>();
+    mocks.startFirstMessage.mockReturnValue(started.promise);
+    await render();
+    await talkAboutCourse();
+    let sent: Promise<unknown> | undefined;
+    await act(async () => {
+      sent = draft()!.start({ text: '讲一讲', materials: [], elementRefs: [], courseRefs: [] });
+    });
+
+    await openLibrary();
+    await act(async () => {
+      started.resolve({
+        sessionId: 'session-new',
+        elementRefsAccepted: true,
+        courseRefsAccepted: true,
+      });
+      await sent;
+    });
+
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith(
+      '/workspace?session=session-new&course=stage-1&view=library',
+    );
+    expect(libraryShown()).toBe(true);
+  });
+
+  it('stays open when a conversation the home composer was creating arrives', async () => {
+    mocks.searchParams = new URLSearchParams();
+    await render();
+    // The home composer's completion, held across the page opening.
+    const onOpenSession = mocks.homeProps?.onOpenSession as (id: string) => void;
+    expect(onOpenSession).toBeTypeOf('function');
+
+    await openLibrary();
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?view=library');
+    await act(async () => onOpenSession('session-made'));
+
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith(
+      '/workspace?session=session-made&view=library',
+    );
+    expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    expect(mocks.requestFullFetch).toHaveBeenCalled();
+    expect(libraryShown()).toBe(true);
+  });
+
+  it('stays open when the rail deletes the conversation under it', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    (mocks.courses as { deleteCourse: ReturnType<typeof vi.fn> }).deleteCourse = vi.fn(
+      async () => true,
+    );
+    await render();
+    await openLibrary();
+
+    await act(async () => (mocks.railProps?.onSessionDeleted as (id: string) => void)('session-1'));
+    expect(mocks.routerReplace).toHaveBeenLastCalledWith('/workspace?course=stage-1&view=library');
+    expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    expect(libraryShown()).toBe(true);
+  });
+
+  it('closes when the teacher opens a conversation, goes home or starts a new one', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [
+      { id: 'session-1', stageId: 'stage-1', updatedAt: 9 },
+      { id: 'session-2', stageId: 'stage-1', updatedAt: 8 },
+    ];
+    await render();
+
+    await openLibrary();
+    await act(async () => (mocks.railProps?.onOpenSession as (id: string) => void)('session-2'));
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?session=session-2');
+    expect(libraryShown()).toBe(false);
+
+    await openLibrary();
+    await act(async () => (mocks.railProps?.onGoHome as () => void)());
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace');
+    expect(libraryShown()).toBe(false);
+
+    await openLibrary();
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?view=library');
+    await act(async () => (mocks.railProps?.onNewSession as () => void)());
+    expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace');
+    expect(libraryShown()).toBe(false);
+  });
+
+  describe('through real browser history', () => {
+    /** The real history stack under the call counters the other tests read. */
+    const useRealHistory = (url: string) => {
+      vi.mocked(window.history.pushState).mockImplementation((state, unused, next) => {
+        History.prototype.pushState.call(window.history, state, unused, next);
+        mocks.routerPush(String(next));
+      });
+      vi.mocked(window.history.replaceState).mockImplementation((state, unused, next) => {
+        History.prototype.replaceState.call(window.history, state, unused, next);
+        mocks.routerReplace(String(next));
+      });
+      History.prototype.replaceState.call(window.history, null, '', url);
+    };
+    const travel = async (direction: 'back' | 'forward') => {
+      await act(async () => {
+        const popped = new Promise<void>((resolve) =>
+          window.addEventListener('popstate', () => resolve(), { once: true }),
+        );
+        window.history[direction]();
+        await popped;
+      });
+      await act(async () => {});
+    };
+
+    beforeEach(() => {
+      useRealHistory('/workspace?session=session-1');
+      mocks.searchParams = new URLSearchParams('session=session-1');
+      mocks.store.sessionId = 'session-1';
+      mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    });
+
+    it('goes Back and Forward across the page after the agent created a course under it', async () => {
+      await render();
+      await openLibrary();
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1&view=library');
+
+      await travel('back');
+      expect(window.location.search).toBe('?session=session-1');
+      expect(libraryShown()).toBe(false);
+      // The course the agent already opened is not opened again over Back.
+      expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+
+      await travel('forward');
+      expect(window.location.search).toBe('?session=session-1&course=stage-1&view=library');
+      expect(libraryShown()).toBe(true);
+      expect(mocks.classroomProps?.browser).toMatchObject({ activeCourseId: 'stage-1' });
+      expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    });
+
+    it('R6 Back closes the background course view but keeps the saved course reopenable by URL', async () => {
+      await render();
+      await openLibrary();
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1&view=library');
+      await travel('back');
+      expect(window.location.search).toBe('?session=session-1');
+      expect(libraryShown()).toBe(false);
+      expect(
+        (
+          mocks.chatPaneProps?.navigation as {
+            activeCourseId: string | null;
+            courseOptions: ReadonlyArray<{ id: string }>;
+          }
+        ).activeCourseId,
+      ).toBeNull();
+      expect(
+        (
+          mocks.chatPaneProps?.navigation as { courseOptions: ReadonlyArray<{ id: string }> }
+        ).courseOptions.map((c) => c.id),
+      ).toContain('stage-1');
+      expect(
+        (mocks.courses as { deleteCourse: ReturnType<typeof vi.fn> }).deleteCourse,
+      ).not.toHaveBeenCalled();
+      // A fresh navigation to the course URL can still open the saved course.
+      await act(async () => root?.unmount());
+      root = null;
+      mocks.searchParams = new URLSearchParams('course=stage-1');
+      History.prototype.replaceState.call(window.history, null, '', '/workspace?course=stage-1');
+      await render();
+      expect(mocks.classroomProps?.browser).toMatchObject({ activeCourseId: 'stage-1' });
+    });
+
+    it('leaves the page by its way back to what it covered, and Back returns to the page', async () => {
+      await render();
+      await openLibrary();
+      expect(window.location.search).toBe('?session=session-1&view=library');
+      const onLeave = mocks.libraryProps?.onLeave as () => void;
+      expect(onLeave).toBeTypeOf('function');
+
+      await act(async () => onLeave());
+      // A navigation that drops the view (pushed), not a history step.
+      expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?session=session-1');
+      expect(window.location.search).toBe('?session=session-1');
+      expect(libraryShown()).toBe(false);
+      expect(mocks.chatPaneProps?.hidden).toBe(false);
+
+      await travel('back');
+      expect(window.location.search).toBe('?session=session-1&view=library');
+      expect(libraryShown()).toBe(true);
+    });
+
+    it('leaves a page opened from a pasted link, with no history to go back to', async () => {
+      useRealHistory('/workspace?view=library');
+      mocks.searchParams = new URLSearchParams('view=library');
+      mocks.store.sessionId = null;
+      mocks.sessionRows = [];
+      await render();
+      expect(libraryShown()).toBe(true);
+
+      await act(async () => (mocks.libraryProps?.onLeave as () => void)());
+      expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace');
+      expect(window.location.search).toBe('');
+      expect(libraryShown()).toBe(false);
+      expect(layout()).toBe('home');
+      // Pushed: Back still reaches the page the link opened.
+      await travel('back');
+      expect(window.location.search).toBe('?view=library');
+      expect(libraryShown()).toBe(true);
+    });
+
+    it('opens the course of a finished course-producing request reopened without tab memory, with no preview', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let id = 0;
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a course' });
+      event('tool_execution_start', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        args: { title: 'Course' },
+      });
+      event('stage_link', { stageId: 'stage-1' });
+      event('tool_execution_end', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        result: { content: [], details: { stageId: 'stage-1', title: 'Course' } },
+      });
+      event('tool_execution_start', {
+        toolCallId: 'scene',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 1, type: 'slide' },
+      });
+      event('checkpoint', { stageId: 'stage-1', order: 0, sceneId: 'first' });
+      event('tool_execution_end', {
+        toolCallId: 'scene',
+        toolName: 'generate_scene',
+        result: { content: [], details: { stageId: 'stage-1', order: 1, sceneId: 'first' } },
+      });
+      // Reopened later: replayed, finished, no course tab remembered.
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        status: 'succeeded',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      await render();
+      // Its course is what the conversation is working on: the pane shows it,
+      // straight away, with no preview standing in for a course that exists.
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+    });
+
+    it('shows no placeholder for a follow-up question answered after the course exists', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let id = 0;
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a course' });
+      event('tool_execution_start', { toolCallId: 'create', toolName: 'create_stage', args: {} });
+      event('stage_link', { stageId: 'stage-1' });
+      event('tool_execution_end', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        result: { content: [], details: { stageId: 'stage-1', title: 'Course' } },
+      });
+      event('tool_execution_start', {
+        toolCallId: 'page',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 1, type: 'slide' },
+      });
+      event('checkpoint', { tool: 'generate_scene', stageId: 'stage-1', order: 1, sceneId: 's1' });
+      event('tool_execution_end', { toolCallId: 'page', toolName: 'generate_scene', result: {} });
+      event('tool_execution_start', { toolCallId: 'ask', toolName: 'ask_user', args: {} });
+      event('user_question', {
+        question: 'Want me to add a quiz?',
+        options: [{ id: 'y', label: 'Yes' }],
+      });
+      event('tool_execution_end', { toolCallId: 'ask', toolName: 'ask_user', result: {} });
+      event('agent_end');
+      event('session_end', { status: 'succeeded' });
+      event('user_message', { text: 'Yes', delivery: 'queued' });
+      event('session_resumed', { reason: 'follow_up' });
+      event('tool_execution_start', {
+        toolCallId: 'quiz',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 2, type: 'quiz' },
+      });
+      // Opened fresh (no course tab memory) while the follow-up runs.
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        status: 'running',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      await render();
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      // The pane is the course the follow-up works on.
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      // Shown in place of the URL it was opened at, not as a step of its own.
+      expect(mocks.routerPush).not.toHaveBeenCalled();
+    });
+
+    it('gives a new course its placeholder when the request only read an existing one', async () => {
+      // "Make a grade-5 version of my refraction course": stage-1 (with scenes)
+      // is read, and a new course is being created.
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a grade-5 version of my refraction course' },
+        {
+          key: 'r',
+          kind: 'tool',
+          text: '',
+          toolName: 'read_stage',
+          toolState: 'done',
+          toolArgs: { stageId: 'stage-1' },
+        },
+        { key: 'c', kind: 'tool', text: '', toolName: 'create_stage', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+    });
+
+    describe('a run that ends right after its first page', () => {
+      const build = async () => {
+        const { createInitialSessionState, foldEvent } = await vi.importActual<
+          typeof import('@/lib/workbench/session-store')
+        >('@/lib/workbench/session-store');
+        let id = 0;
+        let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+          createInitialSessionState();
+        const event = (type: string, data: unknown = {}) => {
+          folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+        };
+        event('session_start', { prompt: 'Make a course' });
+        event('tool_execution_start', {
+          toolCallId: 'create',
+          toolName: 'create_stage',
+          args: { title: 'Course' },
+        });
+        event('stage_link', { stageId: 'stage-1' });
+        event('tool_execution_end', {
+          toolCallId: 'create',
+          toolName: 'create_stage',
+          result: { content: [], details: { stageId: 'stage-1', title: 'Course' } },
+        });
+        event('tool_execution_start', {
+          toolCallId: 'scene',
+          toolName: 'generate_scene',
+          args: { stageId: 'stage-1', order: 1, type: 'slide' },
+        });
+        const attach = (status: string) =>
+          Object.assign(mocks.store, folded, {
+            sessionId: 'session-1',
+            status,
+            replaying: false,
+            replayedStageLinkCount: 1,
+          });
+        // Attached mid-run: the course's link is already in the replay baseline.
+        attach('running');
+        await render();
+        await render();
+        expect(
+          container?.querySelector('[data-testid="workspace-request-activity"]'),
+        ).not.toBeNull();
+        // The page lands and the run ends in the same batch.
+        const finish = async () => {
+          event('checkpoint', {
+            tool: 'generate_scene',
+            stageId: 'stage-1',
+            order: 1,
+            sceneId: 'first',
+          });
+          event('tool_execution_end', {
+            toolCallId: 'scene',
+            toolName: 'generate_scene',
+            result: {},
+          });
+          event('agent_end');
+          event('session_end', { status: 'succeeded' });
+          attach('succeeded');
+          await render();
+          await render();
+        };
+        return { finish };
+      };
+
+      it('still turns the preview into the course', async () => {
+        const { finish } = await build();
+        await finish();
+        expect(window.location.search).toBe('?session=session-1&course=stage-1');
+        expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      });
+
+      it('does not open a course whose tab the user closed meanwhile', async () => {
+        const { finish } = await build();
+        localStorage.setItem(
+          COURSE_TABS_STORAGE_KEY,
+          JSON.stringify({ courseIds: [], closedCourseIds: ['stage-1'], activeCourseId: null }),
+        );
+        await finish();
+        expect(window.location.search).toBe('?session=session-1');
+        expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      });
+
+      it('does not open the course when the preview was closed for this request', async () => {
+        const { finish } = await build();
+        const close = container?.querySelector<HTMLButtonElement>(
+          '[data-testid="workspace-course-tab-close-request-preview"]',
+        );
+        await act(async () => close?.click());
+        await render();
+        expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+        await finish();
+        expect(window.location.search).toBe('?session=session-1');
+      });
+    });
+
+    it('opens every course of a replayed series at its first scene, not only the first', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let id = 0;
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a two-unit series' });
+      for (const stageId of ['stage-1', 'stage-2']) {
+        event('tool_execution_start', {
+          toolCallId: `create-${stageId}`,
+          toolName: 'create_stage',
+          args: { title: stageId },
+        });
+        event('stage_link', { stageId });
+        event('tool_execution_end', {
+          toolCallId: `create-${stageId}`,
+          toolName: 'create_stage',
+          result: { content: [], details: { stageId, title: stageId } },
+        });
+      }
+      mocks.courses = {
+        ...mocks.courses!,
+        classrooms: [
+          { ...classroom('stage-1'), sceneCount: 0 },
+          { ...classroom('stage-2'), sceneCount: 0 },
+        ],
+      };
+      // Reloaded mid-run: both links are in the replay baseline.
+      const attach = () =>
+        Object.assign(mocks.store, folded, {
+          existingCourse: false,
+          sessionId: 'session-1',
+          status: 'running',
+          replaying: false,
+          replayedStageLinkCount: 2,
+        });
+      attach();
+      const ready = new Set<string>();
+      vi.mocked(fetch).mockImplementation(async (input) => {
+        const url = String(input);
+        const stageId = url.includes('stage-2') ? 'stage-2' : 'stage-1';
+        return {
+          ok: true,
+          status: 200,
+          json: async () =>
+            url.includes('/manifest')
+              ? {
+                  rev: 1,
+                  scenes: ready.has(stageId) ? [{ id: `first-${stageId}`, order: 0, rev: 1 }] : [],
+                }
+              : { scenes: [{ id: `first-${stageId}`, stageId }] },
+        } as Response;
+      });
+      await render();
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+
+      ready.add('stage-1');
+      event('tool_execution_start', {
+        toolCallId: 'scene-stage-1',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 1, type: 'slide' },
+      });
+      event('checkpoint', { stageId: 'stage-1', order: 0, sceneId: 'first-stage-1' });
+      attach();
+      await render();
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+
+      ready.add('stage-2');
+      event('tool_execution_start', {
+        toolCallId: 'scene-stage-2',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-2', order: 1, type: 'slide' },
+      });
+      event('checkpoint', { stageId: 'stage-2', order: 0, sceneId: 'first-stage-2' });
+      attach();
+      await render();
+      await render();
+      // The second course opens as a tab beside the first, which stays active.
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      const tabs = mocks.classroomProps?.browser as {
+        tabs: readonly { id: string }[];
+        activeCourseId: string;
+      };
+      expect(tabs.tabs.map((tab) => tab.id)).toEqual(['stage-1', 'stage-2']);
+      expect(tabs.activeCourseId).toBe('stage-1');
+    });
+
+    describe('a series whose pages land as durable receipts', () => {
+      const build = async () => {
+        const { createInitialSessionState, foldEvent } = await vi.importActual<
+          typeof import('@/lib/workbench/session-store')
+        >('@/lib/workbench/session-store');
+        let id = 0;
+        let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+          createInitialSessionState();
+        const event = (type: string, data: unknown = {}) => {
+          folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+        };
+        event('session_start', { prompt: 'Make a two-unit series' });
+        for (const stageId of ['stage-1', 'stage-2']) {
+          event('tool_execution_start', {
+            toolCallId: `create-${stageId}`,
+            toolName: 'create_stage',
+            args: { title: stageId },
+          });
+          event('stage_link', { stageId });
+          event('tool_execution_end', {
+            toolCallId: `create-${stageId}`,
+            toolName: 'create_stage',
+            result: { content: [], details: { stageId, title: stageId } },
+          });
+        }
+        const page = (stageId: string) => {
+          event('tool_execution_start', {
+            toolCallId: `scene-${stageId}`,
+            toolName: 'generate_scene',
+            args: { stageId, order: 1, type: 'slide' },
+          });
+          event('checkpoint', { stageId, order: 0, sceneId: `first-${stageId}` });
+          event('tool_execution_end', {
+            toolCallId: `scene-${stageId}`,
+            toolName: 'generate_scene',
+            result: {},
+          });
+        };
+        mocks.courses = {
+          ...mocks.courses!,
+          classrooms: [
+            { ...classroom('stage-1'), sceneCount: 0 },
+            { ...classroom('stage-2'), sceneCount: 0 },
+          ],
+        };
+        const attach = () =>
+          Object.assign(mocks.store, folded, {
+            sessionId: 'session-1',
+            status: 'running',
+            replaying: false,
+            replayedStageLinkCount: 2,
+          });
+        const tabs = () =>
+          mocks.classroomProps?.browser as {
+            tabs: readonly { id: string }[];
+            activeCourseId: string;
+          };
+        return { page, attach, tabs };
+      };
+
+      it('opens a series already paged in the log in one transition, its first page on screen', async () => {
+        const { page, attach, tabs } = await build();
+        page('stage-1');
+        page('stage-2');
+        attach();
+        await render();
+        await render();
+        expect(tabs().tabs.map((tab) => tab.id)).toEqual(['stage-1', 'stage-2']);
+        expect(tabs().activeCourseId).toBe('stage-1');
+        expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+        // No readiness reads: the page receipt is the fact.
+        expect(
+          vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/manifest')),
+        ).toHaveLength(0);
+      });
+
+      it('turns the preview into the course whose page landed first; a later one joins behind it', async () => {
+        const { page, attach, tabs } = await build();
+        attach();
+        await render();
+        await render();
+        expect(
+          container?.querySelector('[data-testid="workspace-request-activity"]'),
+        ).not.toBeNull();
+        page('stage-2');
+        attach();
+        await render();
+        await render();
+        expect(window.location.search).toBe('?session=session-1&course=stage-2');
+        expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+        page('stage-1');
+        attach();
+        await render();
+        await render();
+        expect(tabs().tabs.map((tab) => tab.id)).toEqual(['stage-2', 'stage-1']);
+        expect(tabs().activeCourseId).toBe('stage-2');
+        expect(window.location.search).toBe('?session=session-1&course=stage-2');
+      });
+    });
+
+    it('keeps a course created before a question with its request, and hands off after the answer', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let id = 0;
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a course' });
+      event('tool_execution_start', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        args: { title: 'Course' },
+      });
+      event('stage_link', { stageId: 'stage-1' });
+      event('tool_execution_end', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        result: { content: [], details: { stageId: 'stage-1', title: 'Course' } },
+      });
+      event('tool_execution_start', {
+        toolCallId: 'ask',
+        toolName: 'ask_user',
+        args: { question: 'Which audience?', options: [{ id: 'a', label: 'Students' }] },
+      });
+      event('tool_execution_end', {
+        toolCallId: 'ask',
+        toolName: 'ask_user',
+        isError: false,
+        result: { content: [], details: {} },
+      });
+      event('user_question', {
+        question: 'Which audience?',
+        options: [{ id: 'a', label: 'Students' }],
+      });
+      event('agent_end');
+      event('session_end', { status: 'succeeded' });
+      event('user_message', { text: 'Students', delivery: 'queued' });
+      event('tool_execution_start', {
+        toolCallId: 'scene',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 1, type: 'slide' },
+      });
+      // Attached late (a reload after the answer): every link so far is replayed.
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        status: 'running',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      let ready = false;
+      vi.mocked(fetch).mockImplementation(
+        async (input) =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () =>
+              String(input).includes('/manifest')
+                ? { rev: 1, scenes: ready ? [{ id: 'first', order: 0, rev: 1 }] : [] }
+                : { scenes: [{ id: 'first', stageId: 'stage-1' }] },
+          }) as Response,
+      );
+      await render();
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+      ready = true;
+      event('checkpoint', { stageId: 'stage-1', order: 0, sceneId: 'first' });
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        status: 'running',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+    });
+
+    it('hands off a replayed create_stage from the active request after the first checkpoint', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let id = 0;
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a course' });
+      event('tool_execution_start', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        args: { title: 'Course' },
+      });
+      event('stage_link', { stageId: 'stage-1' });
+      event('tool_execution_end', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        result: { content: [], details: { stageId: 'stage-1', title: 'Course' } },
+      });
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      mocks.store.chat = [
+        ...folded.chat,
+        { key: 'text', kind: 'assistant', text: 'Generating', streaming: true },
+      ];
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      event('tool_execution_start', {
+        toolCallId: 'scene',
+        toolName: 'generate_scene',
+        args: { stageId: 'stage-1', order: 1, type: 'slide' },
+      });
+      event('checkpoint', { stageId: 'stage-1', order: 0, sceneId: 'first' });
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      'terminal',
+      'old-request',
+      'link-only',
+      'closed',
+      'remembered-open',
+      'replaying',
+    ] as const)('does not promote a replayed %s link into a classroom', async (reason) => {
+      mocks.store.status = reason === 'terminal' ? 'succeeded' : 'running';
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      mocks.store.replayedStageLinkCount = 1;
+      mocks.store.replaying = reason === 'replaying';
+      mocks.store.chat = [
+        { key: 'user', kind: 'user', text: 'Make a course' },
+        ...(reason === 'link-only'
+          ? []
+          : [
+              {
+                key: 'created',
+                kind: 'tool' as const,
+                text: '',
+                toolName: 'create_stage',
+                toolState: 'done' as const,
+                toolDetails: { stageId: 'stage-1' },
+              },
+            ]),
+        ...(reason === 'old-request'
+          ? [{ key: 'next', kind: 'user' as const, text: 'A new question' }]
+          : []),
+      ];
+      if (reason === 'remembered-open')
+        localStorage.setItem(
+          COURSE_TABS_STORAGE_KEY,
+          JSON.stringify({ courseIds: ['stage-1'], activeCourseId: 'stage-1' }),
+        );
+      if (reason === 'closed')
+        localStorage.setItem(
+          COURSE_TABS_STORAGE_KEY,
+          JSON.stringify({
+            courseIds: [],
+            activeCourseId: null,
+            closedCourseIds: ['stage-1'],
+          }),
+        );
+      vi.mocked(fetch).mockImplementation(
+        async (input) =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () =>
+              String(input).includes('/manifest')
+                ? { rev: 1, scenes: [{ id: 'first', order: 0, rev: 1 }] }
+                : { scenes: [{ id: 'first', stageId: 'stage-1' }] },
+          }) as Response,
+      );
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      expect(mocks.routerPush).not.toHaveBeenCalled();
+      mocks.store.replaying = false;
+    });
+
+    it('promotes a replayed create_stage retry (reused) from the active request', async () => {
+      mocks.store.status = 'running';
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      mocks.store.replayedStageLinkCount = 1;
+      mocks.store.chat = [
+        { key: 'user', kind: 'user', text: 'Make a course' },
+        {
+          key: 'created',
+          kind: 'tool',
+          text: '',
+          toolName: 'create_stage',
+          toolState: 'done',
+          toolDetails: { stageId: 'stage-1', reused: true },
+        },
+        {
+          key: 'page',
+          kind: 'tool',
+          text: '',
+          toolName: 'generate_scene',
+          toolState: 'done',
+          toolArgs: { stageId: 'stage-1', order: 1 },
+          sceneId: 'first',
+        },
+      ];
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    });
+
+    it('opens the preview as soon as a new request is sent, before any tool call', async () => {
+      await render();
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Explain' },
+        { key: 'a', kind: 'assistant', text: 'Light bends because…', streaming: true },
+      ];
+      await render();
+      await render();
+      const pane = container?.querySelector('[data-testid="workspace-request-activity"]');
+      expect(pane?.getAttribute('data-scene')).toBe('understanding');
+      expect(pane?.getAttribute('aria-hidden')).toBeNull();
+      expect(mocks.chatPaneProps?.fill).toBe(false);
+    });
+
+    it('gives the main column back to the conversation once the activity settles', async () => {
+      await render();
+      expect(mocks.chatPaneProps?.fill).toBe(true);
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Explain' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+      // The fold closes the gap indicator when the answer arrives and the run ends.
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Explain' },
+        { key: 'a', kind: 'assistant', text: 'Because…' },
+      ];
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      expect(mocks.chatPaneProps?.fill).toBe(true);
+    });
+
+    /** The first request's tool call: the preview opens. */
+    const toolCall = async () => {
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Explain' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+    };
+    /** The run ends with an answer: the preview goes. */
+    const answered = async () => {
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Explain' },
+        { key: 'a', kind: 'assistant', text: 'Because…' },
+      ];
+      await render();
+      await render();
+    };
+    /** The home composer creates session-1 on this page, and the pane follows. */
+    // Not a React hook, despite its name.
+    const atUrl = useRealHistory;
+    const startFromHome = async () => {
+      atUrl('/workspace');
+      mocks.searchParams = new URLSearchParams();
+      mocks.store.sessionId = null;
+      await render();
+      const onOpenSession = mocks.homeProps?.onOpenSession as (id: string) => void;
+      await act(async () => onOpenSession('session-1'));
+      mocks.searchParams = new URLSearchParams('session=session-1');
+      mocks.store.sessionId = 'session-1';
+      await render();
+    };
+
+    it('recomposes around the preview of a request started from home: folds the rail once', async () => {
+      await startFromHome();
+      // Home starts folded; the teacher has the rail open.
+      if (mocks.railProps?.collapsed) {
+        await act(async () => (mocks.railProps?.onToggleCollapsed as () => void)());
+      }
+      expect(mocks.railProps?.collapsed).toBe(false);
+      await toolCall();
+      expect(mocks.railProps?.collapsed).toBe(true);
+      expect(mocks.chatPaneProps?.fill).toBe(false);
+      expect(mocks.chatPaneProps?.width).toBe(400);
+      // Reopening the rail by hand holds for the rest of this preview and is
+      // never written as a folded preference.
+      await act(async () => (mocks.railProps?.onToggleCollapsed as () => void)());
+      expect(mocks.railProps?.collapsed).toBe(false);
+      await render();
+      expect(mocks.railProps?.collapsed).toBe(false);
+      await act(async () => (mocks.railProps?.onToggleCollapsed as () => void)());
+      expect(mocks.railProps?.collapsed).toBe(true);
+      await answered();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      expect(mocks.railProps?.collapsed).toBe(false);
+      expect(mocks.chatPaneProps?.fill).toBe(true);
+      expect(localStorage.getItem('openmaic:workspace:nav-collapsed')).not.toBe('1');
+
+      // The next request in the same conversation is not that moment: the rail stays.
+      mocks.store.chat = [];
+      await toolCall();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+      expect(mocks.railProps?.collapsed).toBe(false);
+    });
+
+    it('leaves the rail alone for a preview in a conversation opened any other way', async () => {
+      await render();
+      expect(mocks.railProps?.collapsed).toBe(false);
+      await toolCall();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+      // The split still recomposes around the preview; only the rail is left be.
+      expect(mocks.chatPaneProps?.fill).toBe(false);
+      expect(mocks.railProps?.collapsed).toBe(false);
+      await answered();
+      expect(mocks.railProps?.collapsed).toBe(false);
+    });
+
+    const previewRun = async () => {
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a course' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+    };
+    const previewPane = () =>
+      container?.querySelector('[data-testid="workspace-request-activity"]') ?? null;
+
+    it("is a regular right-pane tab with the course pane's seam, and closing it holds", async () => {
+      await previewRun();
+      const tab = previewPane()?.querySelector(
+        '[data-testid="workspace-course-tab-request-preview"]',
+      );
+      expect(tab?.getAttribute('role')).toBe('tab');
+      // The same draggable seam and remembered width the course pane gets.
+      expect(mocks.chatPaneProps?.resizeHandle).toBeTruthy();
+      expect(mocks.chatPaneProps?.fill).toBe(false);
+      const close = previewPane()?.querySelector<HTMLButtonElement>(
+        '[data-testid="workspace-course-tab-close-request-preview"]',
+      );
+      await act(async () => close?.click());
+      await render();
+      expect(previewPane()).toBeNull();
+      expect(mocks.chatPaneProps?.fill).toBe(true);
+      // Remembered for this request: a reload does not bring it back.
+      expect(JSON.parse(localStorage.getItem('openmaic:workspace:closed-preview') ?? '{}')).toEqual(
+        {
+          'session-1': 'u',
+        },
+      );
+      await render();
+      expect(previewPane()).toBeNull();
+    });
+
+    it('closes for its own request only: the next request opens it again, and fold only folds', async () => {
+      await previewRun();
+      const close = previewPane()?.querySelector<HTMLButtonElement>(
+        '[data-testid="workspace-course-tab-close-request-preview"]',
+      );
+      await act(async () => close?.click());
+      await render();
+      expect(previewPane()).toBeNull();
+      // Later events of the same request do not bring it back.
+      mocks.store.chat = [
+        ...mocks.store.chat,
+        { key: 't2', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      expect(previewPane()).toBeNull();
+      // The next request starts fresh.
+      mocks.store.chat = [
+        ...mocks.store.chat,
+        { key: 'u2', kind: 'user', text: 'Try again, shorter' },
+        { key: 't3', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      expect(previewPane()).not.toBeNull();
+      expect(previewPane()?.getAttribute('aria-hidden')).toBeNull();
+      // Folding hides the pane but keeps the tab and its run.
+      await act(async () =>
+        previewPane()
+          ?.querySelector<HTMLButtonElement>('[data-testid="workspace-preview-fold"]')
+          ?.click(),
+      );
+      await render();
+      expect(previewPane()?.getAttribute('aria-hidden')).toBe('true');
+    });
+
+    it('opens for a new request whose agent looked through the library and is asking', async () => {
+      // Every session row carries a stage id (a new one's is where its course
+      // will be created); looking through the library does not make it one
+      // working on existing courses.
+      mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+      mocks.store.stageId = 'stage-1';
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Pictures and text' },
+        { key: 'l', kind: 'tool', text: '', toolName: 'list_folder_stages', toolState: 'done' },
+        {
+          key: 'q',
+          kind: 'question',
+          text: 'Which grade is it for?',
+          questionOptions: [{ id: 'a', label: 'Grade 5' }],
+        },
+      ];
+      await render();
+      await render();
+      expect(previewPane()?.getAttribute('data-scene')).toBe('asking');
+    });
+
+    it('shows the course a conversation was started beside in an empty pane, never a preview', async () => {
+      mocks.sessionRows = [
+        { id: 'session-1', stageId: 'stage-1', updatedAt: 9, existingCourse: true },
+      ];
+      mocks.store.stageId = 'stage-1';
+      mocks.store.existingCourse = true;
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Shorten the title of page 2' },
+        { key: 'l', kind: 'tool', text: '', toolName: 'list_folder_stages', toolState: 'done' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      expect(previewPane()).toBeNull();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      expect(mocks.routerPush).not.toHaveBeenCalled();
+    });
+
+    it('does not bring back the course of a conversation whose tab the user closed', async () => {
+      mocks.store.existingCourse = true;
+      mocks.store.stageId = 'stage-1';
+      localStorage.setItem(
+        COURSE_TABS_STORAGE_KEY,
+        JSON.stringify({ courseIds: [], activeCourseId: null, closedCourseIds: ['stage-1'] }),
+      );
+      await render();
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+    });
+
+    it('waits for the session flag before deciding anything', async () => {
+      mocks.store.existingCourse = null;
+      mocks.store.stageId = 'stage-1';
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a course' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      expect(previewPane()).toBeNull();
+      expect(window.location.search).toBe('?session=session-1');
+      mocks.store.existingCourse = false;
+      await render();
+      await render();
+      expect(previewPane()?.getAttribute('data-scene')).toBe('researching');
+    });
+
+    it('is named like the conversation: its first request, then its title, never a follow-up', async () => {
+      await previewRun();
+      const name = () =>
+        previewPane()
+          ?.querySelector('[data-testid="workspace-course-tab-request-preview"]')
+          ?.textContent?.trim();
+      expect(name()).toBe('Make a course');
+      // A follow-up is a new request, not a new name.
+      mocks.store.chat = [
+        ...mocks.store.chat,
+        { key: 'a', kind: 'assistant', text: 'On it' },
+        { key: 'u2', kind: 'user', text: 'Add a quiz' },
+        { key: 't2', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      expect(name()).toBe('Make a course');
+      // The generated title, live, as the rail and the chat header show it.
+      mocks.store.sessionTitle = 'Light and lenses';
+      await render();
+      expect(name()).toBe('Light and lenses');
+    });
+
+    it('keeps a close to its own conversation when request keys collide', async () => {
+      mocks.sessionRows = [
+        { id: 'session-1', stageId: 'stage-1', updatedAt: 9 },
+        { id: 'session-2', stageId: 'stage-2', updatedAt: 8 },
+      ];
+      await previewRun();
+      const close = previewPane()?.querySelector<HTMLButtonElement>(
+        '[data-testid="workspace-course-tab-close-request-preview"]',
+      );
+      await act(async () => close?.click());
+      await render();
+      expect(previewPane()).toBeNull();
+      // Another conversation whose request has the same per-session key.
+      await act(async () => {
+        History.prototype.replaceState.call(
+          window.history,
+          null,
+          '',
+          '/workspace?session=session-2',
+        );
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      mocks.searchParams = new URLSearchParams('session=session-2');
+      mocks.store.sessionId = 'session-2';
+      await previewRun();
+      expect(previewPane()).not.toBeNull();
+      expect(previewPane()?.getAttribute('aria-hidden')).not.toBe('true');
+    });
+
+    it("folds with the pane's own fold, leaving the run and the tab", async () => {
+      await previewRun();
+      const fold = previewPane()?.querySelector<HTMLButtonElement>(
+        '[data-testid="workspace-preview-fold"]',
+      );
+      await act(async () => fold?.click());
+      expect(previewPane()?.getAttribute('aria-hidden')).toBe('true');
+      expect(mocks.chatPaneProps?.fill).toBe(true);
+      expect(localStorage.getItem('openmaic:workspace:classroom-collapsed')).toBe('1');
+    });
+
+    it('never folds on its own: a request that ends without a page leaves the placeholder at rest', async () => {
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Why does light bend?' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      const pane = () => container?.querySelector('[data-testid="workspace-request-activity"]');
+      expect(pane()?.getAttribute('data-scene')).toBe('researching');
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Why does light bend?' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'done' },
+        { key: 'a', kind: 'assistant', text: 'Because…' },
+      ];
+      await render();
+      expect(pane()?.getAttribute('data-scene')).toBe('resting');
+      // The next request of the conversation animates in the same tab.
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        ...mocks.store.chat,
+        { key: 'u2', kind: 'user', text: 'Make it a lesson' },
+        { key: 'w', kind: 'waiting', text: '' },
+      ];
+      await render();
+      // Sent, before any tool call: the request is being understood.
+      expect(pane()?.getAttribute('data-scene')).toBe('understanding');
+      mocks.store.chat = [
+        ...mocks.store.chat.slice(0, -1),
+        { key: 'cs', kind: 'tool', text: '', toolName: 'create_stage', toolState: 'running' },
+      ];
+      await render();
+      expect(pane()?.getAttribute('data-scene')).toBe('assembling');
+    });
+
+    it('a conversation that only talks gets no placeholder', async () => {
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Hi' },
+        { key: 'a', kind: 'assistant', text: 'Hello' },
+      ];
+      await render();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+    });
+
+    describe('beside course tabs', () => {
+      beforeEach(() => {
+        useRealHistory('/workspace?session=session-1&course=stage-other');
+        mocks.searchParams = new URLSearchParams('session=session-1&course=stage-other');
+        mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+        mocks.courses = {
+          ...mocks.courses!,
+          classrooms: [classroom('stage-other'), { ...classroom('stage-1'), sceneCount: 0 }],
+        };
+      });
+      const runWithTool = async () => {
+        mocks.store.status = 'running';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Make a course' },
+          { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+        ];
+        await render();
+        await render();
+      };
+      const pane = () => container?.querySelector('[data-testid="workspace-request-activity"]');
+      const browser = () =>
+        mocks.classroomProps?.browser as {
+          tabs: { id: string }[];
+          activeCourseId: string;
+          selectedTabId?: string;
+          onActivateCourse: (id: string) => void;
+          onCloseCourse: (id: string) => void;
+        };
+
+      it('joins the strip after the course tabs and takes focus when its request starts', async () => {
+        await runWithTool();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        expect(browser().selectedTabId).toBe('request-preview');
+        // Selection only: the classroom behind it keeps its real course.
+        expect(browser().activeCourseId).toBe('stage-other');
+        expect(mocks.classroomProps?.hidden).toBe(true);
+        expect(pane()?.getAttribute('aria-hidden')).toBeNull();
+      });
+
+      it('hands an open question to the chat while a course tab is shown, and takes it back', async () => {
+        const { useQuestionHost } = await import('@/lib/workbench/question-host');
+        const { sessionScopedKey } = await import('@/lib/workbench/request-scope');
+        useQuestionHost.getState().setAnswer(vi.fn(async () => true));
+        mocks.store.status = 'succeeded';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Make a course' },
+          { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'done' },
+          {
+            key: 'q',
+            kind: 'question',
+            text: 'Who is it for?',
+            questionOptions: [{ id: 'a', label: 'Students' }],
+          },
+        ];
+        await render();
+        await render();
+        const hostedKey = sessionScopedKey(mocks.store.sessionId, 'q');
+        expect(browser().selectedTabId).toBe('request-preview');
+        // Selection only: the classroom behind it keeps its real course.
+        expect(browser().activeCourseId).toBe('stage-other');
+        expect(useQuestionHost.getState().previewKey).toBe(hostedKey);
+
+        // A course tab in front: the preview's form is not on screen, so the chat answers.
+        await act(async () => browser().onActivateCourse('stage-other'));
+        await render();
+        expect(pane()?.getAttribute('aria-hidden')).toBe('true');
+        expect(useQuestionHost.getState().previewKey).toBeNull();
+        expect(pane()?.querySelector('[data-testid="workbench-question-form"]')).toBeNull();
+
+        // Back to the preview: it hosts the question again.
+        await act(async () => browser().onActivateCourse('request-preview'));
+        await render();
+        expect(useQuestionHost.getState().previewKey).toBe(hostedKey);
+        expect(pane()?.querySelector('[data-testid="workbench-question-form"]')).not.toBeNull();
+
+        // Folded: hidden again, so the chat answers again.
+        await act(async () =>
+          pane()
+            ?.querySelector<HTMLButtonElement>('[data-testid="workspace-preview-fold"]')
+            ?.click(),
+        );
+        await render();
+        expect(pane()?.getAttribute('aria-hidden')).toBe('true');
+        expect(useQuestionHost.getState().previewKey).toBeNull();
+        useQuestionHost.getState().setAnswer(null);
+      });
+
+      it('keeps the real course mounted behind the preview tab, untouched, and back again', async () => {
+        await render();
+        const mounts = mocks.classroomMounts;
+        await runWithTool();
+        expect(browser().selectedTabId).toBe('request-preview');
+        expect(browser().activeCourseId).toBe('stage-other');
+        expect(mocks.classroomMounts).toBe(mounts);
+        // Nothing navigates by the sentinel.
+        expect(window.location.search).toBe('?session=session-1&course=stage-other');
+        await act(async () => browser().onActivateCourse('stage-other'));
+        await render();
+        expect(browser().selectedTabId).toBe('stage-other');
+        expect(browser().activeCourseId).toBe('stage-other');
+        expect(mocks.classroomMounts).toBe(mounts);
+        expect(mocks.classroomProps?.hidden).toBe(false);
+      });
+
+      it('does not steal focus back on later events once a course tab was chosen', async () => {
+        await runWithTool();
+        await act(async () => browser().onActivateCourse('stage-other'));
+        await render();
+        expect(browser().activeCourseId).toBe('stage-other');
+        expect(pane()?.getAttribute('aria-hidden')).toBe('true');
+        mocks.store.chat = [
+          ...mocks.store.chat,
+          { key: 't2', kind: 'tool', text: '', toolName: 'create_stage', toolState: 'running' },
+        ];
+        await render();
+        expect(browser().activeCourseId).toBe('stage-other');
+        // Choosing it again shows it.
+        await act(async () => browser().onActivateCourse('request-preview'));
+        await render();
+        expect(browser().selectedTabId).toBe('request-preview');
+        // Selection only: the classroom behind it keeps its real course.
+        expect(browser().activeCourseId).toBe('stage-other');
+      });
+
+      it('is replaced at its position by the conversation course at the first scene', async () => {
+        mocks.store.status = 'running';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Make a course' },
+          {
+            key: 'created',
+            kind: 'tool',
+            text: '',
+            toolName: 'create_stage',
+            toolState: 'done',
+            toolDetails: { stageId: 'stage-1' },
+          },
+          { key: 'g', kind: 'tool', text: '', toolName: 'generate_scene', toolState: 'running' },
+        ];
+        await render();
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        mocks.store.stageLinkStageIds = ['stage-1'];
+        await render();
+        // The link alone opens nothing: a stage link names an empty shell.
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        // The first page is persisted: the preview tab becomes the course, in place.
+        mocks.store.chat = [
+          ...mocks.store.chat.slice(0, 2),
+          {
+            key: 'g',
+            kind: 'tool',
+            text: '',
+            toolName: 'generate_scene',
+            toolState: 'running',
+            toolArgs: { stageId: 'stage-1', order: 1 },
+            sceneId: 'first',
+          },
+        ];
+        await render();
+        await render();
+        expect(window.location.search).toBe('?session=session-1&course=stage-1');
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'stage-1']);
+        expect(pane()).toBeNull();
+      });
+
+      it('opens on the first search of a real research-then-build run of a new conversation', async () => {
+        // A real session's event order (anonymised), here as a new
+        // conversation with a course tab open: seventeen research calls
+        // before create_stage.
+        const frames = (
+          await import('./fixtures/request-preview-beside-course-stream.json', {
+            with: { type: 'json' },
+          })
+        ).default as [number, string, unknown][];
+        const { createInitialSessionState, foldEvent } = await vi.importActual<
+          typeof import('@/lib/workbench/session-store')
+        >('@/lib/workbench/session-store');
+        const foldUntil = (predicate: (type: string, data: unknown) => boolean) => {
+          let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+            createInitialSessionState();
+          for (const [index, [ts, type, data]] of frames.entries()) {
+            folded = foldEvent(folded, { id: index + 1, ts: 1_000 + ts, attempt: 1, type, data });
+            if (predicate(type, data)) break;
+          }
+          return folded;
+        };
+        mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-other', updatedAt: 9 }];
+        const firstSearch = foldUntil(
+          (type, data) =>
+            type === 'tool_execution_start' &&
+            (data as { toolName?: string }).toolName === 'web_search',
+        );
+        Object.assign(mocks.store, firstSearch, {
+          existingCourse: false,
+          sessionId: 'session-1',
+          stageId: 'stage-other',
+          status: 'running',
+          replaying: false,
+        });
+        await render();
+        await render();
+        expect(pane()?.getAttribute('data-scene')).toBe('researching');
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        expect(browser().selectedTabId).toBe('request-preview');
+        // Selection only: the classroom behind it keeps its real course.
+        expect(browser().activeCourseId).toBe('stage-other');
+        // Through to create_stage and its link: still the placeholder, no early tab.
+        const linked = foldUntil((type) => type === 'stage_link');
+        Object.assign(mocks.store, linked, {
+          existingCourse: false,
+          sessionId: 'session-1',
+          stageId: 'stage-other',
+          status: 'running',
+          replaying: false,
+        });
+        await render();
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        expect(window.location.search).toBe('?session=session-1&course=stage-other');
+      });
+
+      it('waits for create_stage in the same real run when it was started beside the course', async () => {
+        // The same run, from a conversation started beside the open course:
+        // research about that course is working on it (no preview); the
+        // course the run then creates is new, and gets the preview.
+        const frames = (
+          await import('./fixtures/request-preview-beside-course-stream.json', {
+            with: { type: 'json' },
+          })
+        ).default as [number, string, unknown][];
+        const { createInitialSessionState, foldEvent } = await vi.importActual<
+          typeof import('@/lib/workbench/session-store')
+        >('@/lib/workbench/session-store');
+        const foldUntil = (predicate: (type: string, data: unknown) => boolean) => {
+          let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+            createInitialSessionState();
+          for (const [index, [ts, type, data]] of frames.entries()) {
+            folded = foldEvent(folded, { id: index + 1, ts: 1_000 + ts, attempt: 1, type, data });
+            if (predicate(type, data)) break;
+          }
+          return folded;
+        };
+        mocks.sessionRows = [
+          { id: 'session-1', stageId: 'stage-other', updatedAt: 9, existingCourse: true },
+        ];
+        const at = (predicate: (type: string, data: unknown) => boolean) =>
+          Object.assign(mocks.store, foldUntil(predicate), {
+            existingCourse: true,
+            sessionId: 'session-1',
+            stageId: 'stage-other',
+            status: 'running',
+            replaying: false,
+          });
+        const toolStart = (name: string) => (type: string, data: unknown) =>
+          type === 'tool_execution_start' && (data as { toolName?: string }).toolName === name;
+        at(toolStart('web_search'));
+        await render();
+        await render();
+        expect(pane()).toBeNull();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other']);
+        at(toolStart('create_stage'));
+        await render();
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        expect(browser().selectedTabId).toBe('request-preview');
+        expect(window.location.search).toBe('?session=session-1&course=stage-other');
+      });
+
+      it('a conversation that works on the course it was started beside gets no placeholder', async () => {
+        mocks.sessionRows = [
+          { id: 'session-1', stageId: 'stage-other', updatedAt: 9, existingCourse: true },
+        ];
+        mocks.store.stageId = 'stage-other';
+        mocks.store.existingCourse = true;
+        mocks.store.status = 'running';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Tighten page 2 of this course' },
+          {
+            key: 'r',
+            kind: 'tool',
+            text: '',
+            toolName: 'read_stage',
+            toolState: 'running',
+            toolArgs: { stageId: 'stage-other' },
+          },
+        ];
+        await render();
+        await render();
+        expect(pane()).toBeNull();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other']);
+        expect(browser().activeCourseId).toBe('stage-other');
+      });
+
+      it('a conversation started beside a course that looks through existing courses gets none (real run)', async () => {
+        // A real edit request beside an open course: the agent listed the
+        // courses and asked which one, naming none.
+        mocks.sessionRows = [
+          { id: 'session-1', stageId: 'stage-other', updatedAt: 9, existingCourse: true },
+        ];
+        mocks.store.stageId = 'stage-other';
+        mocks.store.existingCourse = true;
+        mocks.store.status = 'succeeded';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Shorten the title of page 2' },
+          { key: 'l', kind: 'tool', text: '', toolName: 'list_folder_stages', toolState: 'done' },
+          { key: 'q', kind: 'question', text: 'Which course do you mean?' },
+        ];
+        await render();
+        await render();
+        expect(pane()).toBeNull();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other']);
+      });
+
+      it('a conversation opened beside a course gets the placeholder once it creates its own', async () => {
+        // Started beside the open course, which has scenes.
+        mocks.sessionRows = [
+          { id: 'session-1', stageId: 'stage-other', updatedAt: 9, existingCourse: true },
+        ];
+        mocks.store.stageId = 'stage-other';
+        mocks.store.existingCourse = true;
+        vi.mocked(fetch).mockImplementation(
+          async (input) =>
+            ({
+              ok: true,
+              status: 200,
+              json: async () =>
+                String(input).includes('/manifest') ? { rev: 1, scenes: [] } : { scenes: [] },
+            }) as Response,
+        );
+        mocks.store.status = 'running';
+        mocks.store.chat = [
+          { key: 'u', kind: 'user', text: 'Make a new course' },
+          { key: 'cs', kind: 'tool', text: '', toolName: 'create_stage', toolState: 'running' },
+        ];
+        await render();
+        // The new course's link lands while create_stage is still running.
+        mocks.store.stageLinkStageIds = ['stage-1'];
+        await render();
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+        expect(window.location.search).toBe('?session=session-1&course=stage-other');
+      });
+
+      it('closing it is remembered for the request, across a reload', async () => {
+        await runWithTool();
+        await act(async () => browser().onCloseCourse('request-preview'));
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other']);
+        await act(async () => root?.unmount());
+        root = null;
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other']);
+        expect(pane()).toBeNull();
+      });
+
+      it('restores itself after a reload while its request runs', async () => {
+        await runWithTool();
+        await act(async () => root?.unmount());
+        root = null;
+        await render();
+        await render();
+        expect(browser().tabs.map((tab) => tab.id)).toEqual(['stage-other', 'request-preview']);
+      });
+    });
+
+    it('waits on the open plan question before any scene exists, until it is answered', async () => {
+      const question: ChatNode = {
+        key: 'q',
+        kind: 'question',
+        text: 'Shall I build this plan?',
+        questionOptions: [{ id: 'yes', label: 'Go ahead' }],
+      };
+      mocks.store.status = 'succeeded';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a course' },
+        { key: 'a', kind: 'assistant', text: 'Plan:\n1. Light\n2. Refraction\n3. Quiz' },
+        question,
+      ];
+      // The conversation publishes its answer path; the preview answers through it.
+      const { useQuestionHost } = await import('@/lib/workbench/question-host');
+      const { sessionScopedKey } = await import('@/lib/workbench/request-scope');
+      const answer = vi.fn(async () => true);
+      useQuestionHost.getState().setAnswer(answer);
+      await render();
+      const pane = container?.querySelector('[data-testid="workspace-request-activity"]');
+      expect(pane).not.toBeNull();
+      expect(pane?.getAttribute('data-scene')).toBe('asking');
+      // The plan from the stream, and the question as the answer form itself.
+      const plan = pane?.querySelector('[data-testid="request-preview-plan"]');
+      expect(plan?.textContent).toContain('Refraction');
+      const form = pane?.querySelector('[data-testid="workbench-question-form"]');
+      expect(form?.textContent).toContain('Shall I build this plan?');
+      expect(useQuestionHost.getState().previewKey).toBe(
+        sessionScopedKey(mocks.store.sessionId, 'q'),
+      );
+
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a course' },
+        { key: 'a', kind: 'assistant', text: 'Plan: 1. Light 2. Quiz' },
+        { ...question, questionAnswered: true },
+        { key: 'u2', kind: 'user', text: 'Go ahead' },
+      ];
+      await render();
+      // Answered: the form goes, and the placeholder rests until the next run.
+      const resting = container?.querySelector('[data-testid="workspace-request-activity"]');
+      expect(resting?.getAttribute('data-scene')).toBe('resting');
+      expect(useQuestionHost.getState().previewKey).toBeNull();
+      useQuestionHost.getState().setAnswer(null);
+    });
+
+    it.each(['existing-course', 'generated'] as const)(
+      'adds no panel once this conversation has its course (%s)',
+      async (how) => {
+        // Started beside a course: the session's own flag says so.
+        if (how === 'existing-course') mocks.store.existingCourse = true;
+        // An earlier request persisted a page: the stream's checkpointed card
+        // is the fact, whatever the list row still says about its scenes.
+        if (how === 'generated') {
+          mocks.courses = {
+            ...mocks.courses!,
+            classrooms: [{ ...classroom('stage-1'), sceneCount: 0 }],
+          };
+          mocks.store.stageLinkStageIds = ['stage-1'];
+          mocks.store.replayedStageLinkCount = 1;
+        }
+        mocks.store.status = 'running';
+        mocks.store.chat = [
+          ...(how === 'generated'
+            ? ([
+                { key: 'u0', kind: 'user', text: 'Make a course' },
+                {
+                  key: 'scene',
+                  kind: 'tool',
+                  text: '',
+                  toolName: 'generate_scene',
+                  toolState: 'done',
+                  sceneId: 'first',
+                },
+              ] as ChatNode[])
+            : []),
+          { key: 'u', kind: 'user', text: 'A follow-up question' },
+          { key: 'l', kind: 'tool', text: '', toolName: 'list_folder_stages', toolState: 'done' },
+          { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+        ];
+        await render();
+        expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+        expect(mocks.chatPaneProps?.fill).toBe(true);
+        expect(window.location.search).toBe('?session=session-1');
+      },
+    );
+
+    it('a course the conversation is only bound to as context does not keep the placeholder away', async () => {
+      // Started beside an open course: bound to it, which has scenes, but no
+      // call of this conversation has worked on it.
+      mocks.store.stageId = 'stage-1';
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Research a hot topic and build a lesson' },
+        { key: 't', kind: 'tool', text: '', toolName: 'web_search', toolState: 'running' },
+      ];
+      await render();
+      await render();
+      const pane = container?.querySelector('[data-testid="workspace-request-activity"]');
+      expect(pane?.getAttribute('data-scene')).toBe('researching');
+    });
+
+    it("does not bring the panel back after this request's course was handed off and closed", async () => {
+      mocks.store.status = 'running';
+      mocks.store.chat = [
+        { key: 'u', kind: 'user', text: 'Make a course' },
+        {
+          key: 'created',
+          kind: 'tool',
+          text: '',
+          toolName: 'create_stage',
+          toolState: 'done',
+          toolDetails: { stageId: 'stage-1' },
+        },
+        { key: 'scene', kind: 'tool', text: '', toolName: 'generate_scene', toolState: 'running' },
+      ];
+      await render();
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      // Its first page is persisted: the preview becomes the course.
+      mocks.store.chat = [
+        ...mocks.store.chat.slice(0, 2),
+        {
+          key: 'scene',
+          kind: 'tool',
+          text: '',
+          toolName: 'generate_scene',
+          toolState: 'running',
+          toolArgs: { stageId: 'stage-1', order: 1 },
+          sceneId: 'first',
+        },
+      ];
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+      const browser = mocks.classroomProps?.browser as { onCloseCourse: (id: string) => void };
+      await act(async () => browser.onCloseCourse('stage-1'));
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+    });
+
+    it('does not revive the panel after a refresh once the handed-off course was closed', async () => {
+      const { createInitialSessionState, foldEvent } = await vi.importActual<
+        typeof import('@/lib/workbench/session-store')
+      >('@/lib/workbench/session-store');
+      let folded: import('@/lib/workbench/session-store').WorkbenchFold =
+        createInitialSessionState();
+      let id = 0;
+      const event = (type: string, data: unknown = {}) => {
+        folded = foldEvent(folded, { id: ++id, ts: id, attempt: 1, type, data });
+      };
+      event('session_start', { prompt: 'Make a course' });
+      event('tool_execution_start', { toolCallId: 'create', toolName: 'create_stage', args: {} });
+      event('stage_link', { stageId: 'stage-1' });
+      event('tool_execution_end', {
+        toolCallId: 'create',
+        toolName: 'create_stage',
+        result: { content: [], details: { stageId: 'stage-1' } },
+      });
+      event('tool_execution_start', { toolCallId: 'page', toolName: 'generate_scene', args: {} });
+      event('checkpoint', { stageId: 'stage-1', order: 0, sceneId: 'first' });
+      Object.assign(mocks.store, folded, {
+        existingCourse: false,
+        sessionId: 'session-1',
+        replaying: false,
+        replayedStageLinkCount: 1,
+      });
+      // The tab was opened by the handoff and closed by the user before the
+      // refresh; a session-only URL restores no tabs, only this memory.
+      localStorage.setItem(
+        COURSE_TABS_STORAGE_KEY,
+        JSON.stringify({ courseIds: [], activeCourseId: null, closedCourseIds: ['stage-1'] }),
+      );
+      await render();
+      expect(window.location.search).toBe('?session=session-1');
+      expect(mocks.routerPush).not.toHaveBeenCalled();
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+    });
+
+    it("gives a later request's new course the preview, then its tab at its first page", async () => {
+      mocks.courses = {
+        ...mocks.courses!,
+        classrooms: [classroom('stage-1'), { ...classroom('stage-2'), sceneCount: 0 }],
+      };
+      mocks.store.status = 'running';
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      mocks.store.replayedStageLinkCount = 1;
+      const earlier: ChatNode[] = [
+        { key: 'u1', kind: 'user', text: 'Make a course' },
+        {
+          key: 'c1',
+          kind: 'tool',
+          text: '',
+          toolName: 'create_stage',
+          toolState: 'done',
+          toolDetails: { stageId: 'stage-1' },
+        },
+        {
+          key: 'p1',
+          kind: 'tool',
+          text: '',
+          toolName: 'generate_scene',
+          toolState: 'done',
+          toolArgs: { stageId: 'stage-1', order: 1 },
+          sceneId: 'first-1',
+        },
+      ];
+      await render();
+      vi.mocked(fetch).mockClear();
+      mocks.store.stageLinkStageIds = ['stage-1', 'stage-2'];
+      mocks.store.chat = [
+        ...earlier,
+        { key: 'u', kind: 'user', text: 'Make a second course' },
+        {
+          key: 'created',
+          kind: 'tool',
+          text: '',
+          toolName: 'create_stage',
+          toolState: 'done',
+          toolDetails: { stageId: 'stage-2' },
+        },
+      ];
+      await render();
+      await render();
+      // A new course in the making: the preview, and no early tab on its link.
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).not.toBeNull();
+      expect(window.location.search).toBe('?session=session-1');
+      mocks.store.chat = [
+        ...mocks.store.chat,
+        {
+          key: 'p2',
+          kind: 'tool',
+          text: '',
+          toolName: 'generate_scene',
+          toolState: 'running',
+          toolArgs: { stageId: 'stage-2', order: 1 },
+          sceneId: 'first-2',
+        },
+      ];
+      await render();
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-2');
+      expect(container?.querySelector('[data-testid="workspace-request-activity"]')).toBeNull();
+      expect(
+        vi.mocked(fetch).mock.calls.filter(([url]) => String(url).includes('/manifest')),
+      ).toHaveLength(0);
+    });
+
+    it('does not reopen an agent-created course after Back without the page either', async () => {
+      vi.mocked(fetch).mockImplementation(
+        async (input) =>
+          ({
+            ok: true,
+            status: 200,
+            json: async () =>
+              String(input).includes('/manifest')
+                ? { rev: 1, scenes: [{ id: 'first', order: 0, rev: 1 }] }
+                : { scenes: [{ id: 'first', stageId: 'stage-1' }] },
+          }) as Response,
+      );
+      await render();
+      mocks.store.stageLinkStageIds = ['stage-1'];
+      await render();
+      expect(window.location.search).toBe('?session=session-1&course=stage-1');
+
+      await travel('back');
+      expect(window.location.search).toBe('?session=session-1');
+      expect(mocks.routerPush).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('closes only the deleted course when its deletion completes after other tabs opened', async () => {
+    mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
+    mocks.store.sessionId = 'session-1';
+    mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+    const pending = deferred<boolean>();
+    mocks.courses = {
+      ...mocks.courses!,
+      classrooms: [classroom('stage-1'), classroom('stage-2')],
+      deleteCourse: vi.fn(() => pending.promise),
+    };
+    await render();
+    const page = await openMyCourses();
+    let completed!: Promise<void>;
+    await act(async () => {
+      completed = (page.onDeleteCourse as (id: string) => Promise<void>)('stage-1');
+    });
+    await act(async () =>
+      (mocks.coursesPageProps!.onOpenCourse as (id: string) => void)('stage-2'),
+    );
+    await openLibrary();
+    const navigations = mocks.routerPush.mock.calls.length + mocks.routerReplace.mock.calls.length;
+
+    await act(async () => {
+      pending.resolve(true);
+      await completed;
+    });
+
+    const browser = mocks.classroomProps?.browser as {
+      tabs: readonly { id: string }[];
+      activeCourseId: string;
+    };
+    expect(browser.tabs.map((tab) => tab.id)).toEqual(['stage-2']);
+    expect(browser.activeCourseId).toBe('stage-2');
+    expect(JSON.parse(localStorage.getItem(COURSE_TABS_STORAGE_KEY)!).courseIds).toEqual([
+      'stage-2',
+    ]);
+    // stage-2 stays open under the page: nothing navigated.
+    expect(mocks.routerPush.mock.calls.length + mocks.routerReplace.mock.calls.length).toBe(
+      navigations,
+    );
+    expect(libraryShown()).toBe(true);
+    expect(container?.querySelector('[data-testid="classroom-pane"]')).not.toBeNull();
+  });
+
+  describe('chatting with a material from the page', () => {
+    const lesson = {
+      materialId: 'src-lesson',
+      name: 'lesson.pdf',
+      bytes: 3,
+      mimeType: 'application/pdf',
+      extractionStatus: 'done' as const,
+    };
+    const chatWith = async () => {
+      const onChat = mocks.libraryProps?.onChatWithMaterial as (material: unknown) => void;
+      expect(onChat).toBeTypeOf('function');
+      await act(async () => onChat(lesson));
+    };
+    const seedOf = (props: Record<string, unknown> | null) =>
+      props?.materialSeed as { key: number; material: unknown; target: unknown } | null | undefined;
+
+    it('hands it to the home composer when no classroom is open, and its own navigation keeps it', async () => {
+      mocks.searchParams = new URLSearchParams('session=session-1');
+      mocks.store.sessionId = 'session-1';
+      mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+      await render();
+      await openLibrary();
+      await chatWith();
+
+      expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace');
+      expect(libraryShown()).toBe(false);
+      // The new conversation the hand-over itself started did not drop it.
+      const seed = seedOf(mocks.homeProps);
+      expect(seed).toMatchObject({ material: lesson, target: { kind: 'home' } });
+
+      const consume = mocks.homeProps?.onMaterialSeedConsumed as (key: number) => void;
+      await act(async () => consume(seed!.key));
+      expect(seedOf(mocks.homeProps)).toBeNull();
+    });
+
+    it('hands it to the new conversation beside the open classroom', async () => {
+      mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
+      mocks.store.sessionId = 'session-1';
+      mocks.sessionRows = [{ id: 'session-1', stageId: 'stage-1', updatedAt: 9 }];
+      await render();
+      await openLibrary();
+      await chatWith();
+
+      expect(mocks.routerPush).toHaveBeenLastCalledWith('/workspace?course=stage-1');
+      expect(seedOf(mocks.chatPaneProps)).toMatchObject({
+        material: lesson,
+        target: { kind: 'chat', ownerKey: 'draft:stage-1' },
+      });
+    });
+
+    it('drops the hand-over once the teacher goes somewhere else', async () => {
+      mocks.searchParams = new URLSearchParams('session=session-1&course=stage-1');
+      mocks.store.sessionId = 'session-1';
+      mocks.sessionRows = [
+        { id: 'session-1', stageId: 'stage-1', updatedAt: 9 },
+        { id: 'session-2', stageId: 'stage-1', updatedAt: 8 },
+      ];
+      await render();
+      await openLibrary();
+      await chatWith();
+      expect(seedOf(mocks.chatPaneProps)).not.toBeNull();
+
+      await act(async () => (mocks.railProps?.onOpenSession as (id: string) => void)('session-2'));
+      expect(seedOf(mocks.chatPaneProps)).toBeNull();
+    });
+
+    it('drops the hand-over on browser Back, so Forward cannot bring it back', async () => {
+      vi.mocked(window.history.pushState).mockImplementation((state, unused, next) => {
+        History.prototype.pushState.call(window.history, state, unused, next);
+        mocks.routerPush(String(next));
+      });
+      vi.mocked(window.history.replaceState).mockImplementation((state, unused, next) => {
+        History.prototype.replaceState.call(window.history, state, unused, next);
+        mocks.routerReplace(String(next));
+      });
+      History.prototype.replaceState.call(window.history, null, '', '/workspace');
+      const travel = (direction: 'back' | 'forward') =>
+        act(async () => {
+          const popped = new Promise<void>((resolve) =>
+            window.addEventListener('popstate', () => resolve(), { once: true }),
+          );
+          window.history[direction]();
+          await popped;
+        });
+      mocks.searchParams = new URLSearchParams();
+      await render();
+      await openLibrary();
+      await chatWith();
+      expect(seedOf(mocks.homeProps)).toMatchObject({ target: { kind: 'home' } });
+
+      await travel('back');
+      expect(window.location.search).toBe('?view=library');
+      await travel('forward');
+      expect(window.location.search).toBe('');
+      expect(seedOf(mocks.homeProps)).toBeNull();
+    });
+
+    it.each(['activate', 'close'] as const)(
+      'drops the hand-over when the teacher acts on a classroom tab (%s)',
+      async (action) => {
+        mocks.courses = {
+          ...mocks.courses!,
+          classrooms: [classroom('stage-1'), classroom('stage-2')],
+        };
+        localStorage.setItem(
+          COURSE_TABS_STORAGE_KEY,
+          JSON.stringify({ courseIds: ['stage-1', 'stage-2'], activeCourseId: 'stage-1' }),
+        );
+        mocks.searchParams = new URLSearchParams('course=stage-1');
+        await render();
+        await openLibrary();
+        await chatWith();
+        expect(seedOf(mocks.chatPaneProps)).toMatchObject({
+          target: { kind: 'chat', ownerKey: 'draft:stage-1' },
+        });
+        const browser = mocks.classroomProps?.browser as {
+          onActivateCourse: (id: string) => void;
+          onCloseCourse: (id: string) => void;
+        };
+        await act(async () =>
+          action === 'activate'
+            ? browser.onActivateCourse('stage-2')
+            : browser.onCloseCourse('stage-2'),
+        );
+        expect(seedOf(mocks.chatPaneProps)).toBeNull();
+      },
+    );
+
+    it('keeps the hand-over when a deletion confirmed in the background closes a tab', async () => {
+      const pending = deferred<boolean>();
+      mocks.courses = {
+        ...mocks.courses!,
+        classrooms: [classroom('stage-1'), classroom('stage-2')],
+        deleteCourse: vi.fn(() => pending.promise),
+      };
+      localStorage.setItem(
+        COURSE_TABS_STORAGE_KEY,
+        JSON.stringify({ courseIds: ['stage-1', 'stage-2'], activeCourseId: 'stage-1' }),
+      );
+      mocks.searchParams = new URLSearchParams('course=stage-1');
+      await render();
+      const page = await openMyCourses();
+      let deleted!: Promise<void>;
+      await act(async () => {
+        deleted = (page.onDeleteCourse as (id: string) => Promise<void>)('stage-2');
+      });
+      await openLibrary();
+      await chatWith();
+      const seed = seedOf(mocks.chatPaneProps);
+      expect(seed).toMatchObject({ target: { kind: 'chat', ownerKey: 'draft:stage-1' } });
+
+      await act(async () => {
+        pending.resolve(true);
+        await deleted;
+      });
+      const browser = mocks.classroomProps?.browser as { tabs: readonly { id: string }[] };
+      expect(browser.tabs.map((tab) => tab.id)).toEqual(['stage-1']);
+      expect(seedOf(mocks.chatPaneProps)?.key).toBe(seed!.key);
+    });
+
+    it('leaves a newer hand-over alone when an older key is reported', async () => {
+      mocks.searchParams = new URLSearchParams();
+      await render();
+      await openLibrary();
+      await chatWith();
+      const first = seedOf(mocks.homeProps)!.key;
+      await openLibrary();
+      await chatWith();
+      const second = seedOf(mocks.homeProps)!.key;
+      expect(second).not.toBe(first);
+
+      const consume = mocks.homeProps?.onMaterialSeedConsumed as (key: number) => void;
+      await act(async () => consume(first));
+      expect(seedOf(mocks.homeProps)?.key).toBe(second);
+    });
   });
 });

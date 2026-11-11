@@ -9,7 +9,11 @@ import { putSceneBringingCurrent } from '../document-writes';
 import { createBlankScene } from './apply';
 import type { CourseToolDeps } from '../course-tools';
 import { COURSE_STAGE_ID_DESCRIPTION } from '../course-stage';
-import { synthesizeSceneNarration } from '../scene-tts';
+import {
+  describeNarrationVoice,
+  formatTtsFailureTally,
+  synthesizeSceneNarration,
+} from '../scene-tts';
 import { runStageMutation } from '../mutation-fence';
 
 const Target = {
@@ -95,13 +99,22 @@ export function renumberCourseOrders(
   return { scenes: numbered, outline: { ...outline, outlines } };
 }
 
+export function generateTtsPromptBlock(): string {
+  return 'Use generate_tts after narration edits.';
+}
+
 export function buildCourseAudioAndDeckTools(deps: CourseToolDeps): AgentTool<never, never>[] {
-  const generateTts: AgentTool<typeof GenerateTtsParams> = {
+  const generateTts: AgentTool<typeof GenerateTtsParams> & {
+    capability: 'tts';
+    promptBlock: string;
+  } = {
     name: 'generate_tts',
     label: 'Generate narration audio',
     description:
       'Synthesize narration for one persisted page. By default only speech actions without audio are filled; force regenerates all speech audio.',
     parameters: GenerateTtsParams,
+    capability: 'tts',
+    promptBlock: generateTtsPromptBlock(),
     async execute(_callId, params, signal) {
       const doc = await deps.store.loadDocument(params.stageId);
       const scene = resolveScene(doc?.scenes ?? [], params);
@@ -136,8 +149,19 @@ export function buildCourseAudioAndDeckTools(deps: CourseToolDeps): AgentTool<ne
           detail: `narration audio persisted for ${scene.id}`,
         });
       }
+      // Name the voice the new lines used, and that kept lines keep their old
+      // audio: a count alone cannot show whether a roster voice change landed.
+      const notes = [
+        summary.voice && summary.generated > 0 ? describeNarrationVoice(summary.voice) : '',
+        summary.skipped > 0 && !params.force
+          ? `${summary.skipped} line(s) kept their existing audio and voice; pass force to re-synthesize them.`
+          : '',
+      ].filter(Boolean);
       return result(
-        `Narration audio: ${summary.generated} generated, ${summary.skipped} skipped, ${summary.failed.length} failed.`,
+        [
+          `Narration audio: ${summary.generated} generated, ${summary.skipped} skipped, ${formatTtsFailureTally(summary.failed)}.`,
+          ...notes,
+        ].join(' '),
         {
           sceneId: scene.id,
           ...summary,

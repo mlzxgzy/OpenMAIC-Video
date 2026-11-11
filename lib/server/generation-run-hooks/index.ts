@@ -21,4 +21,4 @@ export type {
   GenerationStartDecision,
   GenerationStartOrigin,
 } from './types';
-export { configureGenerationRunHooks } from './registry';
+export { configureGenerationRunHooks, generationRunHooksConfigured } from './registry';

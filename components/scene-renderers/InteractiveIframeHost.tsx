@@ -1,6 +1,11 @@
 'use client';
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import {
+  createInteractiveMediaSession,
+  mediaDocumentId,
+  MEDIA_CONTROL,
+} from '@/lib/interactive/media-bridge';
 import { createObservationSession } from '@/lib/interactive/observation-bridge';
 import { createPortal } from 'react-dom';
 import { useWidgetIframeStore } from '@/lib/store/widget-iframe';
@@ -9,11 +14,12 @@ import {
   type IframePoolEntry,
 } from '@/lib/store/interactive-iframe-pool';
 import { useSceneRuntimeErrors } from '@/lib/store/scene-runtime-errors';
+import { GENUI_LOGICAL_HEIGHT, GENUI_LOGICAL_WIDTH } from '@/lib/interactive/logical-viewport';
 import {
-  GENUI_LOGICAL_HEIGHT,
-  GENUI_LOGICAL_WIDTH,
-  fitGenUiViewport,
-} from '@/lib/interactive/logical-viewport';
+  GENUI_FIT_REPORT_REQUEST,
+  GENUI_FIT_SCROLL_REQUEST,
+  useGenUiFit,
+} from '@/lib/interactive/use-genui-fit';
 import { intersectClientBoxes } from '@/lib/edit/visible-client-rect';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useElementRefsStore } from '@/lib/store/element-refs';
@@ -25,6 +31,7 @@ import {
   makeInteractiveElementRef,
 } from '@/lib/workbench/element-refs';
 import { InteractiveRuntimeErrorBanner } from './InteractiveRuntimeErrorBanner';
+import { InteractiveMoreBelowCue } from './InteractiveMoreBelowCue';
 
 type InteractivePickerMessage = {
   __maicInteractive?: boolean;
@@ -138,10 +145,12 @@ export function handleInteractivePickerMessage(
  * zero-reload return.
  */
 export function InteractiveIframeHost({
+  onMediaPlay,
   playbackPicker,
   onPlaybackPick,
   onPlaybackCancel,
 }: {
+  readonly onMediaPlay?: () => void;
   readonly playbackPicker?: PlaybackInteractivePickerState | null;
   readonly onPlaybackPick?: (pick: PlaybackInteractiveComponentPick) => void;
   readonly onPlaybackCancel?: () => void;
@@ -180,6 +189,7 @@ export function InteractiveIframeHost({
       {Object.entries(entries).map(([sceneId, entry]) => (
         <PooledIframe
           key={sceneId}
+          onMediaPlay={onMediaPlay}
           sceneId={sceneId}
           entry={entry}
           visible={entry.owner !== null && sceneId === activeSceneId}
@@ -197,6 +207,7 @@ export function InteractiveIframeHost({
 }
 
 interface PooledIframeProps {
+  readonly onMediaPlay?: () => void;
   readonly sceneId: string;
   readonly entry: IframePoolEntry;
   readonly visible: boolean;
@@ -224,6 +235,7 @@ interface PooledIframeProps {
  * targetOrigin='*'.
  */
 function PooledIframe({
+  onMediaPlay,
   sceneId,
   entry,
   visible,
@@ -234,6 +246,19 @@ function PooledIframe({
 }: PooledIframeProps) {
   const { t } = useI18n();
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const mediaSession = useRef<ReturnType<typeof createInteractiveMediaSession> | null>(null);
+  const mediaId = mediaDocumentId(entry.srcDoc);
+  useLayoutEffect(() => {
+    if (!iframeRef.current || !mediaId || !visible) return;
+    const session = createInteractiveMediaSession(iframeRef.current, mediaId, () =>
+      onMediaPlay?.(),
+    );
+    mediaSession.current = session;
+    return () => {
+      session.dispose();
+      mediaSession.current = null;
+    };
+  }, [mediaId, onMediaPlay, visible]);
   const runtimeErrors = useSceneRuntimeErrors((state) => state.errors[sceneId]);
   const runtimeErrorSignature = runtimeErrors?.join('\n') ?? '';
   const [dismissedRuntimeSignature, setDismissedRuntimeSignature] = useState<string | null>(null);
@@ -307,12 +332,24 @@ function PooledIframe({
     [refs, sceneId],
   );
   const documentToken = entry.srcDoc ? `srcDoc:${entry.srcDoc}` : `src:${entry.src ?? ''}`;
+  const rect = entry.rect;
+  const fit = useGenUiFit(rect, documentToken);
+  const handleFitMessage = fit.handleMessage;
+  // A new fit key restarts the fit; the page only re-posts when its own size
+  // changes, so ask for its current extent.
+  useEffect(() => {
+    iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_REPORT_REQUEST, '*');
+  }, [fit.fitKey]);
 
   // Register the postMessage callback for this scene (moved here from the
   // placeholder, since the iframe now lives in the host). Stable per scene:
   // the callback reads contentWindow lazily at send time.
   useLayoutEffect(() => {
     const send = (type: string, payload: Record<string, unknown>) => {
+      if (type === MEDIA_CONTROL) {
+        mediaSession.current?.pause();
+        return;
+      }
       iframeRef.current?.contentWindow?.postMessage({ type, ...payload }, '*');
     };
     return registerIframe(sceneId, send, documentToken);
@@ -350,6 +387,7 @@ function PooledIframe({
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (e.source !== iframeRef.current?.contentWindow) return;
+      if (handleFitMessage(e.data)) return;
       const d = e.data as
         | (InteractivePickerMessage & { errorKind?: string; message?: unknown })
         | undefined;
@@ -377,8 +415,18 @@ function PooledIframe({
     };
     window.addEventListener('message', onMessage);
     iframeRef.current?.contentWindow?.postMessage({ __maicErrorReplayRequest: true }, '*');
+    iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_REPORT_REQUEST, '*');
     return () => window.removeEventListener('message', onMessage);
-  }, [sceneId, entry.srcDoc, effectiveMode, onPlaybackCancel, onPlaybackPick, playbackArmed, t]);
+  }, [
+    sceneId,
+    entry.srcDoc,
+    effectiveMode,
+    handleFitMessage,
+    onPlaybackCancel,
+    onPlaybackPick,
+    playbackArmed,
+    t,
+  ]);
 
   // A content change reloads the iframe; drop the previous render's errors so the
   // captured set reflects the CURRENT page (e.g. after the agent applies a fix).
@@ -387,9 +435,10 @@ function PooledIframe({
     useSceneRuntimeErrors.getState().clearScene(sceneId);
   }, [sceneId, entry.srcDoc]);
 
-  const rect = entry.rect;
   const clip = entry.clip ?? rect;
-  const viewport = rect ? fitGenUiViewport(rect) : null;
+  // Fitted to the slot and to the content extent the page reports: a page
+  // larger than its viewport is shrunk (down to a floor) so it fits unscrolled.
+  const viewport = fit.viewport;
   const visibleViewport = viewport && clip ? intersectClientBoxes(viewport.box, clip) : null;
   // Require a real measured box before showing — a null or zero-size rect means
   // the slot hasn't laid out yet; showing then would flash a 0x0 iframe pinned
@@ -425,8 +474,8 @@ function PooledIframe({
     position: 'absolute',
     left: viewport && visibleViewport ? viewport.box.left - visibleViewport.left : 0,
     top: viewport && visibleViewport ? viewport.box.top - visibleViewport.top : 0,
-    width: GENUI_LOGICAL_WIDTH,
-    height: GENUI_LOGICAL_HEIGHT,
+    width: viewport?.width ?? GENUI_LOGICAL_WIDTH,
+    height: viewport?.height ?? GENUI_LOGICAL_HEIGHT,
     border: 0,
     transform: `scale(${viewport?.scale ?? 0})`,
     transformOrigin: 'top left',
@@ -454,6 +503,13 @@ function PooledIframe({
         <InteractiveRuntimeErrorBanner
           message={latestRuntimeError}
           onDismiss={() => setDismissedRuntimeSignature(runtimeErrorSignature)}
+        />
+      ) : null}
+      {shown && fit.showMoreCue && !showRuntimeError && !playbackArmed ? (
+        <InteractiveMoreBelowCue
+          onClick={() =>
+            iframeRef.current?.contentWindow?.postMessage(GENUI_FIT_SCROLL_REQUEST, '*')
+          }
         />
       ) : null}
       {playbackArmed && (

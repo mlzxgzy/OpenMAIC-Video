@@ -11,7 +11,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  deleteSkillHandleBefore,
   insertSkillHandle,
   segmentSkillHandles,
   slashQuery,
@@ -146,61 +145,10 @@ describe('writing a handle into the draft', () => {
  * so character-by-character deletion leaves `/k12-core-literacy-plannin` — a
  * handle that resolves to nothing. One Backspace at its end takes all of it.
  */
-describe('deleting a handle', () => {
-  it('takes the handle and the space the insertion added', () => {
-    const draft = '/k12 ';
-    expect(deleteSkillHandleBefore(draft, draft.length)).toEqual({ draft: '', caret: 0 });
-  });
-
-  it('takes it from the end of a sentence, leaving the sentence', () => {
-    const draft = '写一节课 /k12 ';
-    expect(deleteSkillHandleBefore(draft, draft.length)).toEqual({
-      draft: '写一节课 ',
-      caret: '写一节课 '.length,
-    });
-  });
-
-  it('takes only the one the caret is on', () => {
-    const draft = '/stage-design /k12 ';
-    const after = deleteSkillHandleBefore(draft, draft.length);
-    expect(after?.draft).toBe('/stage-design ');
-    // …and again for the next one.
-    expect(deleteSkillHandleBefore(after!.draft, after!.draft.length)?.draft).toBe('');
-  });
-
-  it('keeps what follows the caret', () => {
-    const draft = '/k12 写一节课';
-    expect(deleteSkillHandleBefore(draft, '/k12 '.length)).toEqual({
-      draft: '写一节课',
-      caret: 0,
-    });
-  });
-
-  it('does nothing anywhere else, leaving the browser its own behaviour', () => {
-    // Mid-handle: ordinary editing.
-    expect(deleteSkillHandleBefore('/k12-core ', '/k12-c'.length)).toBeNull();
-    // Prose.
-    expect(deleteSkillHandleBefore('写一节课', 4)).toBeNull();
-    // A handle that is part of a word, not a token.
-    expect(deleteSkillHandleBefore('a/k12', 5)).toBeNull();
-    // Start of the draft.
-    expect(deleteSkillHandleBefore('/k12 ', 0)).toBeNull();
-    // Past the end.
-    expect(deleteSkillHandleBefore('/k12', 99)).toBeNull();
-  });
-
-  it('is the exact inverse of inserting one', () => {
-    const inserted = insertSkillHandle('写一节课', 'k12', '写一节课'.length);
-    const deleted = deleteSkillHandleBefore(inserted.draft, inserted.caret);
-    // The separator the insertion added stays, as the user's own text did.
-    expect(deleted?.draft).toBe('写一节课 ');
-  });
-});
-
 /**
- * Where the inline pill gets drawn.
+ * Which runs become chips.
  *
- * The mirror layer (`components/workbench/composer-input`) paints a ground behind
+ * The input (`lib/workbench/composer-doc`) draws one node for each handle this
  * the runs this returns. Two properties matter more than any single case: the
  * segments must reassemble into the draft byte for byte (the pill is decoration,
  * never a rewrite), and only INSTALLED names may become one — a pill behind
@@ -209,7 +157,7 @@ describe('deleting a handle', () => {
 describe('finding the handles to draw as pills', () => {
   const INSTALLED = ['stage-design', 'k12', '课堂设计'];
   const segment = (text: string) => segmentSkillHandles(text, INSTALLED);
-  /** What the mirror actually lays out, so a lost character shows up as a diff. */
+  /** What the runs spell, so a lost character shows up as a diff. */
   const rejoin = (text: string) =>
     segment(text)
       .map((part) => part.text)

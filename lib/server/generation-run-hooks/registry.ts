@@ -87,6 +87,15 @@ export function configureGenerationRunHooks(hooks: GenerationRunHooks): void {
   state.hooks = Object.freeze(stored) as unknown as GenerationRunHooks;
 }
 
+/**
+ * Whether hooks are already registered, without sealing the registry. Boot
+ * can run more than once in one process (Next's dev reload, tests that call
+ * `register()` repeatedly), and the second run must not try to register again.
+ */
+export function generationRunHooksConfigured(): boolean {
+  return registry().hooks !== undefined;
+}
+
 /** The registered hooks, or none. Reading them seals the registration. */
 export function getGenerationRunHooks(): GenerationRunHooks {
   const state = registry();

@@ -12,17 +12,22 @@ import { BaseLatexElement } from '../components/element/LatexElement/BaseLatexEl
 import { BaseTableElement } from '../components/element/TableElement/BaseTableElement';
 import { BaseVideoElement } from '../components/element/VideoElement/BaseVideoElement';
 import { BaseCodeElement } from '../components/element/CodeElement/BaseCodeElement';
-import { useSceneSelector } from '@/lib/contexts/scene-context';
-import type { SceneContent } from '@/lib/types/stage';
 import { maicElementIdAttributes, screenElementDomId } from '../element-dom';
+import { useSlideTextStyle } from '../use-slide-text-style';
 
 interface ScreenElementProps {
   readonly elementInfo: PPTElement;
   readonly elementIndex: number;
   readonly animate?: boolean;
+  readonly selectable?: boolean;
 }
 
-export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElementProps) {
+export function ScreenElement({
+  elementInfo,
+  elementIndex,
+  animate,
+  selectable,
+}: ScreenElementProps) {
   const CurrentElementComponent = useMemo(() => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- element components have varying prop signatures
     const elementTypeMap: Record<string, any> = {
@@ -41,17 +46,7 @@ export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElem
     return elementTypeMap[elementInfo.type] || null;
   }, [elementInfo.type]);
 
-  const theme = useSceneSelector<SceneContent, { fontColor: string; fontName: string }>(
-    (content) => {
-      if (content.type === 'slide') {
-        return content.canvas.theme;
-      }
-      return {
-        fontColor: '#333333',
-        fontName: 'Microsoft YaHei',
-      };
-    },
-  );
+  const textStyle = useSlideTextStyle();
 
   if (!CurrentElementComponent) {
     return null;
@@ -64,11 +59,14 @@ export function ScreenElement({ elementInfo, elementIndex, animate }: ScreenElem
       {...maicElementIdAttributes(elementInfo.id)}
       style={{
         zIndex: elementIndex,
-        color: theme.fontColor,
-        fontFamily: theme.fontName,
+        ...textStyle,
       }}
     >
-      <CurrentElementComponent elementInfo={elementInfo} animate={animate} />
+      <CurrentElementComponent
+        elementInfo={elementInfo}
+        animate={animate}
+        selectable={selectable}
+      />
     </div>
   );
 }

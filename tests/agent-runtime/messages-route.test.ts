@@ -56,6 +56,23 @@ beforeEach(() => {
 });
 
 describe('POST agent session message', () => {
+  it('keeps a supported interface locale on the message and ignores anything else (#1880)', async () => {
+    await call({ text: 'Continue', locale: 'en-US' });
+    expect(mocks.postUserMessage).toHaveBeenLastCalledWith(
+      'session-1',
+      { text: 'Continue', locale: 'en-US' },
+      { expectedOwnerId: 'owner-1' },
+    );
+    for (const locale of ['xx-YY', 'en', 42, '../../etc/passwd']) {
+      await call({ text: 'Continue', locale });
+      expect(mocks.postUserMessage).toHaveBeenLastCalledWith(
+        'session-1',
+        { text: 'Continue' },
+        { expectedOwnerId: 'owner-1' },
+      );
+    }
+  });
+
   it('posts a trimmed message with an owner fence and returns its delivery', async () => {
     const response = await call({ text: ' Continue ' });
 
@@ -201,4 +218,15 @@ describe('POST agent session message', () => {
     expect(response.headers.get('set-cookie')).toContain('anonymous_id=test');
     expect(mocks.scheduleConversationTitle).not.toHaveBeenCalled();
   });
+});
+
+it('does not expose or control a teaching session through the generic API', async () => {
+  const id = 'pbl-role-owned';
+  const response = await POST(new NextRequest('http://localhost/api/agent/sessions/' + id), {
+    params: Promise.resolve({ id }),
+  });
+  expect(response.status).toBe(404);
+  expect(mocks.getSession).not.toHaveBeenCalled();
+  expect(mocks.postUserMessage).not.toHaveBeenCalled();
+  expect(mocks.scheduleConversationTitle).not.toHaveBeenCalled();
 });

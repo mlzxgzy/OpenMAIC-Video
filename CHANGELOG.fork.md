@@ -26,6 +26,82 @@
 
 ## [Unreleased]
 
+### 跟随上游（2026-11-11 同步 `upstream/main`）
+
+- **一次上游同步**：合并 `upstream/main`，上游基线 `6e20534f` → `6e51916f`
+  （`v1.5.0-rc.1` 之后 6 个提交；`6e20534f..6e51916f` 共 142 个提交、1466 个文件、
+  `+227,061 / −20,378`）。上游本批主线：**工作台成为首页**（#2094 / #2066，经典
+  首页下沉为 `app/classic-home.tsx`，`app/page.tsx` 只剩 server gate）、
+  **PBL v3 + 共享沙箱**（#2151 / #2191）、**素材库**（#1896）、**课程级撤销时间线**
+  （#2159）、**capability 化工具注册**（#2118，`assembleCapabilityRuntime`）、
+  自托管互动场景库（#1972）、CosyVoice / 小米 MiMo TTS/ASR（#1949 / #1976）、
+  provider 级音色列表（#1969）、DeepSeek 一键预设（#2064）。
+- **21 个冲突文件的处理**：
+  - `app/page.tsx`：取上游 28 行 server gate（`isWorkbenchEntryEnabled()` →
+    `<WorkspaceEntry />`，否则 `<ClassicHomePage />`）。fork 的经典首页特性用三方
+    合并并入 `app/classic-home.tsx`：“课程序列”入口（`BookOpen` →
+    `/curriculum/series`）、`ContinueLastCard`、首页 `SceneTypeFilter`、职教测试
+    UI、`sceneTypes` 表单与 `sceneTypesEnabled` 本地存储。随上游删除
+    `ProBadge` / `ProSwapWatcher` / `WorkbenchReturnControl` /
+    `classroom-back-control` / `classroom-header-controls` / `pro-swap` 等已被上游
+    移除的 workbench 控件。
+  - `lib/server/agent-runtime/runner.ts`：取上游 capability runtime 结构，重新注入
+    fork 的设计工具：`buildCurriculumDesignTools({ ownerId })` 进 `candidateTools`、
+    `design: CURRICULUM_DESIGN_TOOLS_PROMPT` 进 `basePromptBlocks`；删除被
+    capability 化的旧 fetch imports 与 `CURRICULUM_DESIGN_ALLOWLIST`
+    （`assembleCapabilityRuntime` 会把 candidateTools 的名字并入
+    `allowedToolNames`）。`course-tools.ts` 的 `CoursePromptBlocks` 两边并集已含
+    `design?: string`。
+  - `instrumentation.ts`：保留上游新的 `shutdownPromise` / workers 数组，把 fork 的
+    `curriculumBatchRunner` 作为 `['Curriculum batch runner', …]` 加进 workers；
+    fork 的 generation-run 钩子与 schema 启动校验保留。
+  - `lib/persistence/schema-stores.ts`：`CURRICULUM_MIGRATIONS` 与上游新增的
+    `SANDBOX_ENVIRONMENT_MIGRATIONS` / `PBL_PROJECT_MIGRATIONS` /
+    `PBL_MIGRATIONS` 全部保留，顺序 CURRICULUM → SANDBOX_ENVIRONMENT →
+    PBL_PROJECT → PBL。
+  - `lib/audio/tts-providers.ts`：千问合成改用上游带 `voices` 参数的
+    `resolveTTSModelForVoice(...)`，保留 fork 的 `instructions` /
+    `qwenInstructionsForModel` 逻辑；`lib/store/settings.ts` 保留
+    `qwenTtsInstructControl` / `qwenTtsInstructText`，`asrLanguage` 默认值取上游的
+    `''`（录音时按界面语言解析）。
+  - `components/edit/PlaybackChromeRoot.tsx` / `components/stage.tsx` /
+    `components/stage/header-controls.tsx`：取上游 workbench 播放参数与
+    `LanguageSwitcher`，保留 fork 的 `canEditScript` 讲稿编辑，以及 Settings 按钮 /
+    NarrationVoicePanel 入口。
+  - `lib/server/generation/run/types.ts` + `lib/generation-run-client/start.ts`：
+    保留 fork 的 `qwenInstructControl` / `qwenInstructText`；`releaseMaterials`
+    采用上游语义（已上传材料保留，字段只为老客户端兼容）。
+  - `.gitignore`、`package.json`、`lib/i18n/locales/zh-TW.json`、
+    `skills/agent-runtime/stage-design/SKILL.md`：并集保留双方条目；版本号保持
+    `1.2.1-video.1`（merge 不 bump，发版再按 §1.1 规则定基座）。
+  - 测试：`tests/agent-runtime/runner-skills-registration.test.ts` 的
+    `allowedToolNames` 期望改为 fork(60) ∪ upstream(39) = 65 项排序并集；
+    `runner-voice-registration.test.ts` 保留 fork 设计工具块 + 上游新增的 material
+    工具；`tests/persistence/schema-migration-checksums.test.ts` 的 checksum 金标
+    补上 Curriculum v1–v18 与 Sandbox/PBL 的全部新条目；
+    `tests/persistence/schema-migrations.pg.test.ts` 同时跑
+    `ensureCurriculumSchema` 与 `ensureSandboxEnvironmentSchema`。
+- **合并后的适配修复**（全量测试对照基线 `15a71f19` 与上游 `6e51916f` 定位）：
+  - `lib/server/generation-run-hooks/`：新增 `generationRunHooksConfigured()`，
+    `instrumentation.ts` 的 `register()` 改为「未注册才注册」。上游的 boot 测试会
+    在同一进程里多次 `register()`，而 fork 的 curriculum 钩子注册是单次的，第二次
+    会抛 `Generation run hooks are already configured (curriculum)` 并让 boot 失败
+    （本地 dev 重载同理）。
+  - provider 中立：上游把 `lib/server/generation/run/engine.ts` 纳入
+    `PROVIDER_NEUTRAL_FILES`，fork 的千问指令控制在该文件里有厂商符号（触发
+    `provider-neutrality-guard`）。把「读 run input 的指令字段 / 解析指令 / 挂到
+    `providerOptions`」三步收进 `lib/server/generation/run/narration-voice.ts` 的
+    `runRequestedNarrationInstructions` / `runRequestedNarrationPromptSection` /
+    `attachProviderInstructions`，engine 只调中性入口。
+  - `tests/agent-runtime/runner-web-search-registration.test.ts`：上游重写了期望
+    数组，fork 的 28 个课程/设计工具被静默丢掉；按运行顺序补齐（两处有序数组、
+    两处 `allowedToolNames` 排序数组）。
+- **升级注意**：上游把 `app/page.tsx` 变薄、经典首页下沉；后续改首页请改
+  `app/classic-home.tsx`。`packages/@openmaic/*` 的版本变化全部来自上游同步，需以新
+  基线 commit 跑 `node scripts/check-package-version-bumps.mjs <commit>`。当前已合并的
+  最近上游**稳定版**是 `v1.4.2`（本轮同时含 `v1.5.0-rc.1`，rc 不计入版本基座），
+  下次发版的基座按 §1.1 规则取 `1.4.2`。
+
 ## [1.2.1-video.1] - 2026-10-20
 
 基线是上游 `6e20534f`（`v1.2.1` tag 之后 9 个提交，`v1.2.1` 是其祖先）。本版由
@@ -2423,10 +2499,12 @@ instrumentation.ts                     generation-run 钩子 + 批量 runner + s
 
 ### 上游同步
 
-`upstream` 远端已配置（`2026-10-06`），共三次同步：`ccdc88a5`（见
+`upstream` 远端已配置（`2026-10-06`），共四次同步：`ccdc88a5`（见
 `[1.2.0-video.2]` 发布节）、`d725f191` / `v1.2.0-rc.2`（`cc41a9b3`，见
-`[1.2.0-video.5]` 发布节）与 `6e20534f` / `v1.2.1` 之后（`047175e3`，见
-`[1.2.1-video.1]` 发布节）；`1.2.0-video.3` 与 `1.2.0-video.4` **未同步上游**。日后同步：
+`[1.2.0-video.5]` 发布节）、`6e20534f` / `v1.2.1` 之后（`047175e3`，见
+`[1.2.1-video.1]` 发布节）与 `6e51916f` / `v1.5.0-rc.1` 之后 6 个提交
+（`2026-11-11` 同步，见本文件 `[Unreleased]`）；`1.2.0-video.3` 与
+`1.2.0-video.4` **未同步上游**。日后同步：
 
 ```bash
 git fetch upstream
@@ -2435,7 +2513,7 @@ git log --oneline upstream/main..main   # 本 fork 独有（应始终非空）
 git merge upstream/main
 ```
 
-**不要用 `rebase` 同步**：二开已有 83 个提交、已发布 `v1.2.0-video.1`–
+**不要用 `rebase` 同步**：二开已有 84 个提交、已发布 `v1.2.0-video.1`–
 `1.2.0-video.5` 与 `v1.2.1-video.1`，rebase 会改写这些已发布提交的 hash，破坏 tag 与远端历史的对应关系。
 `merge` 保留双方历史，上游 commit 原样出现在本仓库中，日后双向可查。
 
@@ -2448,7 +2526,7 @@ git merge upstream/main
 
 | 项 | 值 |
 | --- | --- |
-| 上游基线 | `6e20534f`（`v1.2.1` tag 之后 9 个提交，`2026-10-20` 经 `047175e3` 同步；更早两次是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`） |
+| 上游基线 | `6e51916f`（`v1.5.0-rc.1` 之后 6 个提交，`2026-11-11` 同步；上一基线 `6e20534f`（`v1.2.1` tag 之后 9 个提交，`2026-10-20` 经 `047175e3`），更早两次是 `d725f191`（`cc41a9b3`）与 `ccdc88a5`） |
 | 本 fork 版本线 | `X.Y.Z-video.N`，基座跟随上游稳定版（首个：`1.2.1-video.1`；旧线 `1.2.0-video.1`–`.5` 见各自发布节） |
 | 本仓库首个二开提交 | `939c9027` docs: 新增 AGENT.md 二开上下文文档 |
 | 许可证 | MIT（例外：`packages/mathml2omml` 为 LGPL-3.0-or-later） |

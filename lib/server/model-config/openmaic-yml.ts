@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
 import { z } from 'zod';
+import { sandboxConfigurationSchema } from '@/lib/sandbox/config-schema';
 import {
   getSlot,
   isSlotId,
@@ -117,6 +118,32 @@ export const providerOptionsSchema = z.record(
 
 export type ProviderOptions = z.infer<typeof providerOptionsSchema>;
 
+const providerVoicesSchema = z
+  .array(
+    z
+      .object({
+        id: z
+          .string()
+          .trim()
+          .min(1)
+          .max(256)
+          .refine(
+            (id) => !id.includes('::'),
+            'voice id must not contain the roster binding delimiter ::',
+          ),
+        name: z.string().trim().min(1).max(256),
+        language: z.string().trim().min(1).max(64).optional(),
+        gender: z.enum(['male', 'female', 'neutral']).optional(),
+      })
+      .strict(),
+  )
+  .min(1)
+  .max(1000)
+  .refine(
+    (voices) => new Set(voices.map((voice) => voice.id)).size === voices.length,
+    'voice ids must be unique',
+  );
+
 export const providerSchema = z
   .object({
     preset: z.string().min(1),
@@ -133,6 +160,7 @@ export const providerSchema = z
      * settings view, so never a place for a key.
      */
     options: providerOptionsSchema.optional(),
+    voices: providerVoicesSchema.optional(),
   })
   .strict();
 
@@ -148,6 +176,7 @@ const fileSchema = z
       .optional(),
     /** The server's defaults: users may change them unless `lock` names them. */
     slots: z.record(z.string(), assignmentSchema).optional(),
+    sandbox: sandboxConfigurationSchema.optional(),
     lock: lockSchema.optional(),
     /** Whether users may add providers, keys and token plans of their own (default true). */
     allowUserKeys: z.boolean().optional(),
@@ -302,6 +331,22 @@ function crossCheck(
       }
       continue;
     }
+    if (provider.voices && !preset.capabilities.tts) {
+      issues.push(`providers.${id}.voices: only TTS presets support a voice catalogue`);
+    }
+    if (provider.options?.defaultVoice !== undefined) {
+      if (!provider.voices) {
+        issues.push(`providers.${id}.voices: required when options.defaultVoice is configured`);
+      }
+      const voice = provider.options.defaultVoice;
+      if (typeof voice !== 'string' || !voice.trim()) {
+        issues.push(`providers.${id}.options.defaultVoice: must be a nonblank string`);
+      } else if (provider.voices && !provider.voices.some((entry) => entry.id === voice.trim())) {
+        issues.push(
+          `providers.${id}.options.defaultVoice: must name a voice in the configured voices list`,
+        );
+      }
+    }
     if (preset.requiresBaseUrl && !provider.baseUrl) {
       issues.push(`providers.${id}.baseUrl: preset "${preset.id}" needs a baseUrl`);
     }
@@ -337,6 +382,7 @@ function crossCheck(
     const written = config.slots ?? {};
     config.lock.forEach((slot, index) => {
       const at = `lock.${index}`;
+      if (slot === 'sandbox') return;
       if (!isSlotId(slot)) {
         issues.push(`${at}: unknown slot ${shown(slot, at)}`);
       } else if (!Object.hasOwn(written, slot)) {
